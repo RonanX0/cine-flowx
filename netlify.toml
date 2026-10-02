@@ -1,10 +1,6 @@
 [build]
-  command = "npx vite build"
+  command = "mkdir -p dist && (cp app-pronto.html dist/index.html 2>/dev/null || cp index.html dist/index.html)"
   publish = "dist"
-
-[build.environment]
-  NODE_VERSION = "22"
-  NPM_FLAGS = "--legacy-peer-deps"
 
 [[redirects]]
   from = "/*"
