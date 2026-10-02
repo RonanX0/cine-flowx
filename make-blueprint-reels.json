@@ -1,0 +1,38 @@
+{
+  "name": "CineClip -> Publicar Instagram Reels Automático",
+  "flow": [
+    {
+      "id": 1,
+      "module": "gateway:CustomWebHook",
+      "version": 1,
+      "parameters": {},
+      "mapper": {},
+      "metadata": {
+        "designer": { "x": 0, "y": 0 }
+      }
+    },
+    {
+      "id": 2,
+      "module": "instagram-business:CreateReelPost",
+      "version": 1,
+      "parameters": {},
+      "mapper": {
+        "videoUrl": "{{1.videoUrl}}",
+        "caption": "{{1.caption}}",
+        "shareToFeed": true
+      },
+      "metadata": {
+        "designer": { "x": 300, "y": 0 }
+      }
+    }
+  ],
+  "metadata": {
+    "version": 1,
+    "scenario": {
+      "roundtrips": 1,
+      "maxErrors": 3,
+      "autoCommit": true,
+      "sequential": false
+    }
+  }
+}
