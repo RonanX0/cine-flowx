@@ -76,7 +76,7 @@ cat > /tmp/entradas-extractor.txt <<'ENTRADAS'
     "function Tg(){try{const r=localStorage.getItem(Jc);if(!r)return null;",
   "18-migrar-button": between(
     'd.jsxs(Ae,{variant:x?"default":"outline",size:"sm",onClick:()=>{h(N=>!N),v(!1)}',
-    '" Robô 24h (PC Desligado)"]}),\'
+    '" Robô 24h (PC Desligado)"]}),'
   ),
 ENTRADAS
 node <<'NODE_EXTRACT'

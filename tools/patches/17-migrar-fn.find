@@ -1,0 +1,1 @@
+function Tg(){try{const r=localStorage.getItem(Jc);if(!r)return null;

@@ -1,0 +1,40 @@
+let CcMig=0;
+// "Enviar todos p/ nuvem": migra a fila TODA de uma vez. O sync normal (Pg) só trata
+// de 5 itens por ciclo, por isso uma fila grande demorava vários minutos (ou ficava
+// para trás se o utilizador fechasse a aba). Usa o mesmo bg()/Rn()/Pg() do resto do
+// app, com progresso, erros visíveis e o dedupe CcUp para não chocar com o auto-sync.
+async function CcMigrarTodos(){
+const id="cineclip-cloud-migrate";
+if(CcMig){je("☁️ Já está a decorrer uma migração para a nuvem — espera acabar.");return{running:!0}}
+if(!window.CineCloud||!window.CineCloud.configured()){je.error("⚠️ Configura primeiro a nuvem durável: Configurações → ☁️ Nuvem durável — Google Drive (URL + token) → Guardar.");return{ok:!1,reason:"sem_nuvem"}}
+const S=Tg();
+if(!S||!S.vaultHash){je.error("⚠️ Inicia sessão primeiro — sem login não há cofre na nuvem onde guardar os links.");return{ok:!1,reason:"sem_sessao"}}
+CcMig=1;let enviados=0,falhou=0;
+try{
+const all=await Wr().catch(()=>[]);
+const pl=window.CineCloud.migrationPlan(all),P=pl.pending;
+if(!P.length){je.success(pl.semVideo.length?`Nada para enviar — mas ${pl.semVideo.length} agendamento(s) já não têm o vídeo neste aparelho. Só reimportando o .mp4.`:"☁️ Todos os vídeos desta fila já estão na nuvem durável.");return{ok:!0,total:pl.total,enviados:0,falhou:0,semVideo:pl.semVideo.length}}
+je.loading(`☁️ A enviar ${P.length} vídeo(s) (${window.CineCloud.fmtSize(pl.bytes)}) para a nuvem durável…`,{id});
+for(let K=0;K<P.length;K++){
+const H=P[K],nm=H.title||H.videoFileName||"vídeo";
+if(CcUp.has(H.id))continue;
+CcUp.add(H.id),delete H.needsReupload,delete H.cloudError;
+try{
+const ne=await bg(H.videoBlob,H.videoFileName,q=>{je.loading(`☁️ ${K+1}/${P.length} — "${nm}"… ${q}%`,{id})});
+H.remoteVideoUrl=ne,H.cloudProvider=window.CineCloud.classifyUrl(ne),H.updatedAt=Date.now(),await Rn(H),enviados++;
+je.loading(`☁️ ${enviados}/${P.length} já na nuvem durável…`,{id})}catch(Be){
+const ms=(Be==null?void 0:Be.message)||"Falha ao enviar o vídeo para a nuvem";
+H.cloudError=ms,H.updatedAt=Date.now(),await Rn(H),falhou++;
+je.error(`⚠️ "${nm}" NÃO foi para a nuvem: ${ms}`,{id})}finally{CcUp.delete(H.id)}}
+// Grava o cofre já com os links novos (o 2º argumento força uma leitura fresca da fila,
+// mesmo que esteja um auto-sync a decorrer).
+try{await Pg(S,{})}catch{}
+je.dismiss(id);
+const res={ok:!falhou,total:pl.total,enviados,falhou,semVideo:pl.semVideo.length};
+const msg=window.CineCloud.migrateSummary(res);
+falhou?je.warning(msg,{id,duration:12e3}):je.success(msg,{id,duration:9e3});
+return res}catch(Be){
+je.dismiss(id);const ms=(Be==null?void 0:Be.message)||String(Be);
+je.error(`⚠️ Migração interrompida: ${ms}`,{duration:12e3});
+return{ok:!1,enviados,falhou,error:ms}}finally{CcMig=0}}
+function Tg(){try{const r=localStorage.getItem(Jc);if(!r)return null;
