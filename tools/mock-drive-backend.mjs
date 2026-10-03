@@ -168,14 +168,19 @@ export function createMockDrive({ storeDir, singleMaxMb, chunkBytes, maxVideoMb 
           code: "too_large",
         });
       }
+      if (!uploadId) return out(res, { ok: false, error: "Falta o id do upload." });
       const body = await readBody(req);
+      const previous = uploads.get(uploadId);
+      if (previous?.done) {
+        if (previous.total !== total) return out(res, { ok: false, error: "O ID do upload já foi concluído com outro tamanho." });
+        return out(res, { ok: true, done: true, provider: "google-drive", fileId: previous.fileId, url: previous.url, size: previous.total, durable: true });
+      }
       let bytes;
       try {
         bytes = Buffer.from(body.toString("utf8").replace(/\s/g, ""), "base64");
       } catch {
         return out(res, { ok: false, error: "base64 inválido." });
       }
-      if (!uploadId) return out(res, { ok: false, error: "Falta o id do upload." });
 
       // vídeo pequeno: um só pedido
       if (total <= SINGLE_MAX) {

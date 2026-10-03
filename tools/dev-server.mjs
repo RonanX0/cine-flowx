@@ -47,8 +47,15 @@ const MIME = {
 };
 
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
-  const pathname = decodeURIComponent(url.pathname);
+  const url = new URL(req.url, "http://localhost");
+  let pathname;
+  try {
+    pathname = decodeURIComponent(url.pathname);
+  } catch {
+    res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
+    res.end("Bad Request: malformed URL encoding");
+    return;
+  }
 
   if (pathname === CLOUD_PREFIX || pathname.startsWith(CLOUD_PREFIX + "/")) {
     const subPath = pathname.slice(CLOUD_PREFIX.length) || "/";
@@ -67,16 +74,29 @@ const server = http.createServer(async (req, res) => {
     try {
       await handleDrive(req, res);
     } catch (err) {
-      res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
+      const status = err && err.status ? err.status : 500;
+      res.writeHead(status, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
       res.end(JSON.stringify({ ok: false, error: err && err.message ? err.message : "Erro interno" }));
     }
     console.log(`📁 ${req.method} ${pathname}${url.search} → ${res.statusCode}`);
     return;
   }
 
-  let filePath = path.join(root, pathname === "/" ? "index.html" : pathname);
-  if (!filePath.startsWith(root)) {
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    res.writeHead(405, { Allow: "GET, HEAD" }).end("Method Not Allowed");
+    return;
+  }
+
+  const requestedPath = pathname === "/" ? "index.html" : pathname.startsWith("/") ? pathname.slice(1) : pathname;
+  let filePath = path.resolve(root, requestedPath);
+  const relativePath = path.relative(root, filePath);
+  if (relativePath === ".." || relativePath.startsWith(".." + path.sep) || path.isAbsolute(relativePath)) {
     res.writeHead(403).end("Forbidden");
+    return;
+  }
+  // O preview não deve servir dados locais, dependências ou o repositório Git.
+  if (relativePath.split(path.sep).some((part) => part.startsWith(".") || part === "node_modules")) {
+    res.writeHead(404).end("Not Found");
     return;
   }
   if (fs.existsSync(filePath) && fs.statSync(filePath).isDirectory()) {

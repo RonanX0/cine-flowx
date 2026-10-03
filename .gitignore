@@ -1,6 +1,9 @@
 # Mock local da nuvem (tools/dev-server.mjs) — nunca versionar os vídeos de teste
 .mock-cloud/
 
+# Build estático gerado
+/dist/
+
 # Dependências
 node_modules/
 

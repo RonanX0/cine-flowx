@@ -88,6 +88,22 @@ for (const file of targets) {
   }
 }
 
+// O 404 do GitHub Pages é outro ponto de entrada para o app; mantê-lo igual à
+// home impede que usuários de rotas de fallback recebam um bundle antigo.
+const indexPath = path.join(root, "index.html");
+const fallbackPath = path.join(root, "404.html");
+if (fs.existsSync(indexPath) && fs.existsSync(fallbackPath)) {
+  const indexHtml = fs.readFileSync(indexPath, "utf8");
+  const fallbackHtml = fs.readFileSync(fallbackPath, "utf8");
+  if (indexHtml !== fallbackHtml) {
+    if (dry) console.log("\n(404.html seria sincronizado com index.html)");
+    else {
+      fs.copyFileSync(indexPath, fallbackPath);
+      console.log("\n✔ 404.html sincronizado com index.html");
+    }
+  }
+}
+
 console.log(`Aplicadas: ${totalApplied} · Já presentes: ${totalSkipped}`);
 
 if (!verify) {
@@ -98,6 +114,13 @@ if (!verify) {
 /* ------------------------------------------------------------ verificação */
 
 console.log("\n── Verificação");
+
+if (fs.readFileSync(path.join(root, "404.html"), "utf8") !== fs.readFileSync(indexPath, "utf8")) {
+  console.error("   ❌ 404.html está diferente de index.html");
+  process.exitCode = 1;
+} else {
+  console.log("   ✔ 404.html: fallback sincronizado com index.html");
+}
 
 function extractModuleScript(html) {
   const start = html.indexOf('<script type="module">');
