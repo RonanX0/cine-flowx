@@ -278,13 +278,16 @@ async function handleServeVideo(request, env, key) {
 
   if (!object) return fail("Vídeo não encontrado (404).", 404);
 
-  const headers = corsHeaders({
+  // corsHeaders() devolve um objecto simples; aqui precisamos de .set(), logo
+  // embrulhámos em Headers (o resto dos handlers passa o objecto ao Response,
+  // que aceita ambos — daí só aqui ser preciso converter).
+  const headers = new Headers(corsHeaders({
     "Content-Type": object.httpMetadata?.contentType || "video/mp4",
     "Accept-Ranges": "bytes",
     "Cache-Control": "public, max-age=31536000, immutable",
     ETag: `"${object.etag || object.httpEtag?.replace(/"/g, "") || ""}"`,
     "X-Cineclip-Durable": "1",
-  });
+  }));
 
   if (object.range) {
     const start = object.range.offset ?? 0;

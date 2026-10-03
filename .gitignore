@@ -1,6 +1,10 @@
 # Mock local da nuvem (tools/dev-server.mjs) — nunca versionar os vídeos de teste
 .mock-cloud/
 
+# Estado local do R2 (wrangler dev --local) — nunca versionar os vídeos de teste
+cloudflare/.wrangler/
+.wrangler/
+
 # Dependências
 node_modules/
 
