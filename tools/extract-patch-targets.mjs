@@ -13,6 +13,11 @@ const root = path.resolve(import.meta.dirname, "..");
 /**
  * Fonte da verdade: o bundle ORIGINAL (commit base), para o script continuar a
  * funcionar mesmo depois de o patch já ter sido aplicado ao index.html.
+ *
+ * ⚠️ Não há fallback para o index.html actual: se o commit base não estiver
+ * disponível, este script extrai os alvos a partir de um bundle JÁ PATCHED e
+ * produz ficheiros .find corrompidos (aponta para código que já foi
+ * substituído). Falhar é muito melhor do que adivinhar.
  */
 const BASE_COMMIT = process.env.CINECLIP_BASE_COMMIT || "b6ebed853fae2fb1b5e9a138fb2af7f4cea4cfa3";
 let src;
@@ -23,8 +28,17 @@ try {
   }).toString("utf8");
   console.log(`Bundle original lido do git (${BASE_COMMIT.slice(0, 7)}), ${src.length} chars`);
 } catch {
-  src = fs.readFileSync(path.join(root, "index.html"), "utf8");
-  console.log(`Git indisponível — a usar o index.html atual (${src.length} chars)`);
+  console.error(
+    `✖ Não consigo ler o bundle ORIGINAL (index.html no commit ${BASE_COMMIT.slice(0, 7)}).\n\n` +
+      `  Este script precisa do bundle ANTES de qualquer patch. Extrair os alvos a\n` +
+      `  partir do index.html já patchado geraria ficheiros .find corrompidos —\n` +
+      `  por isso paramos aqui em vez de adivinhar.\n\n` +
+      `  Se este clone é raso:      git fetch --unshallow\n` +
+      `  Ou aponta para o base certo:  CINECLIP_BASE_COMMIT=<sha> node tools/extract-patch-targets.mjs\n\n` +
+      `  Dica: só precisas disto quando o bundle original muda a sério. Para aplicar\n` +
+      `  os patches sobre o bundle actual, usa "npm run patch:nuvem".`
+  );
+  process.exit(1);
 }
 const outDir = path.join(root, "tools", "patches");
 fs.mkdirSync(outDir, { recursive: true });

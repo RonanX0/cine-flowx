@@ -15,11 +15,16 @@
     />
     <meta property="og:type" content="website" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <!-- os ficheiros da fonte vêm daqui: sem este preconnect, o browser só
+         descobre o host depois de interpretar a stylesheet -->
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- o core do FFmpeg (WASM) é carregado do unpkg no primeiro upload -->
+    <link rel="preconnect" href="https://unpkg.com" crossorigin />
     <link
       rel="stylesheet"
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
     />
-    <script src="nuvem-duravel.js"></script>
+    <script src="nuvem-duravel.js" defer></script>
     <script type="module">var Sy=Object.defineProperty;var om=r=>{throw TypeError(r)};var ky=(r,o,a)=>o in r?Sy(r,o,{enumerable:!0,configurable:!0,writable:!0,value:a}):r[o]=a;var xt=(r,o,a)=>ky(r,typeof o!="symbol"?o+"":o,a),am=(r,o,a)=>o.has(r)||om("Cannot "+a);var ke=(r,o,a)=>(am(r,o,"read from private field"),a?a.call(r):o.get(r)),gr=(r,o,a)=>o.has(r)?om("Cannot add the same private member more than once"):o instanceof WeakSet?o.add(r):o.set(r,a),uo=(r,o,a,i)=>(am(r,o,"write to private field"),i?i.call(r,a):o.set(r,a),a);function Ey(r,o){for(var a=0;a<o.length;a++){const i=o[a];if(typeof i!="string"&&!Array.isArray(i)){for(const c in i)if(c!=="default"&&!(c in r)){const u=Object.getOwnPropertyDescriptor(i,c);u&&Object.defineProperty(r,c,u.get?u:{enumerable:!0,get:()=>i[c]})}}}return Object.freeze(Object.defineProperty(r,Symbol.toStringTag,{value:"Module"}))}(function(){const o=document.createElement("link").relList;if(o&&o.supports&&o.supports("modulepreload"))return;for(const c of document.querySelectorAll('link[rel="modulepreload"]'))i(c);new MutationObserver(c=>{for(const u of c)if(u.type==="childList")for(const f of u.addedNodes)f.tagName==="LINK"&&f.rel==="modulepreload"&&i(f)}).observe(document,{childList:!0,subtree:!0});function a(c){const u={};return c.integrity&&(u.integrity=c.integrity),c.referrerPolicy&&(u.referrerPolicy=c.referrerPolicy),c.crossOrigin==="use-credentials"?u.credentials="include":c.crossOrigin==="anonymous"?u.credentials="omit":u.credentials="same-origin",u}function i(c){if(c.ep)return;c.ep=!0;const u=a(c);fetch(c.href,u)}})();function eu(r){return r&&r.__esModule&&Object.prototype.hasOwnProperty.call(r,"default")?r.default:r}var uc={exports:{}},Ia={},dc={exports:{}},ze={};/**
  * @license React
  * react.production.min.js

@@ -1,1 +1,7 @@
-/*  /index.html  200
+# Espelha as rotas de netlify.toml (o Netlify dá prioridade ao toml; este
+# ficheiro cobre deploys que não o usam).
+#
+# A ordem importa: a primeira regra que faz match ganha.
+/api/public/nvidia  /.netlify/functions/nvidia  200
+/api/*              /404.html                   404
+/*                  /index.html                 200

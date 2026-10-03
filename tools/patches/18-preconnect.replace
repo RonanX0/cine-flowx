@@ -1,0 +1,6 @@
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <!-- os ficheiros da fonte vêm daqui: sem este preconnect, o browser só
+         descobre o host depois de interpretar a stylesheet -->
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- o core do FFmpeg (WASM) é carregado do unpkg no primeiro upload -->
+    <link rel="preconnect" href="https://unpkg.com" crossorigin />

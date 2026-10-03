@@ -1,9 +1,37 @@
 [build]
   # O app é um build estático (index.html + a camada de nuvem nuvem-duravel.js).
   # O nuvem-duravel.js TEM de ir para o dist, senão o R2 não funciona em produção.
-  command = "mkdir -p dist && (cp app-pronto.html dist/index.html 2>/dev/null || cp index.html dist/index.html) && cp nuvem-duravel.js dist/ && cp _redirects dist/ 2>/dev/null || true"
+  #
+  # NOTA: a versão anterior terminava em "|| true", o que fazia o build dar
+  # "sucesso" mesmo se o index.html não fosse copiado. Agora cada passo é
+  # encadeado com && e o comando falha a sério se algo correr mal.
+  command = "mkdir -p dist && cp index.html dist/index.html && cp nuvem-duravel.js dist/ && cp _redirects dist/ && cp 404.html dist/"
   publish = "dist"
 
+  # A pasta netlify/functions/ é publicada automaticamente pelo Netlify.
+
+# ---------------------------------------------------------------------------
+# Rotas. A ordem importa: a primeira que faz match ganha, por isso as rotas de
+# /api/ têm de vir ANTES do catch-all.
+# ---------------------------------------------------------------------------
+
+# Proxy da NVIDIA. Sem isto, o catch-all abaixo devolvia o index.html (HTML)
+# onde a app esperava JSON, e a identificação de filmes falhava.
+[[redirects]]
+  from = "/api/public/nvidia"
+  to = "/.netlify/functions/nvidia"
+  status = 200
+  force = true
+
+# Qualquer outro /api/* responde 404 limpo. O antigo upload-temp caiu de
+# usage quando a camada de nuvem ficou durável; devolver HTML fazia a app
+# tentar interpretar a página como resposta de upload.
+[[redirects]]
+  from = "/api/*"
+  to = "/404.html"
+  status = 404
+
+# SPA: tudo o resto vai para a app.
 [[redirects]]
   from = "/*"
   to = "/index.html"

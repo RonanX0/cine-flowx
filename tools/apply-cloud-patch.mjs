@@ -17,7 +17,8 @@ import { execFileSync } from "node:child_process";
 
 const root = path.resolve(import.meta.dirname, "..");
 const patchDir = path.join(root, "tools", "patches");
-const targets = ["index.html", "app-pronto.html"];
+// O antigo `app-pronto.html` foi removido: era byte-idêntico ao index.html.
+const targets = ["index.html"];
 const argv = process.argv.slice(2);
 const dry = argv.includes("--dry");
 const verify = argv.includes("--verify");
@@ -124,11 +125,14 @@ for (const file of targets) {
     fs.rmSync(tmp, { force: true });
   }
 
-  if (!html.includes('<script src="nuvem-duravel.js"></script>')) {
-    console.error(`   ❌ ${file}: falta a inclusão do nuvem-duravel.js`);
+  if (!html.includes('<script src="nuvem-duravel.js" defer></script>')) {
+    console.error(
+      `   ❌ ${file}: o nuvem-duravel.js não está incluído com defer ` +
+        `(tem de vir antes do bundle, senão o CineCloud não existe quando a app arranca)`
+    );
     process.exitCode = 1;
   } else {
-    console.log(`   ✔ ${file}: nuvem-duravel.js incluído antes do bundle`);
+    console.log(`   ✔ ${file}: nuvem-duravel.js incluído com defer antes do bundle`);
   }
 
   // Gera o código do Robô 24h e valida a sintaxe do resultado
@@ -171,7 +175,7 @@ for (const file of targets) {
 }
 
 // Sintaxe da camada de nuvem e do Worker
-for (const f of ["nuvem-duravel.js", "cloudflare/r2-worker.js", "apps-script/cineclip-cloud-drive.js", "tools/mock-r2-worker.mjs", "tools/mock-drive-backend.mjs", "tools/dev-server.mjs", "tools/restore-base.mjs", "tools/test-cinecloud.mjs"]) {
+for (const f of ["nuvem-duravel.js", "cloudflare/r2-worker.js", "apps-script/cineclip-cloud-drive.js", "netlify/functions/nvidia.mjs", "tools/mock-r2-worker.mjs", "tools/mock-drive-backend.mjs", "tools/dev-server.mjs", "tools/restore-base.mjs", "tools/extract-patch-targets.mjs", "tools/test-cinecloud.mjs"]) {
   const p = path.join(root, f);
   if (!fs.existsSync(p)) continue;
   try {
