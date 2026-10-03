@@ -145,6 +145,36 @@ Apps Script faz de servidor: recebe os uploads, guarda o cofre encriptado e serv
 Um Reel de 60 s a 720p/1080p tem normalmente **5–30 MB** → dentro do limite.
 Se trabalhas com clipes maiores, usa a Opção B.
 
+### 3.4 "Failed to fetch" / o browser bloqueia a leitura → modo compatível (JSONP)
+
+O Google **não deixa** um Web App do Apps Script definir cabeçalhos CORS. Consequência: um
+site noutro domínio (Netlify, Vercel, localhost, ou o app dentro de um iframe) faz o pedido,
+o Apps Script **responde**, mas o browser **não deixa o app ler a resposta** — e o JavaScript
+só vê um `Failed to fetch` genérico. Não é um erro teu nem da configuração.
+
+O CineClip resolve isto sozinho, com um **modo compatível**:
+
+| | Modo direto (CORS) | Modo compatível (JSONP) |
+|---|---|---|
+| Como lê | `fetch()` normal | etiqueta `<script src=…&callback=…>` — **não está sujeita a CORS** |
+| Como escreve | `POST` e lê a resposta | `POST` "às cegas" (`no-cors`) + confirma o resultado com uma leitura |
+| Quando é usado | sempre que o browser deixa | automaticamente, assim que uma leitura é bloqueada |
+
+- O backend devolve `text/javascript` com `minhaCallback({…});` — tem de ser este MIME,
+  porque com `application/json` o browser bloqueia a resposta por CORB/ORB.
+- O nome da callback só aceita `[A-Za-z0-9_$.]` (nada de código injetado pelo URL).
+- O botão **Testar ligação Drive** diz em que modo ficou:
+  `… · modo direto (CORS)` ou `… · modo compatível (JSONP)`.
+- As escritas "às cegas" são sempre **confirmadas**: o cofre é lido de volta e comparado
+  byte a byte; o vídeo confirma-se com `?action=complete`, que devolve o link final. Se a
+  confirmação falhar, o app repete o envio (3 tentativas) — nunca fica um ficheiro a meio
+  sem aviso.
+
+> ⚠️ O modo compatível precisa do `apps-script/cineclip-cloud-drive.js` **atualizado** no
+> teu projeto e de uma **nova versão** da implantação (Implantar → Gerir implantações →
+> ✏️ → Versão: *Nova versão*). Sem isso o backend não reconhece o parâmetro `callback` e o
+> app avisa: *"respondeu mas não devolveu dados (modo compatível)"*.
+
 ---
 
 ## 4. Opção B — Cloudflare R2 (mais rápido, sem limite de 45 MB, **precisa de cartão**)
@@ -228,7 +258,7 @@ Os ficheiros ficam em `.mock-cloud/` (ignorado pelo git). É o **mesmo contrato 
 backends reais — incluindo os detalhes do Apps Script: respostas sempre `HTTP 200` com
 `{ok:false,…}` em caso de erro e **sem suporte a `Range`**.
 
-Testes automatizados da camada de nuvem — **76 verificações**, sem internet e sem contas
+Testes automatizados da camada de nuvem — **92 verificações**, sem internet e sem contas
 (arranca os próprios mocks na porta 4199):
 
 ```bash
@@ -238,7 +268,10 @@ npm run nuvem:test
 Cobrem: upload direto e em blocos (512 KB, 1,5 MB, 2 MB, 9 MB, 10 MB) com integridade
 byte-a-byte, presign do R2, `videohead`, cofre put/get/não-existente, limites anunciados
 pelo backend, recusa de vídeo acima do limite, prioridade e **failover R2 → Drive**, tokens
-inválidos, backends inacessíveis (`readFailed`), guarda anti-apagão, `diagnostics()`/`report()`.
+inválidos, backends inacessíveis (`readFailed`), guarda anti-apagão,
+`diagnostics()`/`report()`, URLs colados de qualquer maneira (sem `https://`, com espaços,
+com `?action=health` a mais, `/dev`) e o **modo compatível (JSONP)** com o CORS bloqueado de
+propósito — escrita "às cegas" + confirmação pela leitura.
 
 ---
 
@@ -269,6 +302,8 @@ Itens que o Robô 24h apanhou com link morto ficam marcados com `needsReupload` 
 | Selo `⚠️ só neste aparelho` | nenhuma nuvem configurada ou upload falhou — passa o rato por cima do selo para ver o `cloudError`; **Copiar diagnóstico** dá o log completo |
 | `Testar ligação Drive` → "inacessível" | URL errado (usa o `/exec`, não o `/dev`) ou deployment não é *App da Web* |
 | Devolve HTML em vez de JSON | *Quem pode aceder* não é **Qualquer pessoa**, ou faltou criar **Nova versão** após editar o código |
+| "o Apps Script RESPONDEU mas o browser bloqueou a leitura" | É o CORS do Google (não é defeito teu). O app muda sozinho para o **modo compatível (JSONP)** — precisa do ficheiro atualizado no Apps Script + **Nova versão** da implantação (secção 3.4) |
+| "respondeu mas não devolveu dados (modo compatível)" | O código no Apps Script é anterior ao JSONP: volta a colar o `cineclip-cloud-drive.js` e cria uma **Nova versão** da implantação |
 | "Token inválido" no Drive | corre `setup()` outra vez e copia o `CINECLIP_TOKEN` novo para as Configurações **e** para o Robô |
 | "excede o limite de 45 MB" | corta o clipe, baixa o bitrate, ou usa o R2 |
 | `Testar ligação R2` falha com 401 | token errado (`npx wrangler secret put CINECLIP_TOKEN`) |

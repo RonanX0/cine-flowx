@@ -130,7 +130,39 @@ class XMLHttpRequestStub {
   }
 }
 
-function createContext(origin) {
+const realFetch = globalThis.fetch;
+
+/**
+ * Fetch que se porta como um browser com o CORS bloqueado para o Apps Script:
+ *   • leituras (cors)      → "Failed to fetch"
+ *   • escritas (no-cors)   → o pedido CHEGA ao servidor, a resposta vem opaca
+ *   • <script src=…>       → não passa por aqui (o DOM fingido usa o fetch real)
+ */
+function makeBlockedFetch(isDriveUrl) {
+  return async (url, opts) => {
+    const o = opts || {};
+    if (!isDriveUrl(String(url))) return realFetch(url, o);
+    if (o.mode === "no-cors") {
+      await realFetch(url, { ...o, mode: "cors" });
+      return {
+        type: "opaque",
+        status: 0,
+        ok: true,
+        url: String(url),
+        headers: { get: () => null },
+        text: async () => "",
+        json: async () => {
+          throw new TypeError("Failed to fetch");
+        },
+      };
+    }
+    throw new TypeError("Failed to fetch");
+  };
+}
+
+function createContext(origin, options) {
+  const opts = options || {};
+  const isDriveUrl = (u) => u.indexOf("/drive-api") >= 0;
   const localStorage = makeStorage();
   const sandbox = {
     console,
@@ -143,7 +175,7 @@ function createContext(origin) {
     Blob,
     File,
     FormData,
-    fetch,
+    fetch: opts.blockDrive ? makeBlockedFetch(isDriveUrl) : fetch,
     crypto,
     btoa: (s) => Buffer.from(s, "binary").toString("base64"),
     atob: (s) => Buffer.from(s, "base64").toString("binary"),
@@ -179,6 +211,40 @@ function createContext(origin) {
   sandbox.__toasts = [];
 
   const ctx = vm.createContext(sandbox);
+
+  // DOM mínimo para o modo compatível (JSONP): as etiquetas <script> não estão
+  // sujeitas a CORS, tal como num browser a sério.
+  if (opts.withDom) {
+    const runScript = (el) => {
+      (async () => {
+        try {
+          const res = await realFetch(el.src, { cache: "no-store" });
+          const text = await res.text();
+          vm.runInContext(text, ctx, { filename: "jsonp:" + el.src.slice(-40) });
+          if (el.onload) el.onload();
+        } catch (err) {
+          if (el.onerror) el.onerror(err);
+        }
+      })();
+    };
+    const makeParent = () => ({
+      appendChild(el) {
+        el.parentNode = this;
+        runScript(el);
+        return el;
+      },
+      removeChild(el) {
+        el.parentNode = null;
+        return el;
+      },
+    });
+    sandbox.document = {
+      head: makeParent(),
+      documentElement: makeParent(),
+      createElement: (tag) => ({ tagName: String(tag).toUpperCase(), src: "", async: false, onload: null, onerror: null, parentNode: null }),
+    };
+  }
+
   const code = fs.readFileSync(path.join(root, "nuvem-duravel.js"), "utf8");
   vm.runInContext(code, ctx, { filename: "nuvem-duravel.js" });
   return sandbox;
@@ -440,6 +506,31 @@ check("URL colado com ?action=health (do teste ou de um erro anterior) é limpo"
 setSettings(sb, { driveScriptUrl: "http://127.0.0.1:59999/drive-api", driveToken: DRIVE_TOKEN, cloudProvider: "drive" });
 const hcDown = await CC.healthCheck();
 check("backend em baixo → mensagem com o URL de teste direto e o que verificar", hcDown.ok === false && /action=health/.test(hcDown.drive.message) && /setup\(\)/.test(hcDown.drive.message), hcDown.drive.message.slice(0, 120));
+setSettings(sb, { driveScriptUrl: "/drive-api", driveToken: DRIVE_TOKEN, cloudProvider: "drive" });
+
+console.log("\nModo compatível (JSONP) — quando o browser bloqueia o CORS");
+const sbJ = createContext(BASE, { withDom: true, blockDrive: true });
+const CCJ = sbJ.window.CineCloud;
+setSettings(sbJ, { driveScriptUrl: "/drive-api", driveToken: DRIVE_TOKEN, cloudProvider: "drive" });
+const hcJ = await CCJ.healthCheck();
+check("healthCheck funciona com o CORS bloqueado (via JSONP)", hcJ.ok === true && hcJ.provider === "google-drive", hcJ.drive ? hcJ.drive.message : hcJ.message);
+check("o teste de ligação diz em que modo ficou", /compatível \(JSONP\)/.test((hcJ.drive && hcJ.drive.message) || ""), (hcJ.drive && hcJ.drive.message) || "");
+const cipherJ = JSON.stringify({ v: 2, iv: "QUJD", ct: "SlNICA==" });
+const putJ = await CCJ.putVault("hash_jsonp", cipherJ);
+check("cofre gravado às cegas e confirmado pela leitura", putJ.ok === true && putJ.mode === "jsonp", JSON.stringify(putJ));
+const gotJ = await CCJ.getVaultCipher("hash_jsonp");
+check("cofre lido via JSONP", gotJ.data === cipherJ && gotJ.source === "google-drive" && gotJ.readFailed === false, JSON.stringify({ src: gotJ.source, ok: !!gotJ.data }));
+const vJ = randomBytes(512 * 1024);
+const urlJ = await CCJ.uploadVideo(new Blob([vJ], { type: "video/mp4" }), "jsonp.mp4");
+check("vídeo enviado com CORS bloqueado devolve link público", /[?&]action=video&/.test(urlJ), urlJ);
+const backJ = Buffer.from(await (await realFetch(urlJ)).arrayBuffer());
+check("o vídeo fica íntegro no Drive", backJ.equals(Buffer.from(vJ)), backJ.length + " vs " + vJ.length);
+const bigJ = randomBytes(9 * 1024 * 1024);
+const urlBigJ = await CCJ.uploadVideo(new Blob([bigJ], { type: "video/mp4" }), "jsonp-grande.mp4");
+const backBigJ = Buffer.from(await (await realFetch(urlBigJ)).arrayBuffer());
+check("vídeo de 9 MB em blocos, às cegas, fica íntegro", backBigJ.equals(Buffer.from(bigJ)), backBigJ.length + " vs " + bigJ.length);
+check("verifyPublicUrl também funciona em modo compatível", (await CCJ.verifyPublicUrl(urlJ)) === true);
+check("diagnóstico regista o modo compatível", /JSONP/i.test(CCJ.report()), "");
 setSettings(sb, { driveScriptUrl: "/drive-api", driveToken: DRIVE_TOKEN, cloudProvider: "drive" });
 
 /* 11 — prioridade quando os dois estão configurados */

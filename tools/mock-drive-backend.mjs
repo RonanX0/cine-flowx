@@ -29,7 +29,18 @@ export function createMockDrive({ storeDir, singleMaxMb, chunkBytes, maxVideoMb 
   fs.mkdirSync(vaultsDir, { recursive: true });
   const uploads = new Map();
 
-  const send = (res, obj) => {
+  const send = (res, obj, callback) => {
+    // JSONP (modo compatível): devolve JavaScript em vez de JSON.
+    // O MIME tem de ser text/javascript, senão o browser bloqueia por CORB/ORB.
+    if (callback) {
+      const js = callback + "(" + JSON.stringify(obj) + ");";
+      res.writeHead(200, {
+        "Content-Type": "text/javascript; charset=utf-8",
+        "Access-Control-Allow-Origin": "*",
+        "Content-Length": Buffer.byteLength(js),
+      });
+      return res.end(js);
+    }
     const body = JSON.stringify(obj);
     res.writeHead(200, {
       "Content-Type": "application/json; charset=utf-8",
@@ -63,6 +74,8 @@ export function createMockDrive({ storeDir, singleMaxMb, chunkBytes, maxVideoMb 
     const action = p.get("action") || "health";
     const token = p.get("token") || "";
     const authed = token === TOKEN;
+    const callback = String(p.get("callback") || "").replace(/[^a-zA-Z0-9_$.]/g, "").slice(0, 64);
+    const out = (res2, obj) => send(res2, obj, callback);
 
     if (req.method === "OPTIONS") {
       res.writeHead(204, {
@@ -74,7 +87,7 @@ export function createMockDrive({ storeDir, singleMaxMb, chunkBytes, maxVideoMb 
     }
 
     if (action === "health") {
-      return send(res, {
+      return out(res, {
         ok: true,
         service: "cineclip-cloud-drive-mock",
         version: "1.0.0-mock",
@@ -94,7 +107,7 @@ export function createMockDrive({ storeDir, singleMaxMb, chunkBytes, maxVideoMb 
     if (action === "video") {
       const id = p.get("id") || "";
       const file = path.join(videosDir, safe(id));
-      if (!fs.existsSync(file)) return send(res, { ok: false, error: "Vídeo não encontrado." });
+      if (!fs.existsSync(file)) return out(res, { ok: false, error: "Vídeo não encontrado." });
       const buf = fs.readFileSync(file);
       res.writeHead(200, {
         "Content-Type": "video/mp4",
@@ -109,8 +122,8 @@ export function createMockDrive({ storeDir, singleMaxMb, chunkBytes, maxVideoMb 
     if (action === "videohead") {
       const id = p.get("id") || "";
       const file = path.join(videosDir, safe(id));
-      if (!fs.existsSync(file)) return send(res, { ok: false, error: "Vídeo não encontrado." });
-      return send(res, {
+      if (!fs.existsSync(file)) return out(res, { ok: false, error: "Vídeo não encontrado." });
+      return out(res, {
         ok: true,
         provider: "google-drive",
         id,
@@ -121,14 +134,14 @@ export function createMockDrive({ storeDir, singleMaxMb, chunkBytes, maxVideoMb 
       });
     }
 
-    if (!authed) return send(res, { ok: false, error: "Token inválido." });
+    if (!authed) return out(res, { ok: false, error: "Token inválido." });
 
     if (action === "vault") {
       const hash = safe(p.get("hash") || "");
       const file = path.join(vaultsDir, `cc_${hash}.json`);
       if (req.method === "GET") {
-        if (!fs.existsSync(file)) return send(res, { ok: false, error: "Cofre não encontrado.", code: "not_found" });
-        return send(res, {
+        if (!fs.existsSync(file)) return out(res, { ok: false, error: "Cofre não encontrado.", code: "not_found" });
+        return out(res, {
           ok: true,
           provider: "google-drive",
           cipher: fs.readFileSync(file, "utf8"),
@@ -137,9 +150,9 @@ export function createMockDrive({ storeDir, singleMaxMb, chunkBytes, maxVideoMb 
         });
       }
       const body = (await readBody(req)).toString("utf8");
-      if (!body.trim()) return send(res, { ok: false, error: "Cofre vazio." });
+      if (!body.trim()) return out(res, { ok: false, error: "Cofre vazio." });
       fs.writeFileSync(file, body);
-      return send(res, { ok: true, provider: "google-drive", name: `cc_${hash}.json`, size: body.length, savedAt: new Date().toISOString() });
+      return out(res, { ok: true, provider: "google-drive", name: `cc_${hash}.json`, size: body.length, savedAt: new Date().toISOString() });
     }
 
     if (action === "upload") {
@@ -149,7 +162,7 @@ export function createMockDrive({ storeDir, singleMaxMb, chunkBytes, maxVideoMb 
       const name = safe(p.get("name") || "reel.mp4");
       const declaredTotal = Number(p.get("total") || 0);
       if (declaredTotal > MAX_VIDEO) {
-        return send(res, {
+        return out(res, {
           ok: false,
           error: "Vídeo com " + Math.round(declaredTotal / 1048576) + " MB excede o limite de " + Math.round(MAX_VIDEO / 1048576) + " MB.",
           code: "too_large",
@@ -160,25 +173,25 @@ export function createMockDrive({ storeDir, singleMaxMb, chunkBytes, maxVideoMb 
       try {
         bytes = Buffer.from(body.toString("utf8").replace(/\s/g, ""), "base64");
       } catch {
-        return send(res, { ok: false, error: "base64 inválido." });
+        return out(res, { ok: false, error: "base64 inválido." });
       }
-      if (!uploadId) return send(res, { ok: false, error: "Falta o id do upload." });
+      if (!uploadId) return out(res, { ok: false, error: "Falta o id do upload." });
 
       // vídeo pequeno: um só pedido
       if (total <= SINGLE_MAX) {
-        if (index !== 0) return send(res, { ok: false, error: "Vídeo pequeno deve ser enviado num só bloco." });
+        if (index !== 0) return out(res, { ok: false, error: "Vídeo pequeno deve ser enviado num só bloco." });
         const id = `1${rid(32)}`;
         fs.writeFileSync(path.join(videosDir, safe(id)), bytes);
         writeSidecar(path.join(videosDir, safe(id)), { name, size: bytes.length });
         const publicUrl = videoUrl(req, id);
         uploads.set(uploadId, { fileId: id, url: publicUrl, total: bytes.length, done: true });
-        return send(res, { ok: true, done: true, provider: "google-drive", fileId: id, url: publicUrl, size: bytes.length, durable: true });
+        return out(res, { ok: true, done: true, provider: "google-drive", fileId: id, url: publicUrl, size: bytes.length, durable: true });
       }
 
       // vídeo grande: acumula os blocos (o mock faz o merge no fim)
       let st = uploads.get(uploadId);
       if (!st) {
-        if (index !== 0) return send(res, { ok: false, error: "Upload não iniciado (esperava o bloco 0)." });
+        if (index !== 0) return out(res, { ok: false, error: "Upload não iniciado (esperava o bloco 0)." });
         st = { name, total, parts: [], sent: 0 };
         uploads.set(uploadId, st);
       }
@@ -192,31 +205,31 @@ export function createMockDrive({ storeDir, singleMaxMb, chunkBytes, maxVideoMb 
         st.done = true;
         st.fileId = id;
         st.url = videoUrl(req, id);
-        return send(res, { ok: true, done: true, provider: "google-drive", fileId: id, url: st.url, size: st.sent, durable: true });
+        return out(res, { ok: true, done: true, provider: "google-drive", fileId: id, url: st.url, size: st.sent, durable: true });
       }
-      return send(res, { ok: true, done: false, received: st.sent, total });
+      return out(res, { ok: true, done: false, received: st.sent, total });
     }
 
     if (action === "complete") {
       const st = uploads.get(p.get("id") || "");
-      if (!st) return send(res, { ok: false, error: "Upload desconhecido ou expirado." });
-      if (!st.done) return send(res, { ok: false, error: "Upload incompleto.", received: st.sent });
-      return send(res, { ok: true, done: true, provider: "google-drive", fileId: st.fileId, url: st.url, size: st.total, durable: true });
+      if (!st) return out(res, { ok: false, error: "Upload desconhecido ou expirado." });
+      if (!st.done) return out(res, { ok: false, error: "Upload incompleto.", received: st.sent });
+      return out(res, { ok: true, done: true, provider: "google-drive", fileId: st.fileId, url: st.url, size: st.total, durable: true });
     }
 
     if (action === "abort") {
       uploads.delete(p.get("id") || "");
-      return send(res, { ok: true, aborted: p.get("id") });
+      return out(res, { ok: true, aborted: p.get("id") });
     }
 
     if (action === "stats") {
       const videos = fs.readdirSync(videosDir).filter((f) => !f.endsWith(".meta.json"));
       const vaults = fs.readdirSync(vaultsDir);
       const bytes = videos.reduce((a, f) => a + fs.statSync(path.join(videosDir, f)).size, 0);
-      return send(res, { ok: true, provider: "google-drive", videos: videos.length, vaults: vaults.length, bytes, version: "1.0.0-mock" });
+      return out(res, { ok: true, provider: "google-drive", videos: videos.length, vaults: vaults.length, bytes, version: "1.0.0-mock" });
     }
 
-    return send(res, { ok: false, error: "Ação desconhecida: " + action });
+    return out(res, { ok: false, error: "Ação desconhecida: " + action });
   };
 }
 

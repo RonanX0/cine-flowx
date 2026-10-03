@@ -359,6 +359,119 @@
     }
   }
 
+  /** Há DOM? (sem document não há JSONP — ex.: testes em Node) */
+  function canJsonp() {
+    try {
+      return typeof document !== "undefined" && !!document && !!document.createElement && !!(document.head || document.documentElement);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  var jsonpSeq = 0;
+
+  /**
+   * MODO COMPATÍVEL (JSONP).
+   * O Google não permite que um Web App do Apps Script defina cabeçalhos CORS,
+   * por isso um fetch() a partir de outro domínio (Netlify, Vercel, localhost…)
+   * é bloqueado pelo browser na hora de LER a resposta — aparece só
+   * "Failed to fetch", mesmo com tudo bem configurado.
+   *
+   * Uma etiqueta <script src="…&callback=…"> não está sujeita a CORS: o backend
+   * devolve JavaScript que chama a nossa função com o JSON como argumento.
+   * Serve para TODAS as leituras (health, cofre, videohead, stats, complete).
+   */
+  function driveJsonp(cfg, params, timeoutMs) {
+    return new Promise(function (resolve, reject) {
+      if (!canJsonp()) {
+        reject(new Error("Este ambiente não tem DOM — o modo compatível (JSONP) não está disponível."));
+        return;
+      }
+      jsonpSeq++;
+      var name = "__cineCloudCb" + jsonpSeq + "_" + Math.random().toString(36).slice(2, 8);
+      var all = {};
+      Object.keys(params || {}).forEach(function (k) {
+        all[k] = params[k];
+      });
+      all.callback = "window." + name;
+
+      var script = document.createElement("script");
+      var finished = false;
+      var timer = setTimeout(function () {
+        finish(new Error("O Apps Script não respondeu a tempo (" + Math.round((timeoutMs || 45000) / 1000) + " s, modo compatível)."));
+      }, timeoutMs || 45000);
+
+      function cleanup() {
+        clearTimeout(timer);
+        try {
+          delete window[name];
+        } catch (e) {
+          window[name] = undefined;
+        }
+        try {
+          if (script && script.parentNode) script.parentNode.removeChild(script);
+        } catch (e) {}
+      }
+      function finish(err, data) {
+        if (finished) return;
+        finished = true;
+        cleanup();
+        if (err) reject(err);
+        else resolve(data);
+      }
+
+      window[name] = function (data) {
+        finish(null, data);
+      };
+      script.src = q(cfg.driveUrl, all);
+      script.async = true;
+      script.onerror = function () {
+        finish(new Error("Não consegui carregar a resposta do Apps Script (modo compatível). Confirma o URL e que a implantação é 'Qualquer pessoa'."));
+      };
+      script.onload = function () {
+        // se o script carregou mas a callback não foi chamada, a resposta não era a nossa
+        setTimeout(function () {
+          finish(new Error("O Apps Script respondeu mas não devolveu dados (modo compatível) — confirma que colaste o ficheiro apps-script/cineclip-cloud-drive.js atualizado e criaste uma NOVA VERSÃO da implantação."));
+        }, 0);
+      };
+      (document.head || document.documentElement).appendChild(script);
+    });
+  }
+
+  /**
+   * POST que o browser não deixa ler (mode:"no-cors"): o pedido CHEGA e é
+   * processado pelo Apps Script, mas a resposta vem opaca. Usa-se só quando o
+   * modo normal está bloqueado, e confirma-se o resultado com uma leitura JSONP.
+   */
+  async function postOpaque(url, bodyText) {
+    await fetch(url, driveFetchOpts({
+      mode: "no-cors",
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=UTF-8" },
+      body: bodyText
+    }));
+    return true;
+  }
+
+  /**
+   * Leitura do backend Drive: tenta o fetch normal e, se o browser bloquear,
+   * repete por JSONP. forceJsonp salta o fetch quando já sabemos que está bloqueado.
+   */
+  async function driveReadJson(cfg, params, forceJsonp) {
+    if (!forceJsonp) {
+      try {
+        return await fetchJson(q(cfg.driveUrl, params), driveFetchOpts());
+      } catch (e) {
+        if (!canJsonp()) throw e;
+        log("warn", "Leitura bloqueada pelo browser (CORS) — a usar o modo compatível (JSONP).");
+      }
+    } else if (!canJsonp()) {
+      return await fetchJson(q(cfg.driveUrl, params), driveFetchOpts());
+    }
+    var data = await driveJsonp(cfg, params);
+    return { status: 200, ok: true, data: data, text: JSON.stringify(data), jsonp: true };
+  }
+
   function q(base, params) {
     var clean = String(base || "");
     var existing = clean.indexOf("?") >= 0 ? clean.slice(clean.indexOf("?") + 1).split("&") : [];
@@ -520,7 +633,7 @@
 
   /* --- Google Drive (Apps Script) --- */
 
-  var driveInfoCache = { url: "", at: 0, chunkBytes: 0, singleMaxBytes: 0, maxVideoBytes: 0 };
+  var driveInfoCache = { url: "", at: 0, chunkBytes: 0, singleMaxBytes: 0, maxVideoBytes: 0, readable: true };
 
   /**
    * Lê as capacidades anunciadas pelo backend (?action=health) — tamanho do
@@ -536,22 +649,54 @@
       singleMaxBytes: cfg.driveSingleMaxBytes > 0 ? cfg.driveSingleMaxBytes : 8 * 1024 * 1024,
       maxVideoBytes: 0
     };
+    var d = null;
+    var readable = false;
     try {
       var res = await fetchJson(q(cfg.driveUrl, { action: "health" }), driveFetchOpts());
-      var d = res.data || {};
-      if (!d || d.ok !== true) return fallback;
-      driveInfoCache = {
-        url: cfg.driveUrl,
-        at: now(),
-        chunkBytes: Number(d.chunkBytes) || fallback.chunkBytes,
-        singleMaxBytes: Number(d.singleMaxBytes) || fallback.singleMaxBytes,
-        maxVideoBytes: Number(d.maxVideoBytes) || 0
-      };
-      return driveInfoCache;
+      d = res.data || null;
+      readable = true;
     } catch (e) {
-      log("warn", "Não consegui ler as capacidades do Apps Script (" + e.message + ") — a usar os valores das Configurações.");
+      if (canJsonp()) {
+        try {
+          d = await driveJsonp(cfg, { action: "health" });
+          log("warn", "O browser bloqueia a leitura direta do Apps Script (CORS) — a usar o modo compatível (JSONP).");
+        } catch (e2) {
+          log("warn", "Não consegui ler o Apps Script (" + e.message + " · JSONP: " + e2.message + ").");
+        }
+      } else {
+        log("warn", "Não consegui ler as capacidades do Apps Script (" + e.message + ") — a usar os valores das Configurações.");
+      }
+    }
+    if (!d || d.ok !== true) {
+      fallback.readable = readable;
       return fallback;
     }
+    driveInfoCache = {
+      url: cfg.driveUrl,
+      at: now(),
+      chunkBytes: Number(d.chunkBytes) || fallback.chunkBytes,
+      singleMaxBytes: Number(d.singleMaxBytes) || fallback.singleMaxBytes,
+      maxVideoBytes: Number(d.maxVideoBytes) || 0,
+      readable: readable
+    };
+    return driveInfoCache;
+  }
+
+  /**
+   * Confirma um envio feito "às cegas" (modo compatível): pergunta ao backend se
+   * o ficheiro ficou completo e devolve o link público.
+   */
+  async function confirmUpload(cfg, uploadId, total) {
+    var res = await driveReadJson(cfg, { action: "complete", token: cfg.driveToken, id: uploadId }, true);
+    var d = res.data;
+    var f = driveFailure(d);
+    if (f || !d || !d.url) {
+      var err = new Error("Drive (modo compatível): o envio terminou mas o ficheiro não ficou completo (" + (f || "sem url") + ").");
+      err.retryable = true;
+      throw err;
+    }
+    saveState({ driveMode: "compatível (JSONP)" });
+    return { url: d.url, key: d.fileId, provider: "google-drive", size: d.size || total, mode: "jsonp" };
   }
 
   async function uploadToDrive(cfg, buffer, fileName, onProgress) {
@@ -583,11 +728,20 @@
       });
     }
 
+    // Se o browser não deixa ler as respostas do Apps Script, envia-se "às cegas"
+    // (o pedido chega na mesma) e confirma-se tudo no fim por JSONP.
+    var opaque = info.readable === false && canJsonp();
+
     async function sendChunk(index, slice) {
+      var b64 = bufferToBase64(slice);
+      if (opaque) {
+        await postOpaque(chunkUrl(index), b64);
+        return {};
+      }
       var res = await fetch(chunkUrl(index), driveFetchOpts({
         method: "POST",
         headers: { "Content-Type": "text/plain;charset=UTF-8" },
-        body: bufferToBase64(slice)
+        body: b64
       }));
       var data = null;
       try {
@@ -608,6 +762,7 @@
     if (total <= singleMax) {
       var one = await sendChunk(0, buffer);
       if (onProgress) onProgress(100, total, total);
+      if (opaque) return await confirmUpload(cfg, uploadId, total);
       if (!one.url) throw new Error("Drive: o Apps Script não devolveu o link do vídeo.");
       return { url: one.url, key: one.fileId, provider: "google-drive", size: one.size || total };
     }
@@ -624,6 +779,9 @@
         return { url: out.url, key: out.fileId, provider: "google-drive", size: out.size || total };
       }
     }
+
+    // Modo compatível: nenhum bloco pôde ser lido → confirma-se agora
+    if (opaque) return await confirmUpload(cfg, uploadId, total);
 
     // Nenhum bloco confirmou o fim → pergunta ao backend
     var done = await fetchJson(q(base, { action: "complete", token: cfg.driveToken, id: uploadId }), driveFetchOpts());
@@ -805,10 +963,13 @@
     var cfg = config();
     try {
       if (classifyUrl(url) === "drive") {
-        // troca action=video → action=videohead (resposta pequena, sem descarregar o vídeo)
-        var headUrl = String(url).replace(/action=video(&|$)/, "action=videohead$1");
-        if (headUrl === url && /[?&]id=/.test(url)) headUrl = q(cfg.driveUrl, { action: "videohead", id: (/[?&]id=([^&]+)/.exec(url) || [])[1] || "", token: cfg.driveToken });
-        var hres = await fetchJson(headUrl, driveFetchOpts());
+        // videohead: resposta pequena, sem descarregar o vídeo (o Apps Script não tem Range)
+        var idMatch = /[?&]id=([^&]+)/.exec(String(url));
+        var videoId = idMatch ? decodeURIComponent(idMatch[1]) : "";
+        var info = await driveInfo(cfg);
+        var hres = videoId
+          ? await driveReadJson(cfg, { action: "videohead", id: videoId, token: cfg.driveToken }, info.readable === false)
+          : await fetchJson(String(url).replace(/action=video(&|$)/, "action=videohead$1"), driveFetchOpts());
         var hf = driveFailure(hres.data);
         if (hf) {
           log("warn", "Link do Drive não confirmado: " + hf);
@@ -934,28 +1095,54 @@
   }
 
   async function drivePutVault(cfg, vaultHash, cipher) {
-    var res = await fetch(q(cfg.driveUrl, { action: "vault", hash: vaultHash, token: cfg.driveToken }), driveFetchOpts({
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=UTF-8" },
-      body: cipher
-    }));
-    var data = null;
-    try {
-      data = await res.json();
-    } catch (e) {
-      throw new Error("Apps Script devolveu resposta inválida ao gravar o cofre (HTTP " + res.status + ").");
+    var params = { action: "vault", hash: vaultHash, token: cfg.driveToken };
+    var info = await driveInfo(cfg);
+
+    if (info.readable !== false) {
+      try {
+        var res = await fetch(q(cfg.driveUrl, params), driveFetchOpts({
+          method: "POST",
+          headers: { "Content-Type": "text/plain;charset=UTF-8" },
+          body: cipher
+        }));
+        var data = null;
+        try {
+          data = await res.json();
+        } catch (e) {
+          throw new Error("Apps Script devolveu resposta inválida ao gravar o cofre (HTTP " + res.status + ").");
+        }
+        var f = driveFailure(data);
+        if (f) {
+          var err = new Error("Drive: " + f);
+          err.retryable = !/token|inválid|invalid|vazio/i.test(f);
+          throw err;
+        }
+        return { ok: true, provider: "google-drive", mode: "cors" };
+      } catch (e) {
+        // erro devolvido pelo servidor é definitivo; rede/CORS tenta-se às cegas
+        if (!canJsonp() || /^Drive:/.test(e.message)) throw e;
+        log("warn", "Gravação do cofre bloqueada pelo browser (CORS) — a enviar às cegas e a confirmar pela leitura.");
+      }
     }
-    var f = driveFailure(data);
-    if (f) {
-      var err = new Error("Drive: " + f);
-      err.retryable = !/token|inválid|invalid|vazio/i.test(f);
-      throw err;
+
+    // Modo compatível: o POST chega ao Apps Script mas a resposta não é legível.
+    await postOpaque(q(cfg.driveUrl, params), cipher);
+    var back = await driveReadJson(cfg, { action: "vault", hash: vaultHash, token: cfg.driveToken }, true);
+    var d2 = back.data;
+    if (d2 && d2.ok === true && d2.cipher === cipher) {
+      saveState({ driveMode: "compatível (JSONP)" });
+      return { ok: true, provider: "google-drive", mode: "jsonp" };
     }
-    return { ok: true, provider: "google-drive" };
+    if (d2 && d2.ok === false) {
+      var e2 = new Error("Drive: " + (d2.error || "falha a gravar o cofre"));
+      e2.retryable = !/token|inválid|invalid|vazio/i.test(String(d2.error || ""));
+      throw e2;
+    }
+    throw new Error("Drive: enviei o cofre mas não consegui confirmá-lo (modo compatível).");
   }
 
   async function driveGetVaultCipher(cfg, vaultHash) {
-    var res = await fetchJson(q(cfg.driveUrl, { action: "vault", hash: vaultHash, token: cfg.driveToken }), driveFetchOpts());
+    var res = await driveReadJson(cfg, { action: "vault", hash: vaultHash, token: cfg.driveToken });
     var data = res.data;
     if (data && data.ok === false) {
       if (data.code === "not_found" || /não encontrado|not found/i.test(String(data.error || ""))) {
@@ -1208,7 +1395,7 @@
     }
 
     try {
-      var health = await fetchJson(healthUrl, driveFetchOpts());
+      var health = await driveReadJson(cfg, { action: "health" });
       var f = driveFailure(health.data);
       if (f || !health.data || health.data.ok !== true) {
         out.message = f || "respondeu mas não parece ser o backend CineClip (HTTP " + health.status + ")";
@@ -1239,25 +1426,25 @@
       out.message = "no ar, mas falta o Token (corre a função setup() no Apps Script)";
       return out;
     }
+    var probeCipher = JSON.stringify({ probe: now() });
+    var info2 = await driveInfo(cfg);
+    var forceJsonp = info2.readable === false;
+    out.mode = forceJsonp ? "compatível (JSONP)" : "direto (CORS)";
     try {
       var probeHash = "healthcheck";
-      var put = await fetchJson(q(cfg.driveUrl, { action: "vault", hash: probeHash, token: cfg.driveToken }), driveFetchOpts({
-        method: "POST",
-        headers: { "Content-Type": "text/plain;charset=UTF-8" },
-        body: JSON.stringify({ probe: now() })
-      }));
-      var pf = driveFailure(put.data);
-      if (pf) {
-        out.message = pf;
-        return out;
-      }
-      var get = await fetchJson(q(cfg.driveUrl, { action: "vault", hash: probeHash, token: cfg.driveToken }), driveFetchOpts());
+      var putRes = await drivePutVault(cfg, probeHash, probeCipher);
+      out.mode = putRes.mode === "jsonp" ? "compatível (JSONP)" : "direto (CORS)";
+      var get = await driveReadJson(cfg, { action: "vault", hash: probeHash, token: cfg.driveToken }, forceJsonp);
       var gf = driveFailure(get.data);
       if (gf || !get.data || !get.data.cipher) {
         out.message = gf || "gravei o cofre de teste mas não o consegui ler de volta";
         return out;
       }
-      var stats = await fetchJson(q(cfg.driveUrl, { action: "stats", token: cfg.driveToken }), driveFetchOpts());
+      if (get.data.cipher !== probeCipher) {
+        out.message = "gravei o cofre de teste mas o que li de volta é diferente";
+        return out;
+      }
+      var stats = await driveReadJson(cfg, { action: "stats", token: cfg.driveToken }, forceJsonp);
       if (!driveFailure(stats.data) && stats.data) out.stats = stats.data;
     } catch (e) {
       out.message = "erro no teste de escrita/leitura: " + e.message;
@@ -1266,7 +1453,7 @@
     out.ok = true;
     out.message =
       "ligado ✔ (" + (out.stats ? out.stats.videos + " vídeo(s), " + out.stats.vaults + " cofre(s), " + fmtSize(out.stats.bytes) : "escrita e leitura OK") +
-      " · blocos de " + fmtSize(cfg.driveChunkBytes) + ")";
+      " · blocos de " + fmtSize(info2.chunkBytes || cfg.driveChunkBytes) + " · modo " + out.mode + ")";
     return out;
   }
 

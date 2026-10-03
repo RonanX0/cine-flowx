@@ -88,22 +88,54 @@ function testarBackend() {
 function doGet(e) {
   var p = (e && e.parameter) || {};
   var action = String(p.action || "health");
+  var callback = sanitizeCallback_(p.callback);
   try {
-    if (action === "health") return jsonOut_(health_());
+    // O vídeo é servido em bruto — nunca por JSONP.
     if (action === "video") return videoOut_(p);
-    if (action === "videohead") return jsonOut_(videoHead_(p));
 
-    var authErr = requireToken_(p);
-    if (authErr) return jsonOut_(authErr);
-
-    if (action === "vault") return jsonOut_(vaultGet_(p));
-    if (action === "stats") return jsonOut_(stats_());
-    if (action === "complete") return jsonOut_(uploadComplete_(p));
-    if (action === "abort") return jsonOut_(uploadAbort_(p));
-    return jsonOut_({ ok: false, error: "Ação desconhecida: " + action });
+    var out;
+    if (action === "health") out = health_();
+    else if (action === "videohead") out = videoHead_(p);
+    else {
+      var authErr = requireToken_(p);
+      if (authErr) out = authErr;
+      else if (action === "vault") out = vaultGet_(p);
+      else if (action === "stats") out = stats_();
+      else if (action === "complete") out = uploadComplete_(p);
+      else if (action === "abort") out = uploadAbort_(p);
+      else out = { ok: false, error: "Ação desconhecida: " + action };
+    }
+    return callback ? jsonpOut_(callback, out) : jsonOut_(out);
   } catch (err) {
-    return jsonOut_({ ok: false, error: err && err.message ? err.message : String(err) });
+    var bad = { ok: false, error: err && err.message ? err.message : String(err) };
+    return callback ? jsonpOut_(callback, bad) : jsonOut_(bad);
   }
+}
+
+/**
+ * JSONP — MODO COMPATÍVEL.
+ * O Google não deixa um Web App do Apps Script definir cabeçalhos CORS. Por isso,
+ * quando o CineClip (Netlify/Vercel/localhost) faz fetch() para aqui, o browser
+ * BLOQUEIA a leitura da resposta e o app vê apenas "Failed to fetch" — mesmo com
+ * tudo bem configurado do lado do Google.
+ *
+ * Uma etiqueta <script src="…&callback=fn"> não está sujeita a CORS: devolvemos
+ * JavaScript que chama a função que o cliente indicou, com o JSON como argumento.
+ * O MIME tem de ser JAVASCRIPT (text/javascript): com application/json o browser
+ * bloqueia a resposta por CORB/ORB e volta tudo à estaca zero.
+ *
+ * Só se aplica às leituras (GET). As escritas (POST) continuam normais: o pedido
+ * chega e é processado, e o cliente confirma o resultado com um GET/JSONP.
+ */
+function jsonpOut_(callback, obj) {
+  var text = callback + "(" + JSON.stringify(obj) + ");";
+  return ContentService.createTextOutput(text).setMimeType(ContentService.MimeType.JAVASCRIPT);
+}
+
+/** Só letras, números, "_", "$" e "." — impede injectar código pelo nome da callback. */
+function sanitizeCallback_(cb) {
+  var s = String(cb || "").replace(/[^a-zA-Z0-9_$.]/g, "");
+  return s.length > 0 && s.length <= 64 ? s : "";
 }
 
 /* ============================================================ rotas POST */
