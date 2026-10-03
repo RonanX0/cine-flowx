@@ -20,6 +20,16 @@
  *   DELETE /api/vault/:name      → apaga o cofre
  *   GET    /api/stats            → quantos vídeos/cofres e bytes usados
  *
+ *   POST   /api/claims/acquire   → 🔒 reclamar um item da fila antes de publicar
+ *   POST   /api/claims/release   → libertar a reclamação depois de publicar
+ *   GET    /api/claims           → reclamações ativas (diagnóstico)
+ *   GET    /api/claims/:key      → estado da reclamação de um item
+ *
+ * As "claims" (reclamações) impedem que o mesmo Reel seja publicado duas vezes
+ * quando o app e o Robô 24h correm ao mesmo tempo, ou quando há dois aparelhos
+ * com a mesma fila. Têm TTL (10 min por omissão) e expiram sozinhas: uma claim
+ * nunca bloqueia uma publicação para sempre.
+ *
  * Segredos / variáveis (wrangler):
  *   BUCKET              → binding R2 (obrigatório)
  *   CINECLIP_TOKEN      → secret: token Bearer exigido em /api/* (obrigatório)
@@ -35,10 +45,14 @@
  *   npx wrangler secret put CINECLIP_TOKEN
  */
 
-const VERSION = "1.0.0";
+const VERSION = "1.1.0";
 const MAX_DIRECT_UPLOAD = 100 * 1024 * 1024; // limite de corpo do Worker (plano free)
 const VAULT_PREFIX = "vaults/";
 const VIDEO_PREFIX = "videos/";
+const CLAIM_PREFIX = "claims/";
+const CLAIM_TTL_DEFAULT_MS = 10 * 60 * 1000; // 10 min
+const CLAIM_TTL_MIN_MS = 60 * 1000; // 1 min
+const CLAIM_TTL_MAX_MS = 60 * 60 * 1000; // 1 h
 
 /* ------------------------------------------------------------------ utils */
 
@@ -344,6 +358,7 @@ async function handleStats(env) {
   if (!env.BUCKET) return fail("Worker sem binding R2 (BUCKET).", 500);
   let videos = 0;
   let vaults = 0;
+  let claims = 0;
   let bytes = 0;
   let cursor;
   let guard = 0;
@@ -353,11 +368,203 @@ async function handleStats(env) {
       bytes += o.size;
       if (o.key.startsWith(VIDEO_PREFIX)) videos++;
       else if (o.key.startsWith(VAULT_PREFIX)) vaults++;
+      else if (o.key.startsWith(CLAIM_PREFIX)) claims++;
     }
     cursor = listed.cursor;
     guard++;
   } while (cursor && guard < 50);
-  return json({ ok: true, videos, vaults, bytes, version: VERSION });
+  return json({ ok: true, videos, vaults, claims, bytes, version: VERSION });
+}
+
+/* ----------------------------------------- claims (anti-publicação dupla) */
+
+/**
+ * Uma "claim" é uma reclamação temporária sobre um item da fila: quem a tem é
+ * quem pode publicar. Serve para o app (browser) e o Robô 24h (Apps Script) não
+ * publicarem o mesmo Reel ao mesmo tempo — antes, ambos liam o cofre, ambos
+ * viam `status: "scheduled"` e ambos publicavam.
+ *
+ * Semântica:
+ *   • `owner` diferente e claim viva → recusado (`acquired: false` + `holder`);
+ *   • mesmo `owner` → renova (o TTL é estendido), para retries não se atropelarem;
+ *   • claim expirada é ignorada e pode ser tomada por outro;
+ *   • a escrita é condicional + verificada por releitura, para dois pedidos
+ *     simultâneos não ficarem ambos a pensar que ganharam.
+ */
+
+function clampClaimTtl(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return CLAIM_TTL_DEFAULT_MS;
+  return Math.min(Math.max(Math.round(n), CLAIM_TTL_MIN_MS), CLAIM_TTL_MAX_MS);
+}
+
+const claimObjectName = (key) => `${CLAIM_PREFIX}${safeName(key)}.json`;
+
+async function readClaim(env, key) {
+  const object = await env.BUCKET.get(claimObjectName(key));
+  if (!object) return null;
+  try {
+    const claim = JSON.parse(await object.text());
+    if (!claim || typeof claim !== "object") return null;
+    if (!claim.key) claim.key = key;
+    return claim;
+  } catch {
+    return null;
+  }
+}
+
+async function activeClaim(env, key, nowMs) {
+  const claim = await readClaim(env, key);
+  if (!claim) return null;
+  if (Number(claim.expiresAt || 0) <= nowMs) return null;
+  return claim;
+}
+
+const holderOf = (claim) =>
+  claim ? { owner: claim.owner, expiresAt: claim.expiresAt } : null;
+
+async function handleClaimAcquire(request, env) {
+  if (!env.BUCKET) return fail("Worker sem binding R2 (BUCKET).", 500);
+
+  let payload = {};
+  try {
+    payload = await request.json();
+  } catch {
+    return fail("JSON inválido no pedido de claim.", 400);
+  }
+
+  const key = safeName(payload.key || "");
+  const owner = String(payload.owner || "").trim().slice(0, 120);
+  if (!key) return fail("Claim sem 'key' (identificador do item).", 400);
+  if (!owner) return fail("Claim sem 'owner' (quem está a publicar).", 400);
+
+  const ttlMs = clampClaimTtl(payload.ttlMs);
+  const nowMs = Date.now();
+  const objectName = claimObjectName(key);
+  const meta = { httpMetadata: { contentType: "application/json; charset=utf-8" } };
+  let lastHolder = null;
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const current = await activeClaim(env, key, nowMs);
+    if (current && current.owner !== owner) {
+      return json({
+        ok: true, provider: "cloudflare-r2", acquired: false,
+        holder: holderOf(current), retryAfterMs: Math.max(0, current.expiresAt - nowMs),
+      });
+    }
+
+    const claim = {
+      key, owner, provider: "cloudflare-r2",
+      acquiredAt: nowMs, expiresAt: nowMs + ttlMs, renewals: attempt,
+    };
+    const body = JSON.stringify(claim);
+
+    try {
+      // 1ª tentativa: só cria se não existir nada (fecha a corrida de dois
+      // dispositivos a reclamar no mesmo instante). Se o runtime não suportar
+      // `onlyIf`, cai no put simples — a releitura abaixo ainda verifica.
+      const written = await env.BUCKET.put(objectName, body, {
+        ...meta,
+        onlyIf: { etagDoesNotMatch: "*" },
+      });
+      if (written === null) {
+        // Perdemos a corrida (ou existe uma claim expirada a ocupar o lugar):
+        // volta a ler no próximo ciclo do loop e decide.
+        continue;
+      }
+    } catch (err) {
+      try {
+        await env.BUCKET.put(objectName, body, meta);
+      } catch (err2) {
+        return fail(
+          `Falha ao gravar a claim no R2: ${err2 && err2.message ? err2.message : err2}`,
+          500
+        );
+      }
+    }
+
+    // Verificação read-after-write: quem ficou gravado é o dono da claim.
+    const held = await readClaim(env, key);
+    if (held && held.owner === owner) {
+      return json({ ok: true, provider: "cloudflare-r2", acquired: true, claim: held });
+    }
+    lastHolder = held;
+  }
+
+  return json({
+    ok: true, provider: "cloudflare-r2", acquired: false,
+    holder: holderOf(lastHolder),
+    note: "Não foi possível obter a claim (concorrência). Tenta de novo.",
+  });
+}
+
+async function handleClaimRelease(request, env) {
+  if (!env.BUCKET) return fail("Worker sem binding R2 (BUCKET).", 500);
+
+  let payload = {};
+  try {
+    payload = await request.json();
+  } catch {
+    return fail("JSON inválido no pedido de release.", 400);
+  }
+
+  const key = safeName(payload.key || "");
+  const owner = String(payload.owner || "").trim().slice(0, 120);
+  if (!key) return fail("Release sem 'key'.", 400);
+  if (!owner) return fail("Release sem 'owner'.", 400);
+
+  const current = await readClaim(env, key);
+  if (!current) {
+    return json({ ok: true, provider: "cloudflare-r2", released: false, note: "sem claim" });
+  }
+  if (current.owner !== owner) {
+    // Nunca apagar a claim de outro dispositivo: seria publicar duas vezes.
+    return json({
+      ok: true, provider: "cloudflare-r2", released: false,
+      holder: holderOf(current), note: "claim de outro dono",
+    });
+  }
+
+  await env.BUCKET.delete(claimObjectName(key));
+  return json({ ok: true, provider: "cloudflare-r2", released: true });
+}
+
+async function handleClaimStatus(env, key) {
+  if (!env.BUCKET) return fail("Worker sem binding R2 (BUCKET).", 500);
+  const nowMs = Date.now();
+  const claim = await readClaim(env, key);
+  const active = !!(claim && Number(claim.expiresAt || 0) > nowMs);
+  return json({
+    ok: true, provider: "cloudflare-r2", key,
+    active,
+    claim: active ? claim : null,
+    expired: !!(claim && !active),
+  });
+}
+
+async function handleClaimsList(env) {
+  if (!env.BUCKET) return fail("Worker sem binding R2 (BUCKET).", 500);
+  const nowMs = Date.now();
+  const active = [];
+  let cursor;
+  let guard = 0;
+  do {
+    const listed = await env.BUCKET.list({ prefix: CLAIM_PREFIX, cursor, limit: 1000 });
+    for (const o of listed.objects) {
+      const object = await env.BUCKET.get(o.key);
+      if (!object) continue;
+      let claim = null;
+      try {
+        claim = JSON.parse(await object.text());
+      } catch {
+        continue;
+      }
+      if (claim && Number(claim.expiresAt || 0) > nowMs) active.push(claim);
+    }
+    cursor = listed.cursor;
+    guard++;
+  } while (cursor && guard < 10);
+  return json({ ok: true, provider: "cloudflare-r2", active, count: active.length });
 }
 
 /* ------------------------------------------------------------------ main */
@@ -379,6 +586,7 @@ export default {
         version: VERSION,
         bucket: !!env.BUCKET,
         presign: !!(env.R2_ACCOUNT_ID && env.R2_ACCESS_KEY_ID && env.R2_SECRET_ACCESS_KEY),
+        claims: true,
         maxDirectUploadBytes: MAX_DIRECT_UPLOAD,
         time: new Date().toISOString(),
       });
@@ -430,6 +638,19 @@ export default {
     }
 
     if (path === "/api/stats" && request.method === "GET") return handleStats(env);
+
+    // 🔒 Claims: quem reclama o item é quem pode publicá-lo.
+    if (path === "/api/claims" && request.method === "GET") return handleClaimsList(env);
+    if (path === "/api/claims/acquire" && request.method === "POST") {
+      return handleClaimAcquire(request, env);
+    }
+    if (path === "/api/claims/release" && request.method === "POST") {
+      return handleClaimRelease(request, env);
+    }
+    if (path.startsWith("/api/claims/") && request.method === "GET") {
+      const key = path.slice("/api/claims/".length);
+      if (key !== "acquire" && key !== "release") return handleClaimStatus(env, key);
+    }
 
     return fail(`Rota desconhecida: ${request.method} ${path}`, 404);
   },
