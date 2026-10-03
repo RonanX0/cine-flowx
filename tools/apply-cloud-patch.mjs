@@ -171,7 +171,7 @@ for (const file of targets) {
 }
 
 // Sintaxe da camada de nuvem e do Worker
-for (const f of ["nuvem-duravel.js", "cloudflare/r2-worker.js", "tools/mock-r2-worker.mjs", "tools/dev-server.mjs"]) {
+for (const f of ["nuvem-duravel.js", "cloudflare/r2-worker.js", "apps-script/cineclip-cloud-drive.js", "tools/mock-r2-worker.mjs", "tools/mock-drive-backend.mjs", "tools/dev-server.mjs", "tools/restore-base.mjs", "tools/test-cinecloud.mjs"]) {
   const p = path.join(root, f);
   if (!fs.existsSync(p)) continue;
   try {

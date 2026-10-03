@@ -1,7 +1,7 @@
-function kS(r){const cc=Eg(),cw=String(cc.r2WorkerUrl||"").trim().replace(/\/+$/,""),ct=String(cc.r2Token||"").trim();return`// ============================================================================
-// ROBÔ 24H NA NUVEM — CINECLIP STUDIO · versão NUVEM DURÁVEL (Cloudflare R2)
+function kS(r){const cc=Eg(),cw=String(cc.r2WorkerUrl||"").trim().replace(/\/+$/,""),ct=String(cc.r2Token||"").trim(),du=String(cc.driveScriptUrl||"").trim().replace(/\/+$/,""),dt=String(cc.driveToken||"").trim(),cn=cw&&ct?"Cloudflare R2 ✔ ("+cw+")":du&&dt?"Google Drive ✔ ("+du+")":"⚠️ SEM NUVEM DURÁVEL — vai usar bytebin/kappa.lol, que EXPIRAM. No CineClip: Configurações → Nuvem durável (o Google Drive é grátis), e volta a copiar este código.";return`// ============================================================================
+// ROBÔ 24H NA NUVEM — CINECLIP STUDIO · versão NUVEM DURÁVEL (Google Drive / Cloudflare R2)
 // Conta vinculada: ${r.username}
-// Armazenamento: ${cw?"Cloudflare R2 ✔ ("+cw+")":"⚠️ SEM R2 CONFIGURADO — vai usar bytebin/kappa.lol, que EXPIRAM. No CineClip: Configurações → Nuvem durável, e volta a copiar este código."}
+// Armazenamento: ${cn}
 // ============================================================================
 // COMO ATIVAR EM 30 SEGUNDOS:
 // 1. Acede a https://script.google.com → clica em "Novo projeto"
@@ -10,13 +10,15 @@ function kS(r){const cc=Eg(),cw=String(cc.r2WorkerUrl||"").trim().replace(/\/+$/
 // 4. Autoriza a tua conta Google quando pedir. PRONTO! Corre a cada 5 minutos, 24h/dia,
 //    com o PC e o celular 100% desligados.
 //
-// Funções de diagnóstico: "estadoDaFila" e "testarLigacaoR2" (corre-as manualmente).
+// Funções de diagnóstico: "estadoDaFila", "testarLigacaoDrive" e "testarLigacaoR2".
 // ============================================================================
 
 const VAULT_HASH = "${r.vaultHash}";
 const ENCRYPTION_KEY_B64 = "${r.encryptionKeyB64}";
 const R2_WORKER_URL = "${cw}";
 const R2_TOKEN = "${ct}";
+const DRIVE_SCRIPT_URL = "${du}";
+const DRIVE_TOKEN = "${dt}";
 const KV_BASE = "https://keyvalue.immanuel.co/api/KeyVal";
 const KV_APP = "1729nxi0";
 const GRAPH_BASE = "https://graph.facebook.com/v22.0";
@@ -32,13 +34,53 @@ function r2Headers(extra) {
   return h;
 }
 
+function driveConfigurado() {
+  return !!(DRIVE_SCRIPT_URL && DRIVE_TOKEN);
+}
+
+function nuvemConfigurada() {
+  return r2Configurado() || driveConfigurado();
+}
+
+// O Apps Script não lê cabeçalhos HTTP próprios -> o token vai no query string.
+// E devolve sempre HTTP 200, com {ok:false,...} em caso de erro.
+function driveApi(params) {
+  const parts = [];
+  for (const k in params) {
+    const v = params[k];
+    if (v === null || v === undefined || v === "") continue;
+    parts.push(encodeURIComponent(k) + "=" + encodeURIComponent(v));
+  }
+  const sep = DRIVE_SCRIPT_URL.indexOf("?") >= 0 ? "&" : "?";
+  return DRIVE_SCRIPT_URL + sep + parts.join("&");
+}
+
+function driveFetch(params, options) {
+  const opts = options || {};
+  opts.muteHttpExceptions = true;
+  opts.followRedirects = true;
+  const res = UrlFetchApp.fetch(driveApi(params), opts);
+  const text = res.getContentText();
+  let json = null;
+  try { json = JSON.parse(text); } catch (e) {}
+  return { code: res.getResponseCode(), text: text, json: json };
+}
+
+function isDriveUrl(url) {
+  const s = String(url || "");
+  if (DRIVE_SCRIPT_URL && s.indexOf(DRIVE_SCRIPT_URL.split("?")[0]) === 0) return true;
+  return s.indexOf("script.google.com/") >= 0 || s.indexOf("googleusercontent.com/") >= 0;
+}
+
 function ativarRobo24h() {
   const triggers = ScriptApp.getProjectTriggers();
   for (let i = 0; i < triggers.length; i++) ScriptApp.deleteTrigger(triggers[i]);
   ScriptApp.newTrigger("verificarEPostarReels").timeBased().everyMinutes(5).create();
   Logger.log("✅ Robô 24h ATIVADO: verifica a fila a cada 5 minutos (24h por dia).");
-  if (!r2Configurado()) {
-    Logger.log("⚠️ SEM R2 CONFIGURADO: os vídeos ficam em hosts temporários (kappa.lol/bytebin) que apagam os ficheiros em horas/dias. Configura no CineClip (Configurações → Nuvem durável — Cloudflare R2) e volta a copiar/colar este código.");
+  if (!nuvemConfigurada()) {
+    Logger.log("⚠️ SEM NUVEM DURÁVEL CONFIGURADA: os vídeos ficam em hosts temporários (kappa.lol/bytebin) que apagam os ficheiros em horas/dias. Configura no CineClip (Configurações → Nuvem durável — Google Drive, grátis e sem cartão) e volta a copiar/colar este código.");
+  } else {
+    Logger.log("☁️ Armazenamento durável ativo: " + (r2Configurado() ? "Cloudflare R2 " : "") + (driveConfigurado() ? "Google Drive " : ""));
   }
   verificarEPostarReels();
 }
@@ -160,6 +202,23 @@ function verificarEPostarReels() {
 
 // Devolve null se o link está vivo, ou uma descrição do problema.
 function verificarLink(url) {
+  const alvo = String(url || "");
+  // Google Drive/Apps Script: usa o endpoint leve "videohead".
+  // O ContentService não suporta Range — um GET normal descarregava o vídeo inteiro
+  // e gastava a quota diária de saída do UrlFetchApp.
+  if (isDriveUrl(alvo)) {
+    const idMatch = alvo.match(/[?&]id=([^&]+)/);
+    if (idMatch) {
+      try {
+        const r = driveFetch({ action: "videohead", id: decodeURIComponent(idMatch[1]), token: DRIVE_TOKEN });
+        if (r.json && r.json.ok === true && Number(r.json.size) > 0) return null;
+        if (r.json && r.json.ok === false) return "Drive: " + (r.json.error || "resposta sem detalhe");
+        return "HTTP " + r.code + " (o Apps Script não devolveu JSON — confirma a implantação como 'Qualquer pessoa')";
+      } catch (e) {
+        return "exceção no videohead: " + (e && e.message ? e.message : String(e));
+      }
+    }
+  }
   try {
     const res = UrlFetchApp.fetch(url, {
       method: "get",
@@ -321,7 +380,21 @@ function lerCofreNuvem() {
         Logger.log("R2 devolveu HTTP " + code + " ao ler o cofre: " + res.getContentText().substring(0, 200));
       }
     } catch (e) {
-      Logger.log("Falha a ler o cofre no R2 (a tentar o cofre antigo): " + e);
+      Logger.log("Falha a ler o cofre no R2 (a tentar o Drive): " + e);
+    }
+  }
+  if (driveConfigurado()) {
+    try {
+      const r = driveFetch({ action: "vault", hash: VAULT_HASH, token: DRIVE_TOKEN });
+      if (r.json && r.json.ok === true && r.json.cipher) {
+        const vault = desencriptarTexto(r.json.cipher);
+        if (vault) return vault;
+        Logger.log("Drive: cofre encontrado mas não deu para desencriptar (a chave mudou?).");
+      } else if (r.json && r.json.ok === false && r.json.code !== "not_found") {
+        Logger.log("Drive devolveu erro ao ler o cofre: " + (r.json.error || r.text.substring(0, 200)));
+      }
+    } catch (e) {
+      Logger.log("Falha a ler o cofre no Drive (a tentar o cofre antigo): " + e);
     }
   }
   return lerCofreLegado();
@@ -356,6 +429,7 @@ function lerCofreLegado() {
 
 function salvarCofreNuvem(vault) {
   const encrypted = encriptarTexto(JSON.stringify(vault));
+  let gravou = false;
   if (r2Configurado()) {
     try {
       const res = UrlFetchApp.fetch(R2_WORKER_URL + "/api/vault/cc_" + VAULT_HASH, {
@@ -364,11 +438,29 @@ function salvarCofreNuvem(vault) {
         payload: encrypted,
         muteHttpExceptions: true
       });
-      if (res.getResponseCode() === 200) return true;
-      Logger.log("R2 recusou a gravação do cofre: HTTP " + res.getResponseCode() + " " + res.getContentText().substring(0, 200));
+      if (res.getResponseCode() === 200) gravou = true;
+      else Logger.log("R2 recusou a gravação do cofre: HTTP " + res.getResponseCode() + " " + res.getContentText().substring(0, 200));
     } catch (e) {
       Logger.log("Falha a gravar o cofre no R2: " + e);
     }
+  }
+  if (driveConfigurado()) {
+    try {
+      const r = driveFetch({ action: "vault", hash: VAULT_HASH, token: DRIVE_TOKEN }, {
+        method: "post",
+        contentType: "text/plain",
+        payload: encrypted
+      });
+      if (r.json && r.json.ok === true) gravou = true;
+      else Logger.log("Drive recusou a gravação do cofre: " + ((r.json && r.json.error) || r.text.substring(0, 200)));
+    } catch (e) {
+      Logger.log("Falha a gravar o cofre no Drive: " + e);
+    }
+  }
+  if (gravou) {
+    // espelho no índice antigo (compatibilidade com versões anteriores do Robô)
+    try { salvarCofreLegado(encrypted); } catch (e) {}
+    return true;
   }
   return salvarCofreLegado(encrypted);
 }
@@ -408,6 +500,54 @@ function testarLigacaoR2() {
     Logger.log("Estatísticas do bucket (HTTP " + stats.getResponseCode() + "): " + stats.getContentText());
     const vault = UrlFetchApp.fetch(R2_WORKER_URL + "/api/vault/cc_" + VAULT_HASH, { headers: r2Headers(), muteHttpExceptions: true });
     Logger.log("Cofre (HTTP " + vault.getResponseCode() + "): " + vault.getContentText().substring(0, 80) + "…");
+  } catch (e) {
+    Logger.log("❌ Erro no teste: " + e);
+  }
+}
+
+function testarLigacaoDrive() {
+  if (!driveConfigurado()) {
+    Logger.log("❌ Google Drive não configurado neste script. No CineClip: Configurações → Nuvem durável → Google Drive, preenche o URL do Apps Script e o Token, clica em Guardar, e volta a copiar o código do Robô 24h.");
+    return;
+  }
+  try {
+    const health = driveFetch({ action: "health" });
+    Logger.log("Health do Apps Script (HTTP " + health.code + "): " + health.text.substring(0, 300));
+    if (!health.json || health.json.ok !== true) {
+      Logger.log("❌ O URL não devolveu o JSON do backend CineClip. Confirma que a implantação é 'App da Web' com 'Quem pode aceder: Qualquer pessoa'.");
+      return;
+    }
+    const stats = driveFetch({ action: "stats", token: DRIVE_TOKEN });
+    Logger.log("Pasta CineClip Cloud (HTTP " + stats.code + "): " + stats.text.substring(0, 300));
+    const vault = driveFetch({ action: "vault", hash: VAULT_HASH, token: DRIVE_TOKEN });
+    if (!(vault.json && vault.json.ok === true)) {
+      Logger.log("⚠️ Cofre no Drive: " + ((vault.json && vault.json.error) || vault.text.substring(0, 200)));
+      return;
+    }
+    Logger.log("✔ Cofre encontrado (" + (vault.json.size || 0) + " bytes, gravado em " + (vault.json.savedAt || "?") + ").");
+    const fila = desencriptarTexto(vault.json.cipher);
+    if (!fila || !Array.isArray(fila.queue)) {
+      Logger.log("⚠️ Li o cofre mas não o consegui desencriptar — a palavra-passe mudou desde que copiaste este código.");
+      return;
+    }
+    Logger.log("Fila com " + fila.queue.length + " Reel(s). A verificar cada link de vídeo…");
+    let vivos = 0;
+    let mortos = 0;
+    fila.queue.forEach(function (item) {
+      if (!item.remoteVideoUrl) {
+        Logger.log(" · ⚠️ " + item.title + " — SEM vídeo na nuvem");
+        return;
+      }
+      const problema = verificarLink(item.remoteVideoUrl);
+      if (problema) {
+        mortos++;
+        Logger.log(" · ❌ " + item.title + " — " + problema);
+      } else {
+        vivos++;
+        Logger.log(" · ✔ " + item.title + " — link vivo");
+      }
+    });
+    Logger.log((mortos === 0 ? "✅ " : "⚠️ ") + vivos + " link(s) vivo(s), " + mortos + " morto(s).");
   } catch (e) {
     Logger.log("❌ Erro no teste: " + e);
   }

@@ -11,7 +11,9 @@
     "nuvem:presign": "PORT=4174 MOCK_MAX_DIRECT_MB=1 node tools/dev-server.mjs",
     "nuvem:test": "node tools/test-cinecloud.mjs",
     "patch:extrair": "node tools/extract-patch-targets.mjs",
-    "patch:nuvem": "node tools/apply-cloud-patch.mjs --verify"
+    "patch:nuvem": "node tools/apply-cloud-patch.mjs --verify",
+    "patch:base": "node tools/restore-base.mjs",
+    "patch:full": "node tools/restore-base.mjs && node tools/extract-patch-targets.mjs && node tools/apply-cloud-patch.mjs --verify"
   },
   "dependencies": {
     "@ffmpeg/ffmpeg": "^0.12.10",

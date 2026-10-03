@@ -6,38 +6,50 @@
  *
  *   ANTES                                          DEPOIS
  *   -------                                        ------
- *   bytebin.lucko.me  (defunto, expira)     →      Cloudflare R2 (o teu bucket)
- *   kappa.lol         (100 MiB, apaga)      →      Cloudflare R2 + fallback antigo
- *   uguu.se           (apaga em 3 h)        →      Cloudflare R2
- *   litterbox         (12 h no app)         →      Cloudflare R2
+ *   bytebin.lucko.me  (defunto, expira)     →      Google Drive (Apps Script) e/ou
+ *   kappa.lol         (100 MiB, apaga)      →      Cloudflare R2 (o teu bucket)
+ *   uguu.se           (apaga em 3 h)        →      ↑ ambos duráveis, sem expiração
+ *   litterbox         (12 h no app)         →
+ *
+ * Ordem dos providers ("cloudProvider" nas Configurações):
+ *   auto     → R2 (se configurado) → Drive (se configurado) → hosts antigos
+ *   r2       → só Cloudflare R2
+ *   drive    → só Google Drive / Apps Script
+ *   legacy   → só os hosts antigos (comportamento original)
  *
  * Regras novas que resolvem o "alguns vídeos não ficam na nuvem":
  *   1. O upload do .mp4 é AGUARDADO antes de gravar o cofre (antes o cofre era
  *      gravado sem o link e o upload corria em background sem await).
  *   2. Erros deixam de ser engolidos por catch{} — viram toast + diagnóstico.
- *   3. Retry com backoff (3 tentativas) para falhas de rede/429/5xx.
+ *   3. Retry com backoff (3 tentativas) por provider, e passagem ao seguinte.
  *   4. O File do <input> é copiado para memória antes do upload (evita
  *      NotReadableError quando o ficheiro local já não está acessível).
- *   5. Vídeos acima do limite de corpo do Worker usam URL pré-assinada S3.
+ *   5. R2: vídeos acima do limite de corpo do Worker usam URL pré-assinada S3.
+ *      Drive: vídeos acima de 8 MB são enviados em blocos de 2 MB (resumable),
+ *      para o Apps Script nunca ter de guardar o vídeo inteiro em memória.
  *   6. Guarda anti-apagão: se a leitura da nuvem falhou por rede, o app não
  *      sobrescreve o cofre com uma fila vazia.
- *   7. Migração automática: cofres antigos (bytebin/kappa) são copiados para o R2.
+ *   7. Migração automática: cofres antigos (bytebin/kappa) são copiados para o
+ *      provider durável configurado.
  *
  * Exposição: window.CineCloud
- * Configurado em: Configurações → "Nuvem durável — Cloudflare R2"
- *   (localStorage["cineclip.settings"].r2WorkerUrl / .r2Token)
+ * Configurado em: Configurações → "☁️ Nuvem durável"
  */
 (function () {
   "use strict";
 
-  var VERSION = "1.0.0";
+  var VERSION = "1.1.0";
   var SETTINGS_KEY = "cineclip.settings";
   var STATE_KEY = "cineclip.cloud.state";
   var MAX_LOG = 80;
 
   var KV_BASE = "https://keyvalue.immanuel.co/api/KeyVal";
   var KV_APP = "1729nxi0";
-  var LEGACY_VIDEO_HOSTS = ["kappa.lol", "uguu.se", "litter.catbox.moe", "litterbox.catbox.moe", "filebin.net", "catbox.moe", "bytebin.lucko.me"];
+  var TEMP_VIDEO_HOSTS = [
+    "kappa.lol", "segs.lol", "uguu.se", "litter.catbox.moe", "litterbox.catbox.moe",
+    "filebin.net", "catbox.moe", "bytebin.lucko.me"
+  ];
+  var DRIVE_HOSTS = ["script.google.com", "googleusercontent.com"];
 
   var memoryLog = [];
   var lastError = "";
@@ -88,7 +100,7 @@
     }
   }
 
-  /** Resolve URLs relativas (útil no preview local: "/cloud-api"). */
+  /** Resolve URLs relativas (útil no preview local: "/cloud-api", "/drive-api"). */
   function absolute(base) {
     try {
       return new URL(base, window.location.origin).toString().replace(/\/+$/, "");
@@ -99,10 +111,15 @@
 
   function config() {
     var s = readSettings();
-    var workerUrl = String(s.r2WorkerUrl || "").trim();
+    var r2Url = String(s.r2WorkerUrl || "").trim();
+    var driveUrl = String(s.driveScriptUrl || "").trim();
     return {
-      workerUrl: workerUrl ? absolute(workerUrl) : "",
+      workerUrl: r2Url ? absolute(r2Url) : "",
       token: String(s.r2Token || "").trim(),
+      driveUrl: driveUrl ? absolute(driveUrl) : "",
+      driveToken: String(s.driveToken || "").trim(),
+      driveChunkBytes: Number(s.driveChunkMb || 2) * 1024 * 1024,
+      driveSingleMaxBytes: Number(s.driveSingleMaxMb || 8) * 1024 * 1024,
       maxMb: Number(s.r2MaxMb || 0) || 95,
       presign: s.r2Presign !== false,
       mirrorLegacy: s.cloudMirrorLegacy !== false,
@@ -111,9 +128,34 @@
     };
   }
 
+  /** Providers configurados, por ordem de prioridade. */
+  function chain(cfg) {
+    cfg = cfg || config();
+    var hasR2 = !!(cfg.workerUrl && cfg.token);
+    var hasDrive = !!(cfg.driveUrl && cfg.driveToken);
+    var order = [];
+    if (cfg.provider === "r2") {
+      if (hasR2) order.push("r2");
+    } else if (cfg.provider === "drive") {
+      if (hasDrive) order.push("drive");
+    } else if (cfg.provider === "legacy") {
+      // só hosts antigos
+    } else {
+      if (hasR2) order.push("r2");
+      if (hasDrive) order.push("drive");
+    }
+    order.push("legacy");
+    return order;
+  }
+
   function configured() {
-    var c = config();
-    return !!(c.workerUrl && c.token);
+    return chain().some(function (p) {
+      return p !== "legacy";
+    });
+  }
+
+  function activeProviders() {
+    return chain();
   }
 
   function fmtSize(bytes) {
@@ -129,66 +171,103 @@
     });
   }
 
-  /** Classifica um URL de vídeo: "r2" (durável), "temp" (host que expira) ou "local". */
+  /**
+   * Classifica um URL de vídeo:
+   *   "r2"    → Cloudflare R2 (durável)
+   *   "drive" → Google Drive/Apps Script (durável)
+   *   "temp"  → host que expira (kappa/uguu/litterbox/…)
+   *   "local" → este próprio domínio (ex.: dev server)
+   *   "none"  → não há URL
+   */
+  /** O URL pertence ao mesmo alvo configurado (host + prefixo de path)? */
+  function sameTarget(url, base) {
+    if (!base) return false;
+    try {
+      var u = new URL(url);
+      var b = new URL(base);
+      if (u.hostname !== b.hostname) return false;
+      var bp = String(b.pathname || "/").replace(/\/+$/, "");
+      if (bp && bp !== "/" && String(u.pathname || "/").indexOf(bp) !== 0) return false;
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
   function classifyUrl(url) {
     if (!url || !/^https?:/i.test(url)) return "none";
-    var c = config();
+    var cfg = config();
+    var host;
     try {
-      var host = new URL(url).hostname;
-      if (c.workerUrl && host === new URL(c.workerUrl).hostname) return "r2";
-      for (var i = 0; i < LEGACY_VIDEO_HOSTS.length; i++) {
-        if (host === LEGACY_VIDEO_HOSTS[i] || host.slice(-LEGACY_VIDEO_HOSTS[i].length - 1) === "." + LEGACY_VIDEO_HOSTS[i]) return "temp";
-      }
-      if (/workers\.dev$/i.test(host) || /r2\.cloudflarestorage\.com$/i.test(host) || /r2\.dev$/i.test(host)) return "r2";
-      if (host === window.location.hostname) return "local";
-      return "unknown";
+      host = new URL(url).hostname;
     } catch (e) {
       return "unknown";
     }
+    // 1) alvo explícito configurado (funciona mesmo com os dois na mesma origem,
+    //    como no preview local: /cloud-api vs /drive-api)
+    if (sameTarget(url, cfg.driveUrl)) return "drive";
+    if (sameTarget(url, cfg.workerUrl)) return "r2";
+    // 2) heurísticas por hostname
+    if (/workers\.dev$/i.test(host) || /r2\.cloudflarestorage\.com$/i.test(host) || /r2\.dev$/i.test(host)) return "r2";
+    for (var d = 0; d < DRIVE_HOSTS.length; d++) {
+      if (host === DRIVE_HOSTS[d] || host.slice(-DRIVE_HOSTS[d].length - 1) === "." + DRIVE_HOSTS[d]) return "drive";
+    }
+    for (var i = 0; i < TEMP_VIDEO_HOSTS.length; i++) {
+      var t = TEMP_VIDEO_HOSTS[i];
+      if (host === t || host.slice(-t.length - 1) === "." + t) return "temp";
+    }
+    if (host === window.location.hostname) return "local";
+    return "unknown";
+  }
+
+  /** O URL aponta para armazenamento durável? */
+  function isDurable(url) {
+    var kind = classifyUrl(url);
+    return kind === "r2" || kind === "drive";
   }
 
   /* --------------------------------------------------------------- toasts */
 
   var lastToast = {};
 
-  /**
-   * Mostra um toast no máximo 1x por `windowMs` para a mesma chave.
-   * Evita o spam do sync automático (que corre a cada 20 s).
-   */
+  function getToast() {
+    return window.CineClipToast || window.je || null;
+  }
+
+  /** Toast no máximo 1x por `windowMs` para a mesma chave (evita spam do sync de 20 s). */
   function toastOnce(key, message, kind, windowMs) {
-    try {
-      if (typeof window.je === "function" || (window.CineClipToast && typeof window.CineClipToast === "function")) {
-        var toast = window.CineClipToast || window.je;
+    var toast = getToast();
+    if (toast) {
+      try {
         var win = windowMs || 5 * 60 * 1000;
         if (lastToast[key] && now() - lastToast[key] < win) return false;
         lastToast[key] = now();
-        var fn = toast[kind || "error"];
-        if (typeof fn === "function") fn(message);
-        else toast(message);
+        var fn = kind && typeof toast[kind] === "function" ? toast[kind] : toast;
+        fn(message);
         return true;
-      }
-    } catch (e) {}
+      } catch (e) {}
+    }
     log(kind === "success" ? "info" : "warn", message);
     return false;
   }
 
   function toast(key, message, kind, toastId) {
-    try {
-      var toast = window.CineClipToast || window.je;
-      if (typeof toast === "function") {
-        var fn = kind && typeof toast[kind] === "function" ? toast[kind] : toast;
+    var t = getToast();
+    if (t) {
+      try {
+        var fn = kind && typeof t[kind] === "function" ? t[kind] : t;
         fn(message, toastId ? { id: toastId } : undefined);
         return true;
-      }
-    } catch (e) {}
+      } catch (e) {}
+    }
     log("info", message);
     return false;
   }
 
   function dismissToast(toastId) {
+    var t = getToast();
     try {
-      var toast = window.CineClipToast || window.je;
-      if (toast && typeof toast.dismiss === "function") toast.dismiss(toastId);
+      if (t && typeof t.dismiss === "function") t.dismiss(toastId);
     } catch (e) {}
   }
 
@@ -202,26 +281,41 @@
     return h;
   }
 
-  async function httpJson(url, options, cfg) {
+  function describeFailure(status, data) {
+    var msg = (data && (data.error || data.message)) || "";
+    if (status === 401 || status === 403) return msg || "Token inválido ou em falta (401/403). Verifica em Configurações → Nuvem durável.";
+    if (status === 404) return msg || "Recurso não encontrado (404). Confirma o URL.";
+    if (status === 413) return msg || "Ficheiro demasiado grande para um só pedido (413).";
+    if (status === 501) return msg || "Funcionalidade não configurada no backend (501).";
+    if (status >= 500) return msg || "Erro no backend (HTTP " + status + ").";
+    return msg || "HTTP " + status;
+  }
+
+  /** Apps Script devolve sempre HTTP 200 e reporta erros no corpo → validar o `ok`. */
+  function driveFailure(data) {
+    if (data && data.ok === false) return data.error || "Erro devolvido pelo Apps Script.";
+    return null;
+  }
+
+  function q(base, params) {
+    var parts = [];
+    Object.keys(params).forEach(function (k) {
+      if (params[k] === undefined || params[k] === null || params[k] === "") return;
+      parts.push(encodeURIComponent(k) + "=" + encodeURIComponent(params[k]));
+    });
+    return base + (base.indexOf("?") >= 0 ? "&" : "?") + parts.join("&");
+  }
+
+  async function fetchJson(url, options) {
     var res = await fetch(url, options);
     var text = await res.text();
     var data = null;
     try {
       data = text ? JSON.parse(text) : null;
     } catch (e) {
-      data = { raw: text };
+      data = { ok: false, error: "Resposta não-JSON do backend: " + text.slice(0, 160) };
     }
     return { status: res.status, ok: res.ok, data: data, text: text };
-  }
-
-  function describeFailure(status, data) {
-    var msg = (data && (data.error || data.message)) || "";
-    if (status === 401 || status === 403) return "Token do Worker inválido ou em falta (401/403). Verifica em Configurações → Nuvem durável.";
-    if (status === 404) return msg || "Recurso não encontrado no Worker (404). Confirma a URL do Worker.";
-    if (status === 413) return msg || "Ficheiro demasiado grande para o corpo do Worker (413).";
-    if (status === 501) return msg || "Funcionalidade não configurada no Worker (501).";
-    if (status >= 500) return msg || "Erro no Worker (HTTP " + status + ").";
-    return msg || "HTTP " + status;
   }
 
   /** XHR para ter progresso de upload real (fetch não expõe upload progress). */
@@ -245,13 +339,23 @@
         reject(new Error("Falha de rede ao enviar para " + url + " (sem resposta do servidor)."));
       };
       xhr.ontimeout = function () {
-        reject(new Error("Tempo esgotado ao enviar o vídeo (" + Math.round((opts.timeoutMs || 0) / 1000) + " s). Verifica a tua ligação ou reduz o tamanho do clipe."));
+        reject(new Error("Tempo esgotado ao enviar (" + Math.round((opts.timeoutMs || 0) / 1000) + " s). Verifica a ligação ou reduz o tamanho do clipe."));
       };
       xhr.onabort = function () {
         reject(new Error("Envio cancelado."));
       };
       xhr.send(opts.body);
     });
+  }
+
+  function bufferToBase64(buffer) {
+    var bytes = new Uint8Array(buffer);
+    var CHUNK = 0x8000;
+    var out = "";
+    for (var i = 0; i < bytes.length; i += CHUNK) {
+      out += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+    }
+    return btoa(out);
   }
 
   /* --------------------------------------------------------- upload vídeo */
@@ -275,6 +379,8 @@
       throw err;
     }
   }
+
+  /* --- Cloudflare R2 --- */
 
   async function uploadToWorker(cfg, buffer, fileName, onProgress) {
     var url = cfg.workerUrl + "/api/video";
@@ -311,15 +417,11 @@
   }
 
   async function uploadPresigned(cfg, buffer, fileName, onProgress) {
-    var sign = await httpJson(
-      cfg.workerUrl + "/api/video/presign",
-      {
-        method: "POST",
-        headers: authHeaders(cfg, { "Content-Type": "application/json" }),
-        body: JSON.stringify({ fileName: fileName, size: buffer.byteLength, expires: 3600 })
-      },
-      cfg
-    );
+    var sign = await fetchJson(cfg.workerUrl + "/api/video/presign", {
+      method: "POST",
+      headers: authHeaders(cfg, { "Content-Type": "application/json" }),
+      body: JSON.stringify({ fileName: fileName, size: buffer.byteLength, expires: 3600 })
+    });
     if (!sign.ok || !sign.data || !sign.data.ok || !sign.data.uploadUrl) {
       var err = new Error(
         "Vídeo demasiado grande para envio direto e o presign não está disponível no Worker: " +
@@ -344,6 +446,123 @@
     return { url: sign.data.url, key: sign.data.key, provider: "cloudflare-r2-presigned", size: buffer.byteLength };
   }
 
+  /* --- Google Drive (Apps Script) --- */
+
+  var driveInfoCache = { url: "", at: 0, chunkBytes: 0, singleMaxBytes: 0, maxVideoBytes: 0 };
+
+  /**
+   * Lê as capacidades anunciadas pelo backend (?action=health) — tamanho do
+   * bloco, limite de envio único e limite de vídeo. Assim o cliente não assume
+   * valores: se mudares as constantes no Apps Script, o app adapta-se.
+   */
+  async function driveInfo(cfg) {
+    if (driveInfoCache.url === cfg.driveUrl && now() - driveInfoCache.at < 10 * 60 * 1000) return driveInfoCache;
+    var fallback = {
+      url: cfg.driveUrl,
+      at: now() - 9 * 60 * 1000,
+      chunkBytes: cfg.driveChunkBytes > 0 ? cfg.driveChunkBytes : 2 * 1024 * 1024,
+      singleMaxBytes: cfg.driveSingleMaxBytes > 0 ? cfg.driveSingleMaxBytes : 8 * 1024 * 1024,
+      maxVideoBytes: 0
+    };
+    try {
+      var res = await fetchJson(q(cfg.driveUrl, { action: "health" }), { cache: "no-store" });
+      var d = res.data || {};
+      if (!d || d.ok !== true) return fallback;
+      driveInfoCache = {
+        url: cfg.driveUrl,
+        at: now(),
+        chunkBytes: Number(d.chunkBytes) || fallback.chunkBytes,
+        singleMaxBytes: Number(d.singleMaxBytes) || fallback.singleMaxBytes,
+        maxVideoBytes: Number(d.maxVideoBytes) || 0
+      };
+      return driveInfoCache;
+    } catch (e) {
+      log("warn", "Não consegui ler as capacidades do Apps Script (" + e.message + ") — a usar os valores das Configurações.");
+      return fallback;
+    }
+  }
+
+  async function uploadToDrive(cfg, buffer, fileName, onProgress) {
+    var total = buffer.byteLength;
+    var uploadId = "up_" + now().toString(36) + "_" + Math.random().toString(36).slice(2, 9);
+    var info = await driveInfo(cfg);
+    // o upload resumable do Drive exige blocos múltiplos de 256 KB
+    var chunkSize = Math.max(262144, Math.floor((info.chunkBytes || 2 * 1024 * 1024) / 262144) * 262144);
+    var singleMax = info.singleMaxBytes > 0 ? info.singleMaxBytes : 8 * 1024 * 1024;
+    var base = cfg.driveUrl;
+
+    if (info.maxVideoBytes && total > info.maxVideoBytes) {
+      var errBig = new Error(
+        "O vídeo tem " + fmtSize(total) + " e o backend do Drive aceita no máximo " + fmtSize(info.maxVideoBytes) +
+        ". Corta o clipe ou aumenta MAX_VIDEO_MB no Apps Script (o Drive guarda até 15 GB na conta grátis)."
+      );
+      errBig.code = "too_large";
+      throw errBig;
+    }
+
+    function chunkUrl(index) {
+      return q(base, {
+        action: "upload",
+        token: cfg.driveToken,
+        id: uploadId,
+        index: index,
+        total: total,
+        name: fileName
+      });
+    }
+
+    async function sendChunk(index, slice) {
+      var res = await fetch(chunkUrl(index), {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=UTF-8" },
+        body: bufferToBase64(slice),
+        cache: "no-store"
+      });
+      var data = null;
+      try {
+        data = await res.json();
+      } catch (e) {
+        throw new Error("O Apps Script devolveu uma resposta inválida (HTTP " + res.status + "). Confirma que o deploy é 'App da Web' com acesso 'Qualquer pessoa'.");
+      }
+      var f = driveFailure(data);
+      if (f) {
+        var err = new Error("Drive: " + f);
+        err.retryable = !/token|inválid|invalid|limite|excede/i.test(f);
+        throw err;
+      }
+      return data || {};
+    }
+
+    // Vídeo pequeno: um único pedido (caminho mais simples e rápido)
+    if (total <= singleMax) {
+      var one = await sendChunk(0, buffer);
+      if (onProgress) onProgress(100, total, total);
+      if (!one.url) throw new Error("Drive: o Apps Script não devolveu o link do vídeo.");
+      return { url: one.url, key: one.fileId, provider: "google-drive", size: one.size || total };
+    }
+
+    // Vídeo grande: blocos de 2 MB → o Drive monta o ficheiro (resumable upload)
+    var sent = 0;
+    var index = 0;
+    for (var offset = 0; offset < total; offset += chunkSize, index++) {
+      var slice = buffer.slice(offset, Math.min(offset + chunkSize, total));
+      var out = await sendChunk(index, slice);
+      sent += slice.byteLength;
+      if (onProgress) onProgress(Math.round((sent / total) * 100), sent, total);
+      if (out.done && out.url) {
+        return { url: out.url, key: out.fileId, provider: "google-drive", size: out.size || total };
+      }
+    }
+
+    // Nenhum bloco confirmou o fim → pergunta ao backend
+    var done = await fetchJson(q(base, { action: "complete", token: cfg.driveToken, id: uploadId }), { cache: "no-store" });
+    var dd = driveFailure(done.data);
+    if (dd || !done.data || !done.data.url) {
+      throw new Error("Drive: o upload terminou mas o ficheiro não ficou completo (" + (dd || "sem url") + ").");
+    }
+    return { url: done.data.url, key: done.data.fileId, provider: "google-drive", size: total };
+  }
+
   /* ------------------------------------------- upload legado (compatibilidade) */
 
   async function legacyUploadVideo(blobOrFile, fileName) {
@@ -351,7 +570,6 @@
     if (!/\.mp4$/i.test(name)) name += ".mp4";
     var errors = [];
 
-    // 1) kappa.lol (100 MiB, sem garantia de retenção)
     try {
       var form = new FormData();
       form.append("file", new Blob([blobOrFile], { type: "video/mp4" }), name);
@@ -370,7 +588,6 @@
       errors.push("kappa.lol: " + e.message);
     }
 
-    // 2) endpoint próprio do dev server / serverless (quando existir)
     try {
       var res2 = await fetch("/api/public/upload-temp", {
         method: "POST",
@@ -417,92 +634,122 @@
       throw err0;
     }
 
-    var size = blobOrFile.size || 0;
-    var maxBytes = cfg.maxMb * 1024 * 1024;
+    var providers = chain(cfg);
+    var durable = providers.filter(function (p) {
+      return p !== "legacy";
+    });
 
-    if (!configured() || cfg.provider === "legacy") {
-      log(
-        "warn",
-        "R2 não configurado — a usar hosts temporários. Configura em Configurações → Nuvem durável."
-      );
+    if (!durable.length) {
+      if (opts.allowTemp === false) {
+        var errNoProv = new Error(
+          "Nenhum armazenamento durável configurado (Google Drive ou Cloudflare R2). " +
+          "Abre Configurações → Nuvem durável e cola o URL + token."
+        );
+        errNoProv.code = "no_durable_provider";
+        throw errNoProv;
+      }
+      log("warn", "Nenhum armazenamento durável configurado — a usar hosts temporários.");
       toastOnce(
-        "no-r2",
-        "⚠️ Nuvem durável (R2) não configurada: os vídeos vão para hosts temporários que apagam os ficheiros em 3–72 h. Configura em Configurações → Nuvem durável.",
+        "no-provider",
+        "⚠️ Nuvem durável não configurada: os vídeos vão para hosts temporários que apagam os ficheiros em 3–72 h. Configura o Google Drive (grátis) ou o Cloudflare R2 em Configurações → Nuvem durável.",
         "warning",
         10 * 60 * 1000
       );
-      var legacyUrl = await legacyUploadVideo(blobOrFile, name);
-      return legacyUrl;
-    }
-
-    if (size > maxBytes && !cfg.presign) {
-      var errSize = new Error(
-        "O vídeo tem " + fmtSize(size) + " e o limite configurado é " + cfg.maxMb + " MB. " +
-          "Ativa o presign (R2_ACCOUNT_ID/R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY no Worker) ou reduz a resolução/bitrate."
-      );
-      errSize.code = "too_large";
-      throw errSize;
+      return await legacyUploadVideo(blobOrFile, name);
     }
 
     var mem = await readIntoMemory(blobOrFile, name);
-    log("info", "A enviar " + name + " (" + fmtSize(mem.size) + ") para o R2…");
+    var size = mem.size;
+    var failures = [];
 
-    var attempt = 0;
-    var lastErr = null;
-    while (attempt < 3) {
-      attempt++;
-      try {
-        var out = await uploadToWorker(cfg, mem.buffer, name, function (pct, loaded, total) {
-          if (opts.onProgress) opts.onProgress(pct, loaded, total);
-        });
-        await verifyPublicUrl(out.url);
-        log("info", "Vídeo na nuvem durável: " + out.url + " (" + out.provider + ")");
-        return out.url;
-      } catch (e) {
-        lastErr = e;
-        lastError = e && e.message ? e.message : String(e);
-        if (e && e.code === "unreadable_source") throw e;
-        if (e && e.code === "presign_unavailable") throw e;
-        var retryable = !e.status || e.retryable || e.status === 429 || e.status >= 500;
-        log("warn", "Tentativa " + attempt + "/3 falhou: " + lastError);
-        if (!retryable || attempt === 3) break;
-        await sleep(800 * Math.pow(3, attempt - 1));
+    for (var i = 0; i < providers.length; i++) {
+      var provider = providers[i];
+      if (provider === "legacy") continue;
+
+      if (provider === "r2" && size > cfg.maxMb * 1024 * 1024 && !cfg.presign) {
+        failures.push("R2: vídeo com " + fmtSize(size) + " excede " + cfg.maxMb + " MB sem presign");
+        continue;
       }
+
+      log("info", "A enviar " + name + " (" + fmtSize(size) + ") para " + (provider === "r2" ? "Cloudflare R2" : "Google Drive") + "…");
+
+      var attempt = 0;
+      var lastErr = null;
+      while (attempt < 3) {
+        attempt++;
+        try {
+          var out = provider === "r2"
+            ? await uploadToWorker(cfg, mem.buffer, name, opts.onProgress)
+            : await uploadToDrive(cfg, mem.buffer, name, opts.onProgress);
+          await verifyPublicUrl(out.url);
+          log("info", "Vídeo na nuvem durável: " + out.url + " (" + out.provider + ")");
+          saveState({ lastProvider: provider });
+          return out.url;
+        } catch (e) {
+          lastErr = e;
+          lastError = e && e.message ? e.message : String(e);
+          // erros que não se resolvem repetindo: falha já, sem gastar 3 tentativas
+          if (e && (e.code === "unreadable_source" || e.code === "presign_unavailable" || e.code === "too_large")) throw e;
+          var retryable = !e.status || e.retryable || e.status === 429 || e.status >= 500;
+          log("warn", provider + " tentativa " + attempt + "/3 falhou: " + lastError);
+          if (!retryable || attempt === 3) break;
+          await sleep(800 * Math.pow(3, attempt - 1));
+        }
+      }
+      failures.push((provider === "r2" ? "R2" : "Drive") + ": " + (lastErr && lastErr.message ? lastErr.message : lastErr));
     }
 
-    if (opts.allowTemp === false) throw lastErr || new Error("Falha no upload para o R2.");
+    if (opts.allowTemp === false) {
+      var errAll = new Error("Não foi possível colocar o vídeo na nuvem durável. " + failures.join(" | "));
+      errAll.code = "durable_providers_failed";
+      throw errAll;
+    }
 
     // Último recurso: host temporário (mantém o fluxo antigo a funcionar)
     try {
-      log("warn", "R2 falhou (" + lastError + ") — a tentar host temporário como último recurso.");
+      log("warn", "Providers duráveis falharam (" + failures.join(" | ") + ") — a tentar host temporário.");
       var temp = await legacyUploadVideo(blobOrFile, name);
       toastOnce(
-        "r2-fallback",
-        "⚠️ O R2 falhou (" + lastError + "). O vídeo foi para um host TEMPORÁRIO e pode expirar antes do horário agendado.",
+        "durable-fallback",
+        "⚠️ O armazenamento durável falhou (" + failures[0] + "). O vídeo foi para um host TEMPORÁRIO e pode expirar antes do horário agendado.",
         "warning",
         10 * 60 * 1000
       );
       return temp;
     } catch (e2) {
       var finalErr = new Error(
-        "Não foi possível colocar o vídeo na nuvem. R2: " + lastError + " · Temporário: " + (e2 && e2.message ? e2.message : e2)
+        "Não foi possível colocar o vídeo na nuvem. " + failures.join(" | ") + " · Temporário: " + (e2 && e2.message ? e2.message : e2)
       );
       finalErr.code = "all_providers_failed";
       throw finalErr;
     }
   }
 
-  /** Confirma que o link público responde (é este URL que a Meta vai buscar). */
+  /**
+   * Confirma que o link público responde.
+   * No Drive usa-se o endpoint leve `videohead` (o Apps Script não suporta Range
+   * e um GET descarregaria o vídeo inteiro).
+   */
   async function verifyPublicUrl(url) {
+    var cfg = config();
     try {
+      if (classifyUrl(url) === "drive") {
+        // troca action=video → action=videohead (resposta pequena, sem descarregar o vídeo)
+        var headUrl = String(url).replace(/action=video(&|$)/, "action=videohead$1");
+        if (headUrl === url && /[?&]id=/.test(url)) headUrl = q(cfg.driveUrl, { action: "videohead", id: (/[?&]id=([^&]+)/.exec(url) || [])[1] || "", token: cfg.driveToken });
+        var hres = await fetchJson(headUrl, { cache: "no-store" });
+        var hf = driveFailure(hres.data);
+        if (hf) {
+          log("warn", "Link do Drive não confirmado: " + hf);
+          toastOnce("drive-verify", "⚠️ O vídeo foi para o Drive mas não consegui confirmar o link: " + hf, "warning");
+          return false;
+        }
+        return true;
+      }
       var res = await fetch(url, { method: "GET", headers: { Range: "bytes=0-0" }, cache: "no-store" });
       if (res.status >= 400) {
         log("warn", "Link público respondeu HTTP " + res.status + ": " + url);
-        toastOnce(
-          "r2-public-" + res.status,
-          "⚠️ O vídeo foi guardado mas o link público respondeu HTTP " + res.status + ". Verifica PUBLIC_BASE/rotas do Worker.",
-          "warning"
-        );
+        toastOnce("public-" + res.status, "⚠️ O vídeo foi guardado mas o link público respondeu HTTP " + res.status + ".", "warning");
         return false;
       }
       try {
@@ -539,13 +786,14 @@
         var r = await fetch(url, { cache: "no-store" });
         if (r.ok) {
           var text = await r.text();
-          if (text && text.length > 2) return { data: text, source: p.indexOf("b_") === 0 ? "legacy-bytebin" : "legacy-kappa", pointer: pointer };
+          if (text && text.length > 2) {
+            return { data: text, source: p.indexOf("b_") === 0 ? "legacy-bytebin" : "legacy-kappa", pointer: pointer };
+          }
         } else errors.push(url + " → HTTP " + r.status);
       } catch (e) {
         errors.push(url + " → " + e.message);
       }
     }
-    log("warn", "Cofre antigo inacessível (bytebin/kappa expiraram?): " + errors.join(" | "));
     var errAll = new Error("O cofre antigo não pôde ser lido: " + (errors.join(" | ") || "apontador vazio"));
     errAll.expired = true;
     throw errAll;
@@ -583,79 +831,7 @@
     return res3.ok;
   }
 
-  /**
-   * Lê o cofre (JSON encriptado, tal como foi gravado pelo app).
-   * @returns {Promise<{data:?string, source:?string, readFailed:boolean}>}
-   */
-  async function getVaultCipher(vaultHash) {
-    var cfg = config();
-    var failures = [];
-    var legacyFailures = [];
-    // r2Answered = o R2 respondeu de forma fiável (200 com dados, 200 vazio ou 404).
-    // Se sim, ele é a fonte de verdade: uma falha do host antigo NÃO conta como
-    // falha de leitura (senão um cofre novo ficava com a guarda anti-apagão armada).
-    var r2Answered = false;
-
-    if (configured() && cfg.provider !== "legacy") {
-      try {
-        var res = await fetch(cfg.workerUrl + "/api/vault/cc_" + encodeURIComponent(vaultHash), {
-          headers: authHeaders(cfg, { "X-Cineclip-Client": "web/" + VERSION }),
-          cache: "no-store"
-        });
-        if (res.ok) {
-          var text = await res.text();
-          if (text && text.length > 2) {
-            saveState({ readFailedAt: 0 });
-            return { data: text, source: "cloudflare-r2", readFailed: false };
-          }
-          r2Answered = true;
-        } else if (res.status === 404) {
-          r2Answered = true;
-        } else {
-          failures.push("R2 " + describeFailure(res.status, null));
-        }
-      } catch (e) {
-        failures.push("R2 " + e.message);
-      }
-    }
-
-    // Fallback/migração: cofre antigo em bytebin+kappa (índice em keyvalue.immanuel.co)
-    try {
-      var legacy = await legacyReadVaultCipher(vaultHash);
-      if (legacy && legacy.data) {
-        log("info", "Cofre antigo encontrado (" + legacy.source + ").");
-        if (configured() && cfg.provider !== "legacy" && cfg.mirrorLegacy) {
-          try {
-            await putVaultCipherToWorker(cfg, vaultHash, legacy.data);
-            log("info", "✅ Cofre antigo migrado para o R2.");
-            toastOnce("migrated", "✅ O teu cofre antigo (bytebin/kappa) foi migrado para o R2.", "success");
-          } catch (e) {
-            log("warn", "Falha a migrar o cofre para o R2: " + e.message);
-          }
-        }
-        saveState({ readFailedAt: 0 });
-        return { data: legacy.data, source: legacy.source, readFailed: false };
-      }
-    } catch (e) {
-      legacyFailures.push(e && e.expired ? "legado expirado/inacessível" : "legado " + e.message);
-      log("warn", "Cofre antigo (bytebin/kappa) não pôde ser lido: " + e.message);
-    }
-
-    // Só há "falha de leitura" quando NENHUMA fonte fiável respondeu.
-    // (R2 respondeu 404 = o cofre ainda não existe → não é falha.)
-    var all = failures.concat(legacyFailures);
-    var readFailed = !r2Answered && all.length > 0;
-    if (readFailed) {
-      lastError = all.join(" | ");
-      log("error", "Leitura da nuvem falhou: " + lastError);
-      saveState({ readFailedAt: now() });
-    } else if (all.length) {
-      log("warn", "Leitura concluída com avisos: " + all.join(" | "));
-    }
-    return { data: null, source: null, readFailed: readFailed, degraded: all.length > 0, failures: all };
-  }
-
-  async function putVaultCipherToWorker(cfg, vaultHash, cipher) {
+  async function r2PutVault(cfg, vaultHash, cipher) {
     var res = await fetch(cfg.workerUrl + "/api/vault/cc_" + encodeURIComponent(vaultHash), {
       method: "PUT",
       headers: authHeaders(cfg, { "Content-Type": "application/json" }),
@@ -668,7 +844,132 @@
       err.retryable = res.status === 429 || res.status >= 500;
       throw err;
     }
-    return true;
+    return { ok: true, provider: "cloudflare-r2" };
+  }
+
+  async function r2GetVaultCipher(cfg, vaultHash) {
+    var res = await fetch(cfg.workerUrl + "/api/vault/cc_" + encodeURIComponent(vaultHash), {
+      headers: authHeaders(cfg, { "X-Cineclip-Client": "web/" + VERSION }),
+      cache: "no-store"
+    });
+    if (res.status === 404) return { answered: true, data: null };
+    if (!res.ok) {
+      var err = new Error(describeFailure(res.status, null));
+      err.status = res.status;
+      throw err;
+    }
+    var text = await res.text();
+    return { answered: true, data: text && text.length > 2 ? text : null, source: "cloudflare-r2" };
+  }
+
+  async function drivePutVault(cfg, vaultHash, cipher) {
+    var res = await fetch(q(cfg.driveUrl, { action: "vault", hash: vaultHash, token: cfg.driveToken }), {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=UTF-8" },
+      body: cipher,
+      cache: "no-store"
+    });
+    var data = null;
+    try {
+      data = await res.json();
+    } catch (e) {
+      throw new Error("Apps Script devolveu resposta inválida ao gravar o cofre (HTTP " + res.status + ").");
+    }
+    var f = driveFailure(data);
+    if (f) {
+      var err = new Error("Drive: " + f);
+      err.retryable = !/token|inválid|invalid|vazio/i.test(f);
+      throw err;
+    }
+    return { ok: true, provider: "google-drive" };
+  }
+
+  async function driveGetVaultCipher(cfg, vaultHash) {
+    var res = await fetchJson(q(cfg.driveUrl, { action: "vault", hash: vaultHash, token: cfg.driveToken }), { cache: "no-store" });
+    var data = res.data;
+    if (data && data.ok === false) {
+      if (data.code === "not_found" || /não encontrado|not found/i.test(String(data.error || ""))) {
+        return { answered: true, data: null };
+      }
+      var err = new Error("Drive: " + (data.error || "falha a ler o cofre"));
+      err.retryable = !/token|inválid/i.test(String(data.error || ""));
+      throw err;
+    }
+    if (!data || !data.cipher) throw new Error("Drive: resposta sem o cofre.");
+    return { answered: true, data: data.cipher, source: "google-drive" };
+  }
+
+  /**
+   * Lê o cofre (JSON encriptado, tal como foi gravado pelo app).
+   * @returns {Promise<{data:?string, source:?string, readFailed:boolean}>}
+   */
+  async function getVaultCipher(vaultHash) {
+    var cfg = config();
+    var providers = chain(cfg);
+    var failures = [];
+    var answered = false;
+
+    for (var i = 0; i < providers.length; i++) {
+      var provider = providers[i];
+      if (provider === "legacy") {
+        // Cofre antigo em bytebin+kappa (índice em keyvalue.immanuel.co) — leitura/migração
+        try {
+          var legacy = await legacyReadVaultCipher(vaultHash);
+          if (legacy && legacy.data) {
+            log("info", "Cofre antigo encontrado (" + legacy.source + ").");
+            await migrateToDurable_(cfg, providers, vaultHash, legacy.data);
+            saveState({ readFailedAt: 0 });
+            return { data: legacy.data, source: legacy.source, readFailed: false, migrated: true };
+          }
+        } catch (e) {
+          if (e && e.expired) log("warn", "Cofre antigo expirou ou está inacessível: " + e.message);
+          else failures.push("legado " + e.message);
+        }
+        continue;
+      }
+
+      try {
+        var out = provider === "r2"
+          ? await r2GetVaultCipher(cfg, vaultHash)
+          : await driveGetVaultCipher(cfg, vaultHash);
+        if (out.answered) answered = true;
+        if (out.data) {
+          saveState({ readFailedAt: 0, lastProvider: provider });
+          return { data: out.data, source: out.source, readFailed: false };
+        }
+      } catch (e) {
+        failures.push((provider === "r2" ? "R2" : "Drive") + " " + e.message);
+      }
+    }
+
+    var all = failures;
+    var readFailed = !answered && all.length > 0;
+    if (readFailed) {
+      lastError = all.join(" | ");
+      log("error", "Leitura da nuvem falhou: " + lastError);
+      saveState({ readFailedAt: now() });
+    } else if (all.length) {
+      log("warn", "Leitura concluída com avisos: " + all.join(" | "));
+    }
+    return { data: null, source: null, readFailed: readFailed, degraded: all.length > 0, failures: all };
+  }
+
+  /** Copia um cofre antigo para o provider durável configurado. */
+  async function migrateToDurable_(cfg, providers, vaultHash, cipher) {
+    var target = providers.filter(function (p) {
+      return p !== "legacy";
+    })[0];
+    if (!target || !cfg.mirrorLegacy) return false;
+    try {
+      if (target === "r2") await r2PutVault(cfg, vaultHash, cipher);
+      else await drivePutVault(cfg, vaultHash, cipher);
+      log("info", "✅ Cofre antigo migrado para " + (target === "r2" ? "o Cloudflare R2" : "o Google Drive") + ".");
+      toastOnce("migrated", "✅ O teu cofre antigo (bytebin/kappa) foi migrado para a nuvem durável.", "success");
+      return true;
+    } catch (e) {
+      log("warn", "Falha a migrar o cofre: " + e.message);
+      return false;
+    }
   }
 
   /**
@@ -676,46 +977,52 @@
    */
   async function putVault(vaultHash, cipher) {
     var cfg = config();
+    var providers = chain(cfg).filter(function (p) {
+      return p !== "legacy";
+    });
 
-    if (!configured() || cfg.provider === "legacy") {
-      log("warn", "R2 não configurado — a gravar o cofre apenas nos hosts antigos.");
+    if (!providers.length) {
+      log("warn", "Sem armazenamento durável — a gravar o cofre apenas nos hosts antigos.");
       var okLegacy = await legacyWriteVaultMirror(vaultHash, cipher).catch(function (e) {
         lastError = e.message;
         return false;
       });
-      if (!okLegacy) throw new Error("Falha ao salvar o cofre na nuvem (hosts antigos indisponíveis e R2 não configurado).");
+      if (!okLegacy) throw new Error("Falha ao salvar o cofre na nuvem (hosts antigos indisponíveis e nenhuma nuvem durável configurada).");
       return { ok: true, provider: "legacy" };
     }
 
-    var attempt = 0;
-    var lastErr = null;
-    while (attempt < 3) {
-      attempt++;
-      try {
-        await putVaultCipherToWorker(cfg, vaultHash, cipher);
-        saveState({ readFailedAt: 0 });
-        log("info", "Cofre gravado no R2 (" + fmtSize(cipher.length) + ").");
-        if (cfg.mirrorLegacy) {
-          // espelho opcional, para versões antigas do app / Robô 24h antigo
-          legacyWriteVaultMirror(vaultHash, cipher).catch(function () {});
+    var failures = [];
+    for (var i = 0; i < providers.length; i++) {
+      var provider = providers[i];
+      var attempt = 0;
+      var lastErr = null;
+      while (attempt < 3) {
+        attempt++;
+        try {
+          var out = provider === "r2"
+            ? await r2PutVault(cfg, vaultHash, cipher)
+            : await drivePutVault(cfg, vaultHash, cipher);
+          saveState({ readFailedAt: 0, lastProvider: provider });
+          log("info", "Cofre gravado em " + (provider === "r2" ? "R2" : "Drive") + " (" + fmtSize(cipher.length) + ").");
+          if (cfg.mirrorLegacy) legacyWriteVaultMirror(vaultHash, cipher).catch(function () {});
+          return out;
+        } catch (e) {
+          lastErr = e;
+          lastError = e.message;
+          log("warn", "putVault " + provider + " tentativa " + attempt + "/3 falhou: " + e.message);
+          if (!e.retryable || attempt === 3) break;
+          await sleep(600 * Math.pow(3, attempt - 1));
         }
-        return { ok: true, provider: "cloudflare-r2" };
-      } catch (e) {
-        lastErr = e;
-        lastError = e.message;
-        log("warn", "putVault tentativa " + attempt + "/3 falhou: " + e.message);
-        if (!e.retryable || attempt === 3) break;
-        await sleep(600 * Math.pow(3, attempt - 1));
       }
+      failures.push((provider === "r2" ? "R2" : "Drive") + ": " + (lastErr && lastErr.message ? lastErr.message : lastErr));
     }
-    throw new Error("Falha ao salvar o cofre no R2: " + (lastErr && lastErr.message ? lastErr.message : lastErr));
+    throw new Error("Falha ao salvar o cofre na nuvem durável: " + failures.join(" | "));
   }
 
   /* ------------------------------------------- guarda anti-apagão de fila */
 
   function markReadFailure(readFailed) {
-    if (readFailed) saveState({ readFailedAt: now() });
-    else saveState({ readFailedAt: 0 });
+    saveState({ readFailedAt: readFailed ? now() : 0 });
   }
 
   function noteQueueCount(n) {
@@ -741,7 +1048,7 @@
     toastOnce(
       "empty-overwrite",
       "🛡️ Sincronização protegida: não consegui ler a nuvem e não vou sobrescrever os " +
-        st.lastCloudQueueCount + " Reels que lá estão. Verifica a ligação/URL do Worker.",
+        st.lastCloudQueueCount + " Reels que lá estão. Verifica a ligação e o URL/token nas Configurações.",
       "warning",
       5 * 60 * 1000
     );
@@ -750,73 +1057,158 @@
 
   /* ------------------------------------------------------- diagnóstico */
 
-  async function healthCheck() {
-    var cfg = config();
-    var report = { ok: false, provider: "none", steps: [], config: { workerUrl: cfg.workerUrl, tokenSet: !!cfg.token, maxMb: cfg.maxMb } };
-
+  async function checkR2(cfg) {
+    var out = { name: "Cloudflare R2", ok: false, message: "" };
     if (!cfg.workerUrl) {
-      report.message = "Sem URL do Worker. Cola em Configurações → Nuvem durável a URL do teu Worker (ex.: https://cineclip-cloud.TUA-CONTA.workers.dev).";
-      return report;
+      out.message = "não configurado";
+      return out;
     }
-
     try {
-      var health = await httpJson(cfg.workerUrl + "/", { method: "GET", cache: "no-store" }, cfg);
-      report.steps.push("GET / → HTTP " + health.status);
+      var health = await fetchJson(cfg.workerUrl + "/", { method: "GET", cache: "no-store" });
       if (!health.ok || !health.data || health.data.ok !== true) {
-        report.message = "O Worker respondeu mas não parece ser o CineClip Cloud (HTTP " + health.status + ").";
-        return report;
+        out.message = "respondeu mas não parece ser o CineClip Cloud (HTTP " + health.status + ")";
+        return out;
       }
       if (!health.data.bucket) {
-        report.message = "O Worker está no ar mas não tem o binding R2 (BUCKET). Verifica o wrangler.toml.";
-        return report;
+        out.message = "no ar, mas sem o binding R2 (BUCKET)";
+        return out;
       }
-      report.presign = !!health.data.presign;
+      out.presign = !!health.data.presign;
     } catch (e) {
-      report.message = "Não consegui falar com o Worker: " + e.message + " (verifica a URL, o CORS e se fizeste deploy).";
-      return report;
+      out.message = "inacessível: " + e.message;
+      return out;
     }
-
     if (!cfg.token) {
-      report.message = "Worker OK, mas falta o Token (Configurações → Nuvem durável → Token do Worker).";
-      return report;
+      out.message = "no ar, mas falta o Token";
+      return out;
     }
-
     try {
-      var probeName = "__healthcheck__";
-      var put = await httpJson(
-        cfg.workerUrl + "/api/vault/" + probeName,
-        { method: "PUT", headers: authHeaders(cfg, { "Content-Type": "application/json" }), body: JSON.stringify({ probe: now() }) },
-        cfg
-      );
-      report.steps.push("PUT /api/vault → HTTP " + put.status);
+      var probe = "__healthcheck__";
+      var put = await fetchJson(cfg.workerUrl + "/api/vault/" + probe, {
+        method: "PUT",
+        headers: authHeaders(cfg, { "Content-Type": "application/json" }),
+        body: JSON.stringify({ probe: now() })
+      });
       if (!put.ok) {
-        report.message = "Escrita recusada: " + describeFailure(put.status, put.data);
-        return report;
+        out.message = describeFailure(put.status, put.data);
+        return out;
       }
-      var get = await httpJson(cfg.workerUrl + "/api/vault/" + probeName, { headers: authHeaders(cfg), cache: "no-store" }, cfg);
-      report.steps.push("GET /api/vault → HTTP " + get.status);
-      await fetch(cfg.workerUrl + "/api/vault/" + probeName, { method: "DELETE", headers: authHeaders(cfg) }).catch(function () {});
+      var get = await fetchJson(cfg.workerUrl + "/api/vault/" + probe, { headers: authHeaders(cfg), cache: "no-store" });
+      await fetch(cfg.workerUrl + "/api/vault/" + probe, { method: "DELETE", headers: authHeaders(cfg) }).catch(function () {});
       if (!get.ok) {
-        report.message = "Leitura falhou: " + describeFailure(get.status, get.data);
-        return report;
+        out.message = describeFailure(get.status, get.data);
+        return out;
       }
+      var stats = await fetchJson(cfg.workerUrl + "/api/stats", { headers: authHeaders(cfg), cache: "no-store" });
+      if (stats.ok && stats.data) out.stats = stats.data;
     } catch (e) {
-      report.message = "Erro no teste de escrita/leitura: " + e.message;
+      out.message = "erro no teste de escrita/leitura: " + e.message;
+      return out;
+    }
+    out.ok = true;
+    out.message =
+      "ligado ✔ (" + (out.stats ? out.stats.videos + " vídeo(s), " + out.stats.vaults + " cofre(s), " + fmtSize(out.stats.bytes) : "escrita e leitura OK") +
+      (out.presign ? " · presign ativo (>100 MB)" : " · presign desativado (limite 100 MB)") + ")";
+    return out;
+  }
+
+  async function checkDrive(cfg) {
+    var out = { name: "Google Drive (Apps Script)", ok: false, message: "" };
+    if (!cfg.driveUrl) {
+      out.message = "não configurado";
+      return out;
+    }
+    try {
+      var health = await fetchJson(q(cfg.driveUrl, { action: "health" }), { cache: "no-store" });
+      var f = driveFailure(health.data);
+      if (f || !health.data || health.data.ok !== true) {
+        out.message = f || "respondeu mas não parece ser o backend CineClip (HTTP " + health.status + ")";
+        return out;
+      }
+      out.service = health.data.service;
+    } catch (e) {
+      out.message = "inacessível: " + e.message + " (confirma que o deploy é 'App da Web' com acesso 'Qualquer pessoa')";
+      return out;
+    }
+    if (!cfg.driveToken) {
+      out.message = "no ar, mas falta o Token (corre a função setup() no Apps Script)";
+      return out;
+    }
+    try {
+      var probeHash = "healthcheck";
+      var put = await fetchJson(q(cfg.driveUrl, { action: "vault", hash: probeHash, token: cfg.driveToken }), {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=UTF-8" },
+        body: JSON.stringify({ probe: now() })
+      });
+      var pf = driveFailure(put.data);
+      if (pf) {
+        out.message = pf;
+        return out;
+      }
+      var get = await fetchJson(q(cfg.driveUrl, { action: "vault", hash: probeHash, token: cfg.driveToken }), { cache: "no-store" });
+      var gf = driveFailure(get.data);
+      if (gf || !get.data || !get.data.cipher) {
+        out.message = gf || "gravei o cofre de teste mas não o consegui ler de volta";
+        return out;
+      }
+      var stats = await fetchJson(q(cfg.driveUrl, { action: "stats", token: cfg.driveToken }), { cache: "no-store" });
+      if (!driveFailure(stats.data) && stats.data) out.stats = stats.data;
+    } catch (e) {
+      out.message = "erro no teste de escrita/leitura: " + e.message;
+      return out;
+    }
+    out.ok = true;
+    out.message =
+      "ligado ✔ (" + (out.stats ? out.stats.videos + " vídeo(s), " + out.stats.vaults + " cofre(s), " + fmtSize(out.stats.bytes) : "escrita e leitura OK") +
+      " · blocos de " + fmtSize(cfg.driveChunkBytes) + ")";
+    return out;
+  }
+
+  async function healthCheck() {
+    var cfg = config();
+    var report = {
+      ok: false,
+      provider: "none",
+      order: chain(cfg),
+      steps: [],
+      config: {
+        r2WorkerUrl: cfg.workerUrl,
+        r2TokenSet: !!cfg.token,
+        driveScriptUrl: cfg.driveUrl,
+        driveTokenSet: !!cfg.driveToken,
+        maxMb: cfg.maxMb
+      }
+    };
+
+    var r2 = await checkR2(cfg);
+    var drive = await checkDrive(cfg);
+    report.r2 = r2;
+    report.drive = drive;
+    report.steps.push("R2: " + r2.message);
+    report.steps.push("Drive: " + drive.message);
+
+    var winner = null;
+    if (cfg.provider === "r2") winner = r2.ok ? r2 : null;
+    else if (cfg.provider === "drive") winner = drive.ok ? drive : null;
+    else winner = r2.ok ? r2 : drive.ok ? drive : null;
+
+    if (winner) {
+      report.ok = true;
+      report.provider = winner === r2 ? "cloudflare-r2" : "google-drive";
+      report.stats = winner.stats;
+      report.presign = winner.presign === true;
+      report.message = winner.name + " " + winner.message;
+      log("info", "Health check OK: " + report.message);
       return report;
     }
 
-    var stats = null;
-    try {
-      stats = await httpJson(cfg.workerUrl + "/api/stats", { headers: authHeaders(cfg), cache: "no-store" }, cfg);
-      if (stats.ok && stats.data) report.stats = stats.data;
-    } catch (e) {}
-
-    report.ok = true;
-    report.provider = "cloudflare-r2";
-    report.message =
-      "R2 ligado ✔ (" + (report.stats ? report.stats.videos + " vídeo(s), " + report.stats.vaults + " cofre(s), " + fmtSize(report.stats.bytes) : "escrita e leitura OK") +
-      (report.presign ? " · presign ativo (>100 MB)" : " · presign desativado (limite 100 MB)") + ")";
-    log("info", "Health check OK: " + report.message);
+    if (!cfg.workerUrl && !cfg.driveUrl) {
+      report.message =
+        "Nenhuma nuvem durável configurada. Cola o URL do Google Apps Script (grátis, sem cartão) ou do Cloudflare Worker em Configurações → Nuvem durável.";
+    } else {
+      report.message = "Nenhum backend passou no teste. R2: " + r2.message + " · Drive: " + drive.message;
+    }
     return report;
   }
 
@@ -825,11 +1217,15 @@
     return {
       version: VERSION,
       configured: configured(),
-      provider: configured() ? "cloudflare-r2" : "legacy-temporario",
-      workerUrl: cfg.workerUrl || "(não configurado)",
+      order: chain(cfg),
+      provider: configured() ? chain(cfg)[0] : "legacy-temporario",
+      r2WorkerUrl: cfg.workerUrl || "(não configurado)",
+      driveScriptUrl: cfg.driveUrl || "(não configurado)",
       maxMb: cfg.maxMb,
+      driveChunkMb: Math.round(cfg.driveChunkBytes / 1048576),
       presign: cfg.presign,
       mirrorLegacy: cfg.mirrorLegacy,
+      lastProvider: loadState().lastProvider || null,
       lastError: lastError || null,
       state: loadState(),
       log: memoryLog.slice(-40)
@@ -838,7 +1234,17 @@
 
   function report() {
     var d = diagnostics();
-    var lines = ["CineCloud " + d.version, "provider: " + d.provider, "worker: " + d.workerUrl, "maxMb: " + d.maxMb, "lastError: " + d.lastError, "--- log ---"];
+    var lines = [
+      "CineCloud " + d.version,
+      "ordem: " + d.order.join(" → "),
+      "provider ativo: " + d.provider,
+      "R2: " + d.r2WorkerUrl,
+      "Drive: " + d.driveScriptUrl,
+      "maxMb: " + d.maxMb + " · driveChunkMb: " + d.driveChunkMb,
+      "último provider usado: " + d.lastProvider,
+      "lastError: " + d.lastError,
+      "--- log ---"
+    ];
     d.log.forEach(function (e) {
       lines.push(e.t + " [" + e.level + "] " + e.message);
     });
@@ -851,7 +1257,9 @@
     version: VERSION,
     config: config,
     configured: configured,
+    providers: activeProviders,
     classifyUrl: classifyUrl,
+    isDurable: isDurable,
     fmtSize: fmtSize,
     uploadVideo: uploadVideo,
     legacyUploadVideo: legacyUploadVideo,
@@ -862,6 +1270,8 @@
     blockEmptyOverwrite: blockEmptyOverwrite,
     verifyPublicUrl: verifyPublicUrl,
     healthCheck: healthCheck,
+    checkR2: checkR2,
+    checkDrive: checkDrive,
     diagnostics: diagnostics,
     report: report,
     log: log,
@@ -873,5 +1283,9 @@
     }
   };
 
-  log("info", "CineCloud " + VERSION + " carregado (" + (configured() ? "R2 configurado" : "R2 NÃO configurado — a usar hosts temporários") + ")");
+  log(
+    "info",
+    "CineCloud " + VERSION + " carregado (" +
+      (configured() ? "providers: " + chain().join(" → ") : "SEM nuvem durável — a usar hosts temporários") + ")"
+  );
 })();

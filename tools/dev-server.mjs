@@ -17,14 +17,17 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { createMockCloud } from "./mock-r2-worker.mjs";
+import { createMockDrive } from "./mock-drive-backend.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const PORT = Number(process.env.PORT || 4173);
 const HOST = process.env.HOST || "0.0.0.0";
 const CLOUD_PREFIX = "/cloud-api";
+const DRIVE_PREFIX = "/drive-api";
 
 const storeDir = path.join(root, ".mock-cloud");
 const handleCloud = createMockCloud({ storeDir });
+const handleDrive = createMockDrive({ storeDir });
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -60,6 +63,17 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (pathname === DRIVE_PREFIX || pathname.startsWith(DRIVE_PREFIX + "/")) {
+    try {
+      await handleDrive(req, res);
+    } catch (err) {
+      res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
+      res.end(JSON.stringify({ ok: false, error: err && err.message ? err.message : "Erro interno" }));
+    }
+    console.log(`📁 ${req.method} ${pathname}${url.search} → ${res.statusCode}`);
+    return;
+  }
+
   let filePath = path.join(root, pathname === "/" ? "index.html" : pathname);
   if (!filePath.startsWith(root)) {
     res.writeHead(403).end("Forbidden");
@@ -87,11 +101,12 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`
-🎬 CineClip preview  →  http://${HOST}:${PORT}
-☁️  Mock da nuvem R2 →  http://${HOST}:${PORT}${CLOUD_PREFIX}
-     Worker URL a usar no app : ${CLOUD_PREFIX}
-     Token                    : ${process.env.MOCK_CLOUD_TOKEN || "cc_r2_token_de_teste"}
-     Ficheiros guardados em   : ${path.relative(root, storeDir)}/
-`);
+  console.log(`\n🎬 CineClip preview  →  http://${HOST}:${PORT}`,
+    `\n☁️  Mock R2           →  http://${HOST}:${PORT}${CLOUD_PREFIX}`,
+    `\n     Worker URL no app : ${CLOUD_PREFIX}`,
+    `\n     Token             : ${process.env.MOCK_CLOUD_TOKEN || "cc_r2_token_de_teste"}`,
+    `\n📁 Mock Google Drive  →  http://${HOST}:${PORT}${DRIVE_PREFIX}?action=health`,
+    `\n     URL no app        : ${DRIVE_PREFIX}`,
+    `\n     Token             : ${process.env.MOCK_DRIVE_TOKEN || "cc_drive_token_de_teste"}`,
+    `\n     Ficheiros em      : ${path.relative(root, storeDir)}/\n`);
 });
