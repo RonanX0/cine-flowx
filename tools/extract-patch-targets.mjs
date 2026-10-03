@@ -85,6 +85,14 @@ const P = {
     "overlayText:((ye=c.overlayText)==null?void 0:ye.trim())",
     "_g(h);"
   ),
+  // "Enviar todos p/ nuvem": a função fica mesmo antes de Tg() (o getter da sessão,
+  // que ela usa) e o botão na barra de ações da fila, antes do "Robô 24h".
+  "17-migrar-fn":
+    "function Tg(){try{const r=localStorage.getItem(Jc);if(!r)return null;",
+  "18-migrar-button": between(
+    'd.jsxs(Ae,{variant:x?"default":"outline",size:"sm",onClick:()=>{h(N=>!N),v(!1)}',
+    '" Robô 24h (PC Desligado)"]}),'
+  ),
 };
 
 let failed = 0;

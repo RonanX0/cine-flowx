@@ -38,7 +38,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.1.0";
+  var VERSION = "1.2.0";
   var SETTINGS_KEY = "cineclip.settings";
   var STATE_KEY = "cineclip.cloud.state";
   var MAX_LOG = 80;
@@ -1543,6 +1543,68 @@
     return lines.join("\n");
   }
 
+  /* ------------------------------------------------- migração em massa */
+
+  /**
+   * Este agendamento precisa de ir para a nuvem durável?
+   * Só conta se este aparelho ainda tiver os bytes (videoBlob) — sem eles não há
+   * nada para enviar e o item cai no grupo "semVideo".
+   * Um item marcado com needsReupload volta a contar mesmo que já tenha link.
+   */
+  function needsCloudUpload(item) {
+    if (!item || !item.videoBlob) return false;
+    if (item.needsReupload) return true;
+    return !isDurable(item.remoteVideoUrl || "");
+  }
+
+  /**
+   * Divide a fila em três grupos (é o que o botão "Enviar todos p/ nuvem" usa):
+   *   pending  — tem os bytes E o link não é durável (temporário, expirado ou vazio)
+   *   naNuvem  — já está em armazenamento durável (R2/Drive)
+   *   semVideo — não tem os bytes neste aparelho: só reimportando o .mp4
+   */
+  function migrationPlan(items) {
+    var list = items && items.length ? items : [];
+    var pending = [];
+    var semVideo = [];
+    var naNuvem = [];
+    var i;
+    for (i = 0; i < list.length; i++) {
+      var it = list[i];
+      if (!it) continue;
+      if (needsCloudUpload(it)) pending.push(it);
+      else if (isDurable(it.remoteVideoUrl || "")) naNuvem.push(it);
+      else semVideo.push(it);
+    }
+    var bytes = 0;
+    for (i = 0; i < pending.length; i++) {
+      var b = pending[i].videoBlob;
+      if (b && typeof b.size === "number" && b.size > 0) bytes += b.size;
+    }
+    return {
+      total: list.length,
+      pending: pending,
+      semVideo: semVideo,
+      naNuvem: naNuvem,
+      bytes: bytes
+    };
+  }
+
+  /** Mensagem final da migração, em português (é o que aparece no toast). */
+  function migrateSummary(res) {
+    var r = res || {};
+    var enviados = Number(r.enviados) || 0;
+    var falhou = Number(r.falhou) || 0;
+    var semVideo = Number(r.semVideo) || 0;
+    var parts = [enviados === 1 ? "1 vídeo na nuvem durável" : enviados + " vídeos na nuvem durável"];
+    if (falhou) parts.push(falhou === 1 ? "1 com erro" : falhou + " com erros");
+    if (semVideo) parts.push(semVideo + " sem vídeo neste aparelho");
+    var msg = "☁️ Migração concluída: " + parts.join(", ") + ".";
+    if (semVideo) msg += " Esses só voltam à nuvem se reimportares o .mp4 neste aparelho.";
+    if (falhou && !enviados) msg += " Vê a Configurações → Testar ligação.";
+    return msg;
+  }
+
   /* ------------------------------------------------------------- export */
 
   window.CineCloud = {
@@ -1552,6 +1614,9 @@
     providers: activeProviders,
     classifyUrl: classifyUrl,
     isDurable: isDurable,
+    needsCloudUpload: needsCloudUpload,
+    migrationPlan: migrationPlan,
+    migrateSummary: migrateSummary,
     fmtSize: fmtSize,
     uploadVideo: uploadVideo,
     legacyUploadVideo: legacyUploadVideo,
