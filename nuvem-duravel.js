@@ -118,6 +118,10 @@
     var u = String(raw || "").trim().replace(/[\u200b-\u200f\ufeff]/g, "");
     if (!u) return "";
     u = u.replace(/\s+/g, "");
+    // O utilizador copia muitas vezes o URL de teste (?action=health) ou de uma
+    // mensagem de erro anterior. O query string é sempre nosso — corta-se, senão
+    // ficava "?action=health&action=health" e ninguém percebia o erro.
+    u = u.split("?")[0].split("#")[0];
     // "/drive-api" é um caminho relativo do próprio site (usado no preview local
     // e em proxies) — deixa-se como está para o absolute() resolver contra a origem.
     if (/^\/[^/]/.test(u)) return u;
@@ -356,12 +360,22 @@
   }
 
   function q(base, params) {
+    var clean = String(base || "");
+    var existing = clean.indexOf("?") >= 0 ? clean.slice(clean.indexOf("?") + 1).split("&") : [];
+    var keep = clean.split("?")[0];
     var parts = [];
     Object.keys(params).forEach(function (k) {
       if (params[k] === undefined || params[k] === null || params[k] === "") return;
+      // se o parâmetro já vinha no URL colado, o nosso valor ganha (não duplica)
+      existing = existing.filter(function (kv) {
+        return kv.split("=")[0] !== k;
+      });
       parts.push(encodeURIComponent(k) + "=" + encodeURIComponent(params[k]));
     });
-    return base + (base.indexOf("?") >= 0 ? "&" : "?") + parts.join("&");
+    var all = existing.concat(parts).filter(function (kv) {
+      return kv !== "";
+    });
+    return keep + (all.length ? "?" + all.join("&") : "");
   }
 
   async function fetchJson(url, options) {

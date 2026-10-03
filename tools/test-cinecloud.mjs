@@ -435,6 +435,8 @@ const hcHttp = await CC.healthCheck();
 check("http:// fora de localhost é recusado com explicação", hcHttp.ok === false && /https:\/\//.test(hcHttp.drive.message), hcHttp.drive.message);
 setSettings(sb, { driveScriptUrl: "/drive-api", driveToken: DRIVE_TOKEN, cloudProvider: "drive" });
 check("caminho relativo continua a resolver contra a origem (preview/mocks)", CC.config().driveUrl === BASE + "/drive-api", CC.config().driveUrl);
+setSettings(sb, { driveScriptUrl: GAS + "?action=health&action=health", driveToken: DRIVE_TOKEN, cloudProvider: "drive" });
+check("URL colado com ?action=health (do teste ou de um erro anterior) é limpo", CC.config().driveUrl === GAS, CC.config().driveUrl);
 setSettings(sb, { driveScriptUrl: "http://127.0.0.1:59999/drive-api", driveToken: DRIVE_TOKEN, cloudProvider: "drive" });
 const hcDown = await CC.healthCheck();
 check("backend em baixo → mensagem com o URL de teste direto e o que verificar", hcDown.ok === false && /action=health/.test(hcDown.drive.message) && /setup\(\)/.test(hcDown.drive.message), hcDown.drive.message.slice(0, 120));
