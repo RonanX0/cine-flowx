@@ -64,7 +64,7 @@ amanhã já tinha o link morto quando o Robô 24h (Apps Script) ia publicar.
 ```
 
 Correções aplicadas ao bundle (`index.html` / `app-pronto.html`) pela camada
-`nuvem-duravel.js` + patch `tools/apply-cloud-patch.mjs` (16 substituições por ficheiro):
+`nuvem-duravel.js` + patch `tools/apply-cloud-patch.mjs` (18 substituições por ficheiro):
 
 | # | Correção | Onde |
 |---|---|---|
@@ -82,6 +82,7 @@ Correções aplicadas ao bundle (`index.html` / `app-pronto.html`) pela camada
 | 12 | Robô 24h lê/grava o cofre no R2 **e** no Drive, **valida se o link ainda responde** e marca `needsReupload` para o app reenviar | patch `15` |
 | 13 | Validação de links do Drive por `?action=videohead` (o Apps Script não suporta `Range`; um GET normal descarregava o vídeo inteiro e gastava quota) | `verifyPublicUrl()`, `verificarLink()` |
 | 14 | Painel de diagnóstico no app (**Testar ligação Drive/R2**, **Copiar diagnóstico**) e no Apps Script (`testarLigacaoDrive`, `testarLigacaoR2`, `estadoDaFila`) | patches `13`, `15` |
+| 15 | 🔒 **Claims (anti-publicação duplicada)**: antes de publicar, o app/Robô reclama o item no backend e liberta-o no fim. Se o app e o Robô 24h acordarem ao mesmo tempo (ou houver 2 aparelhos com a mesma fila), só um publica. Se o backend ainda for antigo, publica-se na mesma (degradação segura) | patches `19`, `20`, `15` (Robô), `nuvem-duravel.js`, `cloudflare/r2-worker.js`, `apps-script/cineclip-cloud-drive.js` |
 
 ---
 
@@ -310,6 +311,8 @@ Itens que o Robô 24h apanhou com link morto ficam marcados com `needsReupload` 
 | "sem binding R2 (BUCKET)" | `wrangler.toml` sem `[[r2_buckets]]` ou bucket com outro nome |
 | Meta rejeita o vídeo | o link tem de ser público e devolver `video/mp4` — Drive: `?action=video&id=…`; R2: `curl -I <link>` deve dar 200/206 |
 | Robô não publica nada | no Apps Script corre `testarLigacaoDrive` (ou `testarLigacaoR2`) e `estadoDaFila`; confirma que o código foi **recopiado** depois de configurares a nuvem |
+| 🔒 "já está a ser publicado por … — envio ignorado" | É a proteção anti-duplicado a funcionar: outro aparelho (ou o Robô 24h) tem a claim do item. Se ficar preso, vê as claims ativas com `?action=claims` (Drive) ou `GET /api/claims` (Worker) — as claims expiram sozinhas em 10 min |
+| 🔒 Aviso "Claims indisponíveis …" | O Worker/Apps Script configurado ainda não tem as rotas de claims (versão antiga). As publicações continuam a funcionar — atualiza o backend (secção 10) para ganhares a proteção |
 
 `window.CineCloud.report()` na consola do browser devolve o mesmo texto do botão
 **Copiar diagnóstico** (ordem dos providers, configuração, último erro e log).
@@ -323,10 +326,10 @@ nuvem-duravel.js                  camada de nuvem no browser (window.CineCloud) 
 apps-script/cineclip-cloud-drive.js  backend Google Drive: Web App (upload em blocos, cofre, videohead, health)
 cloudflare/r2-worker.js           Worker R2: upload/leitura de vídeos + cofre, CORS, Range/206, presign SigV4
 cloudflare/wrangler.toml          binding R2 + vars/secrets
-tools/apply-cloud-patch.mjs       aplica os 16 patches ao bundle e valida sintaxe (idempotente)
+tools/apply-cloud-patch.mjs       aplica os 18 patches ao bundle e valida sintaxe (idempotente)
 tools/extract-patch-targets.mjs   regenera tools/patches/*.find a partir do bundle original
 tools/restore-base.mjs            repõe index.html/app-pronto.html no commit base (antes do patch)
-tools/patches/*.find|.replace     as 16 substituições, em texto simples e revisável
+tools/patches/*.find|.replace     as 18 substituições, em texto simples e revisável
 tools/dev-server.mjs              preview estático + mocks em /cloud-api e /drive-api
 tools/mock-r2-worker.mjs          mock do Worker R2 (mesmo contrato) para testes locais
 tools/mock-drive-backend.mjs      mock do Apps Script/Drive (mesmo contrato, HTTP 200 + {ok:false})
@@ -343,8 +346,86 @@ alterações é `src/lib/cloud.ts` (equivalente ao `nuvem-duravel.js`) e o fluxo
 ```bash
 npm run patch:full    # = patch:base (repor o bundle original)
                       # + patch:extrair (regenerar os .find)
-                      # + patch:nuvem (aplicar os 16 patches e verificar sintaxe)
+                      # + patch:nuvem (aplicar os 18 patches e verificar sintaxe)
 ```
 
 Os dois bundles ficam **byte-idênticos** entre execuções (md5 estável) e o código do
 Robô 24h gerado é validado com `node --check` antes de gravar.
+
+---
+
+## 10. 🔒 Claims — anti-publicação duplicada
+
+### O problema
+
+O app (no browser) e o Robô 24h (Apps Script) partilham a mesma fila no cofre. Sem uma
+trava, a sequência que acontece é esta:
+
+1. o Robô lê o cofre e vê o Reel das 21:00 com `status: "scheduled"`;
+2. ao mesmo tempo, o auto-piloto do app lê o cofre e vê **o mesmo item**;
+3. os dois publicam — e o Reel aparece **duas vezes** no Instagram.
+
+O mesmo acontece com dois aparelhos abertos com a mesma conta (PC + celular).
+
+### Como funciona
+
+Antes de publicar, cada lado **reclama** o item (uma *claim*, com validade/TTL de 10 min):
+
+* quem consegue a claim é quem publica;
+* quem não consegue **não publica** e deixa o item como está (volta a tentar mais tarde,
+  ou vê que o outro lado já o marcou como `published`);
+* a claim é **libertada** no fim (sucesso ou erro) e **expira sozinha** — uma execução
+  interrompida nunca bloqueia a fila para sempre;
+* o mesmo dono pode renovar a claim (um retry não se auto-bloqueia);
+* claims expiradas podem ser tomadas por outro dispositivo.
+
+### Contrato da API
+
+| Backend | Adquirir | Libertar | Listar (diagnóstico) |
+|---|---|---|---|
+| Cloudflare Worker (R2) | `POST /api/claims/acquire` | `POST /api/claims/release` | `GET /api/claims` · `GET /api/claims/:key` |
+| Google Drive (Apps Script) | `POST ?action=claim` | `POST ?action=release` | `GET ?action=claims` |
+
+Corpo de `acquire`/`claim` (JSON): `{"key":"cc_<cofre>_<id do Reel>","owner":"app:…|robo:…","ttlMs":600000}`
+
+Respostas:
+
+```json
+{ "ok": true, "acquired": true,  "claim": { "key": "…", "owner": "app:1a2b", "expiresAt": 1791068055790 } }
+{ "ok": true, "acquired": false, "holder": { "owner": "robo:9x8y", "expiresAt": 1791068055790 } }   ← não publicar
+```
+
+* `key` = `cc_<vaultHash>_<id do Reel>` (o mesmo formato no app e no Robô, por isso
+  bloqueiam-se mutuamente).
+* `POST` no Apps Script vai com `Content-Type: text/plain` (evita o preflight CORS que o
+  Google não responde); em **modo compatível** o resultado é confirmado com
+  `GET ?action=claims` por JSONP.
+* No Worker a escrita é condicional (`onlyIf`) e confirmada por releitura; no Apps Script
+  a exclusão mútua é feita com `LockService`.
+
+### Degradação segura (importante)
+
+Se o backend **ainda não tiver** as rotas/ações de claims (Worker/Apps Script antigos), o
+app e o Robô **publicam na mesma** — só aparece um aviso no log/toast:
+
+> ⚠️ Claims indisponíveis … — a publicar sem proteção anti-duplicado.
+
+Ou seja: **publicar só o front-end não parte as publicações**. O que se perde, até
+atualizares o backend, é apenas a proteção contra Reels repetidos.
+
+### Passos manuais para ativar a proteção
+
+1. **Worker (R2)** — `npx wrangler deploy` (as rotas novas entram no mesmo deployment).
+2. **Apps Script (Drive)** — cola outra vez o `apps-script/cineclip-cloud-drive.js` e cria
+   **Implantar → Gerir implantações → ✏️ → Nova versão**.
+3. **Robô 24h** — no CineClip, gera e **cola o código outra vez** no Apps Script (o Robô que
+   já está a correr é código antigo e não conhece as claims).
+4. Nada disto é obrigatório para o site continuar a publicar: sem os passos acima a
+   proteção fica apenas inativa.
+
+### Testar
+
+```bash
+npm test          # inclui os testes das claims: R2, Drive, modo compatível,
+                  # expiração/takeover, dono errado a tentar libertar, backend antigo
+```

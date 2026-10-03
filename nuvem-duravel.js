@@ -31,6 +31,10 @@
  *      sobrescreve o cofre com uma fila vazia.
  *   7. Migração automática: cofres antigos (bytebin/kappa) são copiados para o
  *      provider durável configurado.
+ *   8. Claims: antes de publicar, o app reclama o item (`claimPublish`) e liberta-o
+ *      no fim (`releaseClaim`). Impede que o app e o Robô 24h publiquem o mesmo
+ *      Reel duas vezes. Se o backend ainda não tiver as rotas de claims, a
+ *      publicação SEGUE na mesma (degradação segura) — só não fica protegida.
  *
  * Exposição: window.CineCloud
  * Configurado em: Configurações → "☁️ Nuvem durável"
@@ -38,7 +42,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.1.0";
+  var VERSION = "1.2.0";
   var SETTINGS_KEY = "cineclip.settings";
   var STATE_KEY = "cineclip.cloud.state";
   var MAX_LOG = 80;
@@ -1165,6 +1169,7 @@
     var providers = chain(cfg);
     var failures = [];
     var answered = false;
+    if (vaultHash) saveState({ vaultHash: String(vaultHash).slice(0, 64) });
 
     for (var i = 0; i < providers.length; i++) {
       var provider = providers[i];
@@ -1234,6 +1239,7 @@
    */
   async function putVault(vaultHash, cipher) {
     var cfg = config();
+    if (vaultHash) saveState({ vaultHash: String(vaultHash).slice(0, 64) });
     var providers = chain(cfg).filter(function (p) {
       return p !== "legacy";
     });
@@ -1310,6 +1316,281 @@
       5 * 60 * 1000
     );
     return true;
+  }
+
+  /* ------------------------------- 🔒 claims (anti-publicação duplicada) */
+
+  /**
+   * O app (este browser) e o Robô 24h podem estar acordados ao mesmo tempo. Sem
+   * uma trava, os dois leem o cofre, os dois veem `status: "scheduled"` e os dois
+   * publicam o mesmo Reel no Instagram.
+   *
+   * A claim é uma reclamação temporária sobre o item: quem a tem é quem publica.
+   * Vive no backend (Worker → `/api/claims/*`; Apps Script → `?action=claim`) e
+   * expira sozinha (TTL), para uma execução interrompida nunca bloquear a fila.
+   *
+   * ⚠️ Degradação segura: se o backend ainda não tiver as rotas de claims (Worker
+   * ou Apps Script antigos), `claimPublish` devolve `degraded: true` e a
+   * publicação SEGUE — nunca se perde uma publicação por causa desta proteção.
+   */
+
+  var CLAIM_TTL_MS = 10 * 60 * 1000;
+
+  /** Identificador estável deste aparelho — diz quem tem a claim. */
+  function claimOwner(scope) {
+    var st = loadState();
+    var id = String(st.claimOwnerId || "");
+    if (!id) {
+      id = Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6);
+      saveState({ claimOwnerId: id });
+    }
+    return (scope ? scope + ":" : "") + id;
+  }
+
+  /** Chave da claim: por Reel e, quando conhecido, por cofre (multi-conta). */
+  function claimKeyFor(item) {
+    var id = typeof item === "string" ? item : item && item.id;
+    if (!id) return "";
+    var st = loadState();
+    var hash = String((item && item.vaultHash) || st.vaultHash || "").slice(0, 64);
+    return (
+      "cc_" + (hash ? hash + "_" : "") +
+      String(id).replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 100)
+    );
+  }
+
+  function claimUnsupported(status, data) {
+    if (status === 404 || status === 405 || status === 501) return true;
+    var err = String((data && data.error) || "");
+    return /rota desconhecida|a[çc][ãa]o desconhecida|unknown (route|action)|n[ãa]o suportad/i.test(err);
+  }
+
+  /** Claims no Worker (R2). */
+  async function r2Claim(cfg, action, payload) {
+    var res = await fetchJson(cfg.workerUrl + "/api/claims/" + action, {
+      method: "POST",
+      headers: authHeaders(cfg, {
+        "Content-Type": "application/json",
+        "X-Cineclip-Client": "web/" + VERSION
+      }),
+      body: JSON.stringify(payload),
+      cache: "no-store"
+    });
+    return { status: res.status, ok: res.ok, data: res.data };
+  }
+
+  /** Claims no Apps Script: lista as ativas (usada para confirmar em modo compatível). */
+  async function driveClaimsLookup(cfg, key, forceJsonp) {
+    var res = await driveReadJson(cfg, { action: "claims", token: cfg.driveToken }, forceJsonp);
+    var data = res.data;
+    if (!data || data.ok !== true || !Array.isArray(data.active)) return null;
+    for (var i = 0; i < data.active.length; i++) {
+      if (data.active[i] && data.active[i].key === key) return data.active[i];
+    }
+    return null;
+  }
+
+  /**
+   * POST para o Apps Script com confirmação. O Google não deixa o Apps Script
+   * definir CORS: quando o browser bloqueia a leitura, o pedido segue "às cegas"
+   * e o resultado é confirmado por um GET ?action=claims (JSONP).
+   */
+  async function driveClaimPost(cfg, action, payload, key, owner) {
+    var body = JSON.stringify(payload);
+    var params = { action: action, token: cfg.driveToken };
+    var info = await driveInfo(cfg);
+
+    if (info.readable !== false) {
+      try {
+        var res = await fetch(q(cfg.driveUrl, params), driveFetchOpts({
+          method: "POST",
+          headers: { "Content-Type": "text/plain;charset=UTF-8" },
+          body: body
+        }));
+        var data = null;
+        try {
+          data = await res.json();
+        } catch (e) {
+          throw new Error("Apps Script devolveu resposta inválida em '" + action + "' (HTTP " + res.status + ").");
+        }
+        return { status: res.status, data: data };
+      } catch (e) {
+        if (!canJsonp()) throw e;
+        log("warn", "Claim bloqueado pelo browser (CORS) — a enviar às cegas e a confirmar pela leitura.");
+      }
+    }
+
+    await postOpaque(q(cfg.driveUrl, params), body);
+    var holder = await driveClaimsLookup(cfg, key, true);
+
+    if (action === "claim") {
+      if (holder && holder.owner === owner) {
+        return { status: 200, data: { ok: true, provider: "google-drive", acquired: true, claim: holder } };
+      }
+      if (holder) {
+        return {
+          status: 200,
+          data: {
+            ok: true, provider: "google-drive", acquired: false,
+            holder: { owner: holder.owner, expiresAt: holder.expiresAt }
+          }
+        };
+      }
+      throw new Error("Drive: enviei a claim mas não consegui confirmá-la (modo compatível).");
+    }
+
+    if (holder && holder.owner !== owner) {
+      return {
+        status: 200,
+        data: {
+          ok: true, provider: "google-drive", released: false,
+          holder: { owner: holder.owner, expiresAt: holder.expiresAt }
+        }
+      };
+    }
+    return { status: 200, data: { ok: true, provider: "google-drive", released: !holder } };
+  }
+
+  /**
+   * Reclama um item antes de publicar.
+   * @returns {Promise<{ok:boolean, degraded?:boolean, reason?:string, holder?:object}>}
+   *   ok:true  → pode publicar (tenho a claim, ou o backend não suporta claims)
+   *   ok:false → NÃO publicar (reason:"held": outro dispositivo/Robô está a publicar)
+   */
+  async function claimPublish(item, opts) {
+    var o = opts || {};
+    var key = claimKeyFor(item);
+    if (!key) return { ok: true, degraded: true, reason: "sem_id" };
+
+    var cfg = config();
+    var owner = String(o.owner || claimOwner("app")).slice(0, 120);
+    var ttlMs = Number(o.ttlMs || CLAIM_TTL_MS);
+    var providers = chain(cfg).filter(function (p) {
+      return p !== "legacy";
+    });
+    if (!providers.length) return { ok: true, degraded: true, reason: "sem_nuvem" };
+
+    var problems = [];
+    for (var i = 0; i < providers.length; i++) {
+      var provider = providers[i];
+      try {
+        var out = provider === "r2"
+          ? await r2Claim(cfg, "acquire", { key: key, owner: owner, ttlMs: ttlMs })
+          : await driveClaimPost(cfg, "claim", { key: key, owner: owner, ttlMs: ttlMs }, key, owner);
+
+        var data = (out && out.data) || {};
+        if (claimUnsupported(out && out.status, data)) {
+          problems.push(provider + ": claims não suportadas neste backend");
+          continue;
+        }
+        if (data.ok === false) {
+          problems.push(provider + ": " + (data.error || "erro devolvido pelo backend"));
+          continue;
+        }
+        if (data.acquired === true) {
+          saveState({ lastClaimAt: now(), lastClaimProvider: provider });
+          log("info", "Claim obtida (" + provider + ") para " + key + ".");
+          return {
+            ok: true, provider: provider, key: key, owner: owner,
+            expiresAt: (data.claim && data.claim.expiresAt) || now() + ttlMs,
+            claim: data.claim || null, ownerLabel: o.ownerLabel || owner
+          };
+        }
+        if (data.acquired === false) {
+          return {
+            ok: false, reason: "held", provider: provider, key: key, owner: owner,
+            holder: data.holder || null
+          };
+        }
+        problems.push(provider + ": resposta inesperada (" + JSON.stringify(data).slice(0, 120) + ")");
+      } catch (e) {
+        problems.push(provider + ": " + (e && e.message ? e.message : e));
+      }
+    }
+
+    // Nenhum backend sabe responder → publica como antes, com aviso (nunca se
+    // perde uma publicação por causa desta proteção).
+    log("warn", "Claims indisponíveis (" + problems.join(" | ") + ") — a publicar sem proteção anti-duplicado.");
+    toastOnce(
+      "claims-off",
+      "⚠️ Proteção anti-publicação duplicada indisponível: o Worker/Apps Script configurado ainda não tem " +
+        "as rotas de claims. Publicação segue normalmente — atualiza o backend para evitar Reels repetidos.",
+      "warning",
+      10 * 60 * 1000
+    );
+    return { ok: true, degraded: true, key: key, owner: owner, problems: problems };
+  }
+
+  /** Liberta a claim (best-effort: se falhar, o TTL trata do assunto). */
+  async function releaseClaim(claim) {
+    if (!claim || !claim.ok || claim.degraded || !claim.key || !claim.owner) {
+      return { ok: true, skipped: true };
+    }
+    try {
+      var cfg = config();
+      var out = claim.provider === "r2"
+        ? await r2Claim(cfg, "release", { key: claim.key, owner: claim.owner })
+        : await driveClaimPost(cfg, "release", { key: claim.key, owner: claim.owner }, claim.key, claim.owner);
+      var data = (out && out.data) || {};
+      if (data.released === true) {
+        log("info", "Claim libertada (" + claim.provider + ") para " + claim.key + ".");
+        return { ok: true, released: true };
+      }
+      return { ok: true, released: false, holder: data.holder || null, note: data.note || "" };
+    } catch (e) {
+      log("warn", "Não consegui libertar a claim " + claim.key + ": " + (e && e.message ? e.message : e));
+      return { ok: false, error: String(e && e.message ? e.message : e) };
+    }
+  }
+
+  /** Texto para o utilizador quando o item está a ser publicado noutro lado. */
+  function claimSkipMessage(claim, title) {
+    var holder = (claim && claim.holder && claim.holder.owner) || "outro dispositivo";
+    var until = claim && claim.holder && claim.holder.expiresAt ? new Date(claim.holder.expiresAt) : null;
+    var hhmm = "";
+    try {
+      hhmm = until && !isNaN(until.getTime())
+        ? until.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+        : "";
+    } catch (e) {}
+    return (
+      "⏳ " + (title ? '"' + title + '" ' : "Este Reel ") + "já está a ser publicado por " +
+      holder + (hhmm ? " (claim válida até " + hhmm + ")" : "") +
+      " — envio ignorado para não publicar duas vezes."
+    );
+  }
+
+  /** Claims ativas em todos os backends (diagnóstico). */
+  async function activeClaims() {
+    var cfg = config();
+    var providers = chain(cfg).filter(function (p) {
+      return p !== "legacy";
+    });
+    var out = [];
+    for (var i = 0; i < providers.length; i++) {
+      var provider = providers[i];
+      try {
+        var data = null;
+        if (provider === "r2") {
+          var res = await fetchJson(cfg.workerUrl + "/api/claims", {
+            headers: authHeaders(cfg, { "X-Cineclip-Client": "web/" + VERSION }),
+            cache: "no-store"
+          });
+          data = res.data;
+        } else {
+          data = (await driveReadJson(cfg, { action: "claims", token: cfg.driveToken })).data;
+        }
+        if (data && data.ok === true && Array.isArray(data.active)) {
+          data.active.forEach(function (c) {
+            if (!c) return;
+            out.push({ provider: provider, key: c.key, owner: c.owner, expiresAt: c.expiresAt });
+          });
+        }
+      } catch (e) {
+        log("warn", "Não consegui listar as claims em " + provider + ": " + (e && e.message ? e.message : e));
+      }
+    }
+    return out;
   }
 
   /* ------------------------------------------------------- diagnóstico */
@@ -1560,6 +1841,13 @@
     markReadFailure: markReadFailure,
     noteQueueCount: noteQueueCount,
     blockEmptyOverwrite: blockEmptyOverwrite,
+    // 🔒 anti-publicação duplicada
+    CLAIM_TTL_MS: CLAIM_TTL_MS,
+    claimOwner: claimOwner,
+    claimPublish: claimPublish,
+    releaseClaim: releaseClaim,
+    claimSkipMessage: claimSkipMessage,
+    activeClaims: activeClaims,
     verifyPublicUrl: verifyPublicUrl,
     healthCheck: healthCheck,
     checkR2: checkR2,

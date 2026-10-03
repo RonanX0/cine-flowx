@@ -136,6 +136,15 @@ function verificarEPostarReels() {
       continue;
     }
 
+    // 🔒 Reclama o item: se o app (ou outro Robô) já o estiver a publicar, esta
+    // execução ignora-o para não publicar o mesmo Reel duas vezes.
+    const claim = reclamarPublicacao(item.id);
+    if (claim && claim.ocupado) {
+      pendentes.push(item.title + " (a ser publicado por " + (claim.holder || "outro dispositivo") + ")");
+      Logger.log("⏳ '" + item.title + "' está a ser publicado por " + (claim.holder || "outro dispositivo") + " — ignorado nesta execução.");
+      continue;
+    }
+
     Logger.log("🚀 Horário atingido — a publicar '" + item.title + "' em " + acc.name);
     try {
       const coverUrl = normalizarPoster(item.poster);
@@ -190,6 +199,10 @@ function verificarEPostarReels() {
       }
       alterou = true;
       Logger.log("❌ Erro ao publicar '" + item.title + "': " + msg);
+    } finally {
+      // Liberta a claim em qualquer caso (sucesso ou erro) para o app poder
+      // publicar os próximos itens sem esperar pelo TTL.
+      libertarReclamacao(claim);
     }
   }
 
@@ -357,6 +370,134 @@ function desencriptarTexto(cipherStr) {
   } catch (e) {
     Logger.log("Falha a desencriptar o cofre (senha diferente da usada na criação?): " + e);
     return null;
+  }
+}
+
+/* ------------------------------------------ 🔒 claims (anti-publicação dupla) */
+// O Robô e o app (browser) podem estar acordados ao mesmo tempo. Sem uma trava,
+// os dois leem o cofre, os dois veem "status: scheduled" e os dois publicam o
+// mesmo Reel. Antes de publicar, o Robô reclama o item no backend:
+//   Worker (R2)   → POST /api/claims/acquire   |  release em /api/claims/release
+//   Apps Script   → POST ?action=claim         |  release em ?action=release
+// Se o backend ainda for antigo (sem claims), publica-se na mesma: nunca se
+// perde uma publicação por causa desta proteção.
+
+const CLAIM_TTL_MS = 10 * 60 * 1000;
+const CLAIM_OWNER_KEY = "CINECLIP_ROBO_OWNER";
+
+/** Identificador estável deste Robô (fica nas Script Properties do projeto). */
+function roboOwner() {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    let id = props.getProperty(CLAIM_OWNER_KEY);
+    if (!id) {
+      id = "robo_" + Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6);
+      props.setProperty(CLAIM_OWNER_KEY, id);
+    }
+    return "robo:" + id;
+  } catch (e) {
+    return "robo:sem-props";
+  }
+}
+
+/** Mesma chave que o app usa: cc_<cofre>_<id do Reel>. */
+function claimKey(itemId) {
+  return "cc_" + VAULT_HASH + "_" + String(itemId || "").replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 100);
+}
+
+/** true quando o backend não tem as rotas/ações de claims (versão antiga). */
+function claimsIndisponiveis(status, json, text) {
+  if (status === 404 || status === 405 || status === 501) return true;
+  const msg = (json && json.error) || text || "";
+  return /rota desconhecida|a[çc][ãa]o desconhecida|unknown (route|action)|n[ãa]o suportad/i.test(String(msg));
+}
+
+/**
+ * Reclama o item antes de publicar.
+ *   {ok:true, provider, key, owner}  → pode publicar (ou o backend não suporta claims)
+ *   {ocupado:true, owner}            → outro dispositivo está a publicar: não publicar
+ */
+function reclamarPublicacao(itemId) {
+  const key = claimKey(itemId);
+  const owner = roboOwner();
+  const payload = JSON.stringify({ key: key, owner: owner, ttlMs: CLAIM_TTL_MS });
+  const problemas = [];
+
+  if (r2Configurado()) {
+    try {
+      const res = UrlFetchApp.fetch(R2_WORKER_URL + "/api/claims/acquire", {
+        method: "post",
+        contentType: "application/json",
+        headers: r2Headers(),
+        payload: payload,
+        muteHttpExceptions: true
+      });
+      const code = res.getResponseCode();
+      const text = res.getContentText();
+      let json = null;
+      try { json = JSON.parse(text); } catch (e) {}
+      if (claimsIndisponiveis(code, json, text)) {
+        problemas.push("R2 sem claims");
+      } else if (json && json.acquired === true) {
+        return { ok: true, provider: "r2", key: key, owner: owner };
+      } else if (json && json.acquired === false) {
+        return { ocupado: true, provider: "r2", key: key, holder: (json.holder && json.holder.owner) || "", expiresAt: json.holder && json.holder.expiresAt };
+      } else {
+        problemas.push("R2 resposta inesperada");
+      }
+    } catch (e) {
+      problemas.push("R2 " + e);
+    }
+  }
+
+  if (driveConfigurado()) {
+    try {
+      const r = driveFetch({ action: "claim", token: DRIVE_TOKEN }, {
+        method: "post",
+        contentType: "application/json",
+        payload: payload
+      });
+      const json = r.json;
+      if (claimsIndisponiveis(r.code, json, r.text)) {
+        problemas.push("Drive sem claims");
+      } else if (json && json.acquired === true) {
+        return { ok: true, provider: "drive", key: key, owner: owner };
+      } else if (json && json.acquired === false) {
+        return { ocupado: true, provider: "drive", key: key, holder: (json.holder && json.holder.owner) || "", expiresAt: json.holder && json.holder.expiresAt };
+      } else {
+        problemas.push("Drive resposta inesperada");
+      }
+    } catch (e) {
+      problemas.push("Drive " + e);
+    }
+  }
+
+  Logger.log("⚠️ Claims indisponíveis (" + problemas.join(" | ") + ") — a publicar sem proteção anti-duplicado. Atualiza o Worker/Apps Script para evitares Reels repetidos.");
+  return { ok: true, degradado: true, key: key, owner: owner };
+}
+
+/** Liberta a claim (se falhar, o TTL de 10 min trata do assunto). */
+function libertarReclamacao(claim) {
+  if (!claim || !claim.ok || !claim.key) return;
+  const payload = JSON.stringify({ key: claim.key, owner: claim.owner });
+  try {
+    if (claim.provider === "r2") {
+      UrlFetchApp.fetch(R2_WORKER_URL + "/api/claims/release", {
+        method: "post",
+        contentType: "application/json",
+        headers: r2Headers(),
+        payload: payload,
+        muteHttpExceptions: true
+      });
+    } else if (claim.provider === "drive") {
+      driveFetch({ action: "release", token: DRIVE_TOKEN }, {
+        method: "post",
+        contentType: "application/json",
+        payload: payload
+      });
+    }
+  } catch (e) {
+    Logger.log("(não consegui libertar a claim — expira sozinha: " + e + ")");
   }
 }
 

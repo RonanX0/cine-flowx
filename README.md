@@ -65,7 +65,7 @@ npm run nuvem          # app + mocks em http://localhost:4173 (/drive-api e /clo
 npm run nuvem:test     # testes ponta-a-ponta da camada de nuvem (arranca os mocks sozinho)
 npm test               # testes da nuvem + proxy NVIDIA
 npm run build          # gera dist/ para deploy estático
-npm run patch:full     # reconstrói/verifica o bundle e reaplica os 16 patches
+npm run patch:full     # reconstrói/verifica o bundle e reaplica os 18 patches
 ```
 
 - **[NUVEM-DURAVEL.md](NUVEM-DURAVEL.md)** — diagnóstico completo, setup do Drive e do R2,

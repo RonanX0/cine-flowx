@@ -19,7 +19,7 @@ const TOKEN = process.env.MOCK_DRIVE_TOKEN || "cc_drive_token_de_teste";
  * @param {number} [o.chunkBytes]  tamanho do bloco anunciado no health (default 2 MB)
  * @param {number} [o.maxVideoMb]  limite duro, como no Apps Script real (default 45)
  */
-export function createMockDrive({ storeDir, singleMaxMb, chunkBytes, maxVideoMb }) {
+export function createMockDrive({ storeDir, singleMaxMb, chunkBytes, maxVideoMb, noClaims }) {
   const SINGLE_MAX = Number(singleMaxMb || process.env.MOCK_DRIVE_SINGLE_MAX_MB || 8) * 1024 * 1024;
   const CHUNK = Number(chunkBytes || process.env.MOCK_DRIVE_CHUNK_BYTES || 2 * 1024 * 1024);
   const MAX_VIDEO = Number(maxVideoMb || process.env.MOCK_DRIVE_MAX_VIDEO_MB || 45) * 1024 * 1024;
@@ -28,6 +28,30 @@ export function createMockDrive({ storeDir, singleMaxMb, chunkBytes, maxVideoMb 
   fs.mkdirSync(videosDir, { recursive: true });
   fs.mkdirSync(vaultsDir, { recursive: true });
   const uploads = new Map();
+
+  /*
+   * 🔒 Claims — mesma semântica do Apps Script real (LockService + Properties).
+   * `noClaims: true` (ou MOCK_NO_CLAIMS=1) simula um backend ANTIGO, sem as
+   * ações de claims, para testar a degradação segura do cliente.
+   */
+  const NO_CLAIMS = noClaims === undefined ? process.env.MOCK_NO_CLAIMS === "1" : !!noClaims;
+  const CLAIM_TTL_DEFAULT_MS = 10 * 60 * 1000;
+  const CLAIM_TTL_MIN_MS = 60 * 1000;
+  const CLAIM_TTL_MAX_MS = 60 * 60 * 1000;
+  const claims = new Map();
+  const clampTtl = (v) => {
+    const n = Number(v);
+    if (!Number.isFinite(n) || n <= 0) return CLAIM_TTL_DEFAULT_MS;
+    return Math.min(Math.max(Math.round(n), CLAIM_TTL_MIN_MS), CLAIM_TTL_MAX_MS);
+  };
+  const activeClaims = () => {
+    const nowMs = Date.now();
+    for (const [k, c] of [...claims.entries()]) {
+      if (Number(c.expiresAt || 0) <= nowMs) claims.delete(k);
+    }
+    return [...claims.values()];
+  };
+  const holderOf = (claim) => (claim ? { owner: claim.owner, expiresAt: claim.expiresAt } : null);
 
   const send = (res, obj, callback) => {
     // JSONP (modo compatível): devolve JavaScript em vez de JSON.
@@ -97,6 +121,7 @@ export function createMockDrive({ storeDir, singleMaxMb, chunkBytes, maxVideoMb 
         chunkBytes: CHUNK,
         singleMaxBytes: SINGLE_MAX,
         maxVideoBytes: MAX_VIDEO,
+        claims: !NO_CLAIMS,
         durable: true,
         token: TOKEN,
         time: new Date().toISOString(),
@@ -135,6 +160,80 @@ export function createMockDrive({ storeDir, singleMaxMb, chunkBytes, maxVideoMb 
     }
 
     if (!authed) return out(res, { ok: false, error: "Token inválido." });
+
+    if (action === "claims") {
+      if (NO_CLAIMS) return out(res, { ok: false, error: "Ação desconhecida: " + action });
+      const active = activeClaims();
+      return out(res, { ok: true, provider: "google-drive", active, count: active.length, cleaned: 0 });
+    }
+
+    if (action === "claim") {
+      if (NO_CLAIMS) return out(res, { ok: false, error: "Ação desconhecida: " + action });
+      let payload = null;
+      try {
+        payload = JSON.parse((await readBody(req)).toString("utf8").trim() || "{}");
+      } catch {
+        payload = null;
+      }
+      if (!payload || typeof payload !== "object") {
+        return out(res, { ok: false, error: "JSON inválido no pedido de claim." });
+      }
+      const owner = String(payload.owner || p.get("owner") || "").trim().slice(0, 120);
+      const key = safe(payload.key || p.get("key") || "");
+      if (!key) return out(res, { ok: false, error: "Claim sem 'key' (identificador do item)." });
+      if (!owner) return out(res, { ok: false, error: "Claim sem 'owner' (quem está a publicar)." });
+
+      const nowMs = Date.now();
+      const current = claims.get(key);
+      if (current && Number(current.expiresAt || 0) > nowMs && current.owner !== owner) {
+        return out(res, {
+          ok: true,
+          provider: "google-drive",
+          acquired: false,
+          holder: holderOf(current),
+          retryAfterMs: Number(current.expiresAt || 0) - nowMs,
+        });
+      }
+      const claim = {
+        key,
+        owner,
+        provider: "google-drive",
+        acquiredAt: nowMs,
+        expiresAt: nowMs + clampTtl(payload.ttlMs || p.get("ttlMs")),
+      };
+      claims.set(key, claim);
+      return out(res, { ok: true, provider: "google-drive", acquired: true, claim });
+    }
+
+    if (action === "release") {
+      if (NO_CLAIMS) return out(res, { ok: false, error: "Ação desconhecida: " + action });
+      let payload = null;
+      try {
+        payload = JSON.parse((await readBody(req)).toString("utf8").trim() || "{}");
+      } catch {
+        payload = null;
+      }
+      if (!payload || typeof payload !== "object") {
+        return out(res, { ok: false, error: "JSON inválido no pedido de release." });
+      }
+      const owner = String(payload.owner || p.get("owner") || "").trim().slice(0, 120);
+      const key = safe(payload.key || p.get("key") || "");
+      if (!key || !owner) return out(res, { ok: false, error: "Release precisa de 'key' e 'owner'." });
+
+      const current = claims.get(key);
+      if (!current) return out(res, { ok: true, provider: "google-drive", released: false, note: "sem claim" });
+      if (current.owner !== owner) {
+        return out(res, {
+          ok: true,
+          provider: "google-drive",
+          released: false,
+          holder: holderOf(current),
+          note: "claim de outro dono",
+        });
+      }
+      claims.delete(key);
+      return out(res, { ok: true, provider: "google-drive", released: true });
+    }
 
     if (action === "vault") {
       const hash = safe(p.get("hash") || "");
@@ -231,7 +330,15 @@ export function createMockDrive({ storeDir, singleMaxMb, chunkBytes, maxVideoMb 
       const videos = fs.readdirSync(videosDir).filter((f) => !f.endsWith(".meta.json"));
       const vaults = fs.readdirSync(vaultsDir);
       const bytes = videos.reduce((a, f) => a + fs.statSync(path.join(videosDir, f)).size, 0);
-      return out(res, { ok: true, provider: "google-drive", videos: videos.length, vaults: vaults.length, bytes, version: "1.0.0-mock" });
+      return out(res, {
+        ok: true,
+        provider: "google-drive",
+        videos: videos.length,
+        vaults: vaults.length,
+        claims: activeClaims().length,
+        bytes,
+        version: "1.1.0-mock",
+      });
     }
 
     return out(res, { ok: false, error: "Ação desconhecida: " + action });
