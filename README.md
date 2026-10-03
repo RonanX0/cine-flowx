@@ -4,15 +4,13 @@ Aplicação web **100% no navegador** que limpa metadados de vídeos, corta até
 
 ## Estrutura do Projeto
 
-- `src/App.tsx` — Fluxo principal em 3 etapas (Upload e limpeza → Identificação do filme → Legenda gerada)
-- `src/lib/ffmpeg.ts` — Processamento de vídeo no navegador com `@ffmpeg/ffmpeg` (WebAssembly): corte de tempo, remoção de faixas pretas (`crop`), fundo vertical 9:16 branco, sobreposição do texto de *hook* e limpeza total de metadados/capítulos/unidades SEI
-- `src/lib/crop.ts` — Deteção automática de faixas pretas horizontais (letterbox) por amostragem de 8 frames via Canvas
-- `src/lib/meta.ts` — Leitura e auditoria de metadados (Antes / Depois) com `mediainfo.js`
-- `src/lib/apis.ts` — Integração com **NVIDIA NIM** (`meta/llama-3.2-11b-vision-instruct` e `nvidia/llama-3.1-nemotron-70b-instruct`) e **TMDB API**
-- `src/components/VerticalPreview.tsx` — Pré-visualização 9:16 em tempo real
-- `src/components/SettingsDialog.tsx` — Modal de configuração e teste de chaves NVIDIA / TMDB e texto do topo
-- `src/components/MovieIdentification.tsx` — Cartão do filme identificado, grelha de alternativas e pesquisa manual no TMDB
-- `vite.config.ts` & `api/public/nvidia.ts` — Proxy `/api/public/nvidia` para evitar bloqueios de CORS ao chamar a API da NVIDIA no navegador (funciona em `npm run dev`, `npm run preview` e deploy na Vercel)
+- `index.html` — aplicação React já compilada (interface, processamento com FFmpeg e identificação do filme)
+- `app-pronto.html` — cópia de distribuição do bundle principal
+- `nuvem-duravel.js` — camada de armazenamento durável (`window.CineCloud`), carregada antes do app
+- `apps-script/cineclip-cloud-drive.js` e `cloudflare/r2-worker.js` — backends do Google Drive e Cloudflare R2
+- `tools/` — servidor de preview, mocks, testes e ferramentas para reaplicar os patches do bundle
+- `vite.config.ts` — servidor de desenvolvimento e proxy local para NVIDIA
+- `api/public/nvidia.js` e `netlify/functions/nvidia.mjs` — proxy NVIDIA para deploys Vercel e Netlify
 
 ## Como executar localmente
 
@@ -28,10 +26,13 @@ npm run build
 npm run preview
 ```
 
-> **Estado atual do repositório:** só o *build* está versionado (`index.html`,
-> `app-pronto.html`, `404.html`) — a pasta `src/` e `api/` descritas acima **não** estão no
-> repo. Para correr a aplicação como está, usa `npm run nuvem` (servidor estático + mocks da
-> API de nuvem em `/drive-api` e `/cloud-api`), que não precisa de `npm install`.
+> **Estado atual do repositório:** o código-fonte React (`src/`) não está versionado; a
+> interface está guardada como bundle em `index.html`. O `npm run build` copia esse bundle,
+> a camada de nuvem e o fallback 404 para `dist/` (sem tentar compilar o bundle de novo).
+> Para testar o app com mocks locais da nuvem em `/drive-api` e `/cloud-api`, usa
+> `npm run nuvem`; esse servidor não precisa de `npm install`. Vercel e Netlify têm proxy
+> NVIDIA incluído. GitHub Pages serve apenas arquivos estáticos e não executa `/api/`; a
+> identificação que depende da NVIDIA precisa de um backend em Vercel/Netlify (ou outro host).
 
 ## ☁️ Nuvem durável (Google Drive **ou** Cloudflare R2)
 
@@ -61,8 +62,10 @@ anti-apagão da fila, migração automática dos cofres antigos e selos honestos
 
 ```bash
 npm run nuvem          # app + mocks em http://localhost:4173 (/drive-api e /cloud-api) — testar sem contas
-npm run nuvem:test     # 76 testes ponta-a-ponta da camada de nuvem (arranca os mocks sozinho)
-npm run patch:full     # repõe o bundle original, regenera os alvos e reaplica os 16 patches
+npm run nuvem:test     # testes ponta-a-ponta da camada de nuvem (arranca os mocks sozinho)
+npm test               # testes da nuvem + proxy NVIDIA
+npm run build          # gera dist/ para deploy estático
+npm run patch:full     # reconstrói/verifica o bundle e reaplica os 16 patches
 ```
 
 - **[NUVEM-DURAVEL.md](NUVEM-DURAVEL.md)** — diagnóstico completo, setup do Drive e do R2,

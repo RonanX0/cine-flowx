@@ -330,7 +330,7 @@ tools/patches/*.find|.replace     as 16 substituições, em texto simples e revi
 tools/dev-server.mjs              preview estático + mocks em /cloud-api e /drive-api
 tools/mock-r2-worker.mjs          mock do Worker R2 (mesmo contrato) para testes locais
 tools/mock-drive-backend.mjs      mock do Apps Script/Drive (mesmo contrato, HTTP 200 + {ok:false})
-tools/test-cinecloud.mjs          76 testes ponta-a-ponta da camada de nuvem
+tools/test-cinecloud.mjs          testes ponta-a-ponta da camada de nuvem
 ```
 
 O repositório **não tem `src/`** (apenas o build), por isso o patch é aplicado sobre o

@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
-    "build": "vite build",
+    "build": "node tools/build-static.mjs",
     "preview": "vite preview --host 0.0.0.0",
+    "test": "npm run nuvem:test && node tools/test-nvidia-proxy.mjs",
     "nuvem": "node tools/dev-server.mjs",
     "nuvem:presign": "PORT=4174 MOCK_MAX_DIRECT_MB=1 node tools/dev-server.mjs",
     "nuvem:test": "node tools/test-cinecloud.mjs",

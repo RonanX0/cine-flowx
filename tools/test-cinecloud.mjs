@@ -60,7 +60,7 @@ if (!BASE) {
         return await handleDrive(req, res);
       }
     } catch (err) {
-      const status = err && err.status ? err.status : 200;
+      const status = err && err.status ? err.status : 500;
       if (!res.headersSent) res.writeHead(status, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
       return res.end(JSON.stringify({ ok: false, error: err && err.message ? err.message : "Erro interno" }));
     }
@@ -73,7 +73,7 @@ if (!BASE) {
     try {
       return await handleDriveTiny(req, res);
     } catch (err) {
-      if (!res.headersSent) res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
+      if (!res.headersSent) res.writeHead(err && err.status ? err.status : 500, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
       return res.end(JSON.stringify({ ok: false, error: err && err.message ? err.message : "Erro interno" }));
     }
   });
@@ -418,6 +418,14 @@ const dSmallUrl = await CC.uploadVideo(new Blob([dSmall], { type: "video/mp4" })
   onProgress: (p) => dProgress.push(p),
 });
 check("devolve link ?action=video&id=…", /[?&]action=video&/.test(dSmallUrl) && /[?&]id=/.test(dSmallUrl), dSmallUrl);
+const retryId = "retry-small-upload";
+const retryBytes = randomBytes(64 * 1024);
+const retryUrl = new URL(BASE + "/drive-api");
+Object.entries({ action: "upload", token: DRIVE_TOKEN, id: retryId, index: "0", total: String(retryBytes.length), name: "retry.mp4" }).forEach(([k, v]) => retryUrl.searchParams.set(k, v));
+const retryRequest = () => fetch(retryUrl, { method: "POST", headers: { "Content-Type": "text/plain;charset=UTF-8" }, body: Buffer.from(retryBytes).toString("base64") });
+const firstRetryResult = await (await retryRequest()).json();
+const duplicateRetryResult = await (await retryRequest()).json();
+check("Drive pequeno repetido devolve o mesmo ficheiro (retry idempotente)", firstRetryResult.fileId === duplicateRetryResult.fileId && firstRetryResult.url === duplicateRetryResult.url, JSON.stringify({ first: firstRetryResult.fileId, retry: duplicateRetryResult.fileId }));
 check("classifyUrl → 'drive'", CC.classifyUrl(dSmallUrl) === "drive", CC.classifyUrl(dSmallUrl));
 check("isDurable('drive') === true", CC.isDurable(dSmallUrl) === true);
 check("progresso reportado", dProgress.length >= 1 && dProgress[dProgress.length - 1] === 100, JSON.stringify(dProgress));
@@ -480,6 +488,13 @@ check(
   midBack.equals(Buffer.from(midBytes)),
   midBack.length + " vs " + midBytes.length
 );
+const retryLargeBytes = randomBytes(1536 * 1024);
+const retryLargeUrl = new URL(BASE_TINY + "/");
+Object.entries({ action: "upload", token: DRIVE_TOKEN, id: "retry-large-upload", index: "0", total: String(retryLargeBytes.length), name: "retry-grande.mp4" }).forEach(([k, v]) => retryLargeUrl.searchParams.set(k, v));
+const retryLargeRequest = () => fetch(retryLargeUrl, { method: "POST", headers: { "Content-Type": "text/plain;charset=UTF-8" }, body: Buffer.from(retryLargeBytes).toString("base64") });
+const retryLargeFirst = await (await retryLargeRequest()).json();
+const retryLargeAgain = await (await retryLargeRequest()).json();
+check("Drive grande repetido devolve o mesmo ficheiro (retry idempotente)", retryLargeFirst.fileId === retryLargeAgain.fileId && retryLargeFirst.url === retryLargeAgain.url, JSON.stringify({ first: retryLargeFirst.fileId, retry: retryLargeAgain.fileId }));
 const msgTooBig = await expectThrow(
   "vídeo acima do limite do backend é recusado ANTES de enviar (sem 3 tentativas inúteis)",
   () => CCT.uploadVideo(new Blob([randomBytes(3 * 1024 * 1024)], { type: "video/mp4" }), "grande-demais.mp4")

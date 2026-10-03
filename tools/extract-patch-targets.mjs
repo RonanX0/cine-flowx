@@ -20,11 +20,12 @@ try {
   src = execFileSync("git", ["show", `${BASE_COMMIT}:index.html`], {
     cwd: root,
     maxBuffer: 1 << 28,
+    stdio: ["ignore", "pipe", "ignore"],
   }).toString("utf8");
   console.log(`Bundle original lido do git (${BASE_COMMIT.slice(0, 7)}), ${src.length} chars`);
 } catch {
   src = fs.readFileSync(path.join(root, "index.html"), "utf8");
-  console.log(`Git indisponível — a usar o index.html atual (${src.length} chars)`);
+  console.log(`Commit base indisponível — a usar o index.html atual (${src.length} chars)`);
 }
 const outDir = path.join(root, "tools", "patches");
 fs.mkdirSync(outDir, { recursive: true });

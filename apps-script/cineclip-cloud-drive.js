@@ -288,6 +288,10 @@ function uploadChunk_(p, bodyB64) {
   var props = PropertiesService.getScriptProperties();
   var state = readUploadState_(props, uploadId);
   var index = Number(p.index || 0);
+  if (state && state.done) {
+    if (Number(state.total) !== total) return { ok: false, error: "O ID do upload já foi concluído com outro tamanho." };
+    return { ok: true, done: true, provider: "google-drive", fileId: state.fileId, url: state.url, size: state.total, durable: true };
+  }
   var bytes = decodeBase64_(bodyB64);
 
   // Caso simples: vídeo pequeno, um único pedido
@@ -308,8 +312,6 @@ function uploadChunk_(p, bodyB64) {
     if (index !== 0) return { ok: false, error: "Upload não iniciado (esperava o bloco 0)." };
     var session = startResumableSession_(props, name, total);
     state = { name: name, total: total, session: session, sent: 0, at: Date.now() };
-  } else if (state.done) {
-    return { ok: true, done: true, provider: "google-drive", fileId: state.fileId, url: state.url, size: state.total, durable: true };
   }
 
   var start = state.sent;
