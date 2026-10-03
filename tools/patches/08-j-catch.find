@@ -1,0 +1,1 @@
+catch(rt){Ue&&je.error((rt==null?void 0:rt.message)||"Erro ao sincronizar na nuvem.")}finally{i(!1)}},[r,C]);

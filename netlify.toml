@@ -1,5 +1,7 @@
 [build]
-  command = "mkdir -p dist && (cp app-pronto.html dist/index.html 2>/dev/null || cp index.html dist/index.html)"
+  # O app é um build estático (index.html + a camada de nuvem nuvem-duravel.js).
+  # O nuvem-duravel.js TEM de ir para o dist, senão o R2 não funciona em produção.
+  command = "mkdir -p dist && (cp app-pronto.html dist/index.html 2>/dev/null || cp index.html dist/index.html) && cp nuvem-duravel.js dist/ && cp _redirects dist/ 2>/dev/null || true"
   publish = "dist"
 
 [[redirects]]
