@@ -1,0 +1,1 @@
+d.jsxs("div",{className:"space-y-2",children:[d.jsx(er,{htmlFor:"ovl",children:"Texto por cima do vídeo"}),d.jsx(dn,{id:"ovl",value:c.overlayText,onChange:f=>u({...c,overlayText:f.target.value})})]}),

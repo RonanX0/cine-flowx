@@ -6,7 +6,12 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
-    "preview": "vite preview --host 0.0.0.0"
+    "preview": "vite preview --host 0.0.0.0",
+    "nuvem": "node tools/dev-server.mjs",
+    "nuvem:presign": "PORT=4174 MOCK_MAX_DIRECT_MB=1 node tools/dev-server.mjs",
+    "nuvem:test": "node tools/test-cinecloud.mjs",
+    "patch:extrair": "node tools/extract-patch-targets.mjs",
+    "patch:nuvem": "node tools/apply-cloud-patch.mjs --verify"
   },
   "dependencies": {
     "@ffmpeg/ffmpeg": "^0.12.10",

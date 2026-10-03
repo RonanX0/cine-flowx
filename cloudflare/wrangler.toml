@@ -1,0 +1,26 @@
+name = "cineclip-cloud"
+main = "r2-worker.js"
+compatibility_date = "2025-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Cria o bucket antes do primeiro deploy:
+#   npx wrangler r2 bucket create cineclip-reels
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "cineclip-reels"
+
+[vars]
+# Opcional: domínio próprio para os links públicos dos vídeos.
+# Vazio = usa a URL do próprio Worker (https://cineclip-cloud.<conta>.workers.dev)
+PUBLIC_BASE = ""
+
+# Opcional (só é necessário para vídeos > 100 MB via URL pré-assinada):
+# R2_ACCOUNT_ID = "<id-da-conta-cloudflare>"
+# R2_BUCKET_NAME = "cineclip-reels"
+
+# O token é um SECRET, nunca fica aqui:
+#   npx wrangler secret put CINECLIP_TOKEN
+#   (sugestão: cc_r2_ + 32 caracteres aleatórios)
+# Para presign (>100 MB), acrescenta também:
+#   npx wrangler secret put R2_ACCESS_KEY_ID
+#   npx wrangler secret put R2_SECRET_ACCESS_KEY

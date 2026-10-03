@@ -1,0 +1,1 @@
+(N.videoBlob||N.remoteVideoUrl)&&d.jsx(Ae,{size:"sm",variant:"outline",onClick:()=>{N.videoBlob?Zn(N.videoBlob,N.videoFileName):N.remoteVideoUrl&&window.open(N.remoteVideoUrl,"_blank")},title:"Baixar vídeo .mp4 deste agendamento",children:d.jsx(Ko,{className:"h-3.5 w-3.5"})})

@@ -1,0 +1,268 @@
+function kS(r){return`// ============================================================================
+// ROBÔ 24H NA NUVEM — CINECLIP STUDIO (Posta com PC e Celular 100% Desligados!)
+// Conta vinculada: ${r.username}
+// ============================================================================
+// COMO ATIVAR EM 30 SEGUNDOS:
+// 1. Acesse https://script.google.com -> clique em "Novo projeto"
+// 2. Apague tudo, cole este código inteiro e clique no ícone de Disquete (Salvar)
+// 3. No menu superior (ao lado de "Executar"), selecione "ativarRobo24h" e clique em "Executar"
+// 4. Autorize a sua conta Google quando pedir. PRONTO! O robô vai rodar a cada 5 minutos, 24h por dia!
+// ============================================================================
+
+const VAULT_HASH = "${r.vaultHash}";
+const ENCRYPTION_KEY_B64 = "${r.encryptionKeyB64}";
+const KV_BASE = "https://keyvalue.immanuel.co/api/KeyVal";
+const KV_APP = "1729nxi0";
+const GRAPH_BASE = "https://graph.facebook.com/v22.0";
+
+function ativarRobo24h() {
+  const triggers = ScriptApp.getProjectTriggers();
+  for (let i = 0; i < triggers.length; i++) {
+    ScriptApp.deleteTrigger(triggers[i]);
+  }
+  ScriptApp.newTrigger("verificarEPostarReels")
+    .timeBased()
+    .everyMinutes(5)
+    .create();
+  Logger.log("✅ Robô 24h ATIVADO com sucesso! Ele vai checar sua fila a cada 5 minutos (24h/dia).");
+  verificarEPostarReels();
+}
+
+function verificarEPostarReels() {
+  const vault = lerCofreNuvem();
+  if (!vault || !Array.isArray(vault.queue)) {
+    Logger.log("Nenhum cofre v2 encontrado ainda. Clique no botão de nuvem no topo do CineClip primeiro.");
+    return;
+  }
+
+  const now = Date.now();
+  const accounts = Array.isArray(vault.accounts) ? vault.accounts : [];
+  let alterouFila = false;
+
+  for (let i = 0; i < vault.queue.length; i++) {
+    const item = vault.queue[i];
+    if (item.status !== "scheduled" || !item.remoteVideoUrl) continue;
+
+    const acc = accounts.find(a => a.id === (item.accountId || "acc_default")) || accounts[0];
+    if (!acc || acc.autoPilot === false || acc.mode === "browser_bot") continue;
+
+    const dueTime = item.scheduledTimestamp || new Date(item.scheduledAt + ":00-03:00").getTime();
+    if (now < dueTime) continue;
+
+    Logger.log("🚀 Horário atingido! Publicando Reel: " + item.title + " em " + acc.name);
+    try {
+      const coverUrl = item.poster
+        ? String(item.poster).trim().replace(/\\/t\\/p\\/w(92|154|185|300|342|500)\\//, "/t/p/w780/")
+        : "";
+
+      if (acc.mode === "webhook") {
+        if (!acc.webhookUrl) throw new Error("Webhook URL vazia na conta " + acc.name);
+        const res = UrlFetchApp.fetch(acc.webhookUrl.trim(), {
+          method: "post",
+          contentType: "application/json",
+          payload: JSON.stringify({
+            id: item.id,
+            accountId: acc.id,
+            accountName: acc.name,
+            title: item.title,
+            originalTitle: item.originalTitle,
+            year: item.year,
+            hookText: item.hookText,
+            caption: item.caption,
+            scheduledAt: item.scheduledAt,
+            platforms: item.platforms || ["instagram"],
+            videoUrl: item.remoteVideoUrl,
+            coverUrl: coverUrl,
+            poster: coverUrl,
+            videoFileName: item.videoFileName
+          }),
+          muteHttpExceptions: true
+        });
+        if (res.getResponseCode() >= 400) {
+          throw new Error("Webhook HTTP " + res.getResponseCode());
+        }
+        item.publishedId = "webhook_24h_" + Date.now();
+      } else {
+        if (!acc.igUserId || !acc.metaAccessToken) {
+          throw new Error("IG User ID ou Meta Token ausente na conta " + acc.name);
+        }
+        const pubId = publicarMetaGraphApi(acc, item, coverUrl);
+        item.publishedId = pubId;
+      }
+
+      item.status = "published";
+      item.updatedAt = Date.now();
+      item.lastStep = "Publicado pelo Robô 24h na Nuvem (PC/Celular desligado) ✔";
+      item.errorMsg = "";
+      alterouFila = true;
+      Logger.log("✅ Publicado com sucesso: " + item.title);
+      break; // Publica 1 por execução de 5 min para segurança
+    } catch (err) {
+      item.status = "error";
+      item.updatedAt = Date.now();
+      item.errorMsg = "Robô 24h: " + (err.message || String(err));
+      alterouFila = true;
+      Logger.log("❌ Erro ao publicar " + item.title + ": " + err);
+    }
+  }
+
+  if (alterouFila) {
+    vault.updatedAt = Date.now();
+    salvarCofreNuvem(vault);
+  }
+}
+
+function publicarMetaGraphApi(acc, item, coverUrl) {
+  const igId = encodeURIComponent(acc.igUserId.trim());
+  const token = acc.metaAccessToken.trim();
+
+  function criarContainer(usarCapa) {
+    const payload = {
+      media_type: "REELS",
+      video_url: item.remoteVideoUrl,
+      caption: item.caption || "",
+      share_to_feed: acc.shareToFeed !== false ? "true" : "false",
+      access_token: token
+    };
+    if (usarCapa && coverUrl) payload.cover_url = coverUrl;
+    const r = UrlFetchApp.fetch(GRAPH_BASE + "/" + igId + "/media", {
+      method: "post",
+      payload: payload,
+      muteHttpExceptions: true
+    });
+    return JSON.parse(r.getContentText());
+  }
+
+  let createJson = criarContainer(true);
+  if ((!createJson || createJson.error || !createJson.id) && coverUrl) {
+    createJson = criarContainer(false);
+  }
+  if (!createJson || createJson.error || !createJson.id) {
+    throw new Error((createJson && createJson.error && createJson.error.message) || "Falha ao criar container Meta");
+  }
+
+  const containerId = String(createJson.id);
+  for (let tent = 0; tent < 25; tent++) {
+    Utilities.sleep(6000);
+    const stRes = UrlFetchApp.fetch(
+      GRAPH_BASE + "/" + containerId + "?fields=status_code,status&access_token=" + encodeURIComponent(token),
+      { muteHttpExceptions: true }
+    );
+    const stJson = JSON.parse(stRes.getContentText());
+    if (stJson.status_code === "FINISHED") break;
+    if (stJson.status_code === "ERROR" || stJson.status_code === "EXPIRED") {
+      throw new Error("Meta rejeitou o processamento do vídeo: " + (stJson.status || stJson.status_code));
+    }
+  }
+
+  const pubRes = UrlFetchApp.fetch(GRAPH_BASE + "/" + igId + "/media_publish", {
+    method: "post",
+    payload: { creation_id: containerId, access_token: token },
+    muteHttpExceptions: true
+  });
+  const pubJson = JSON.parse(pubRes.getContentText());
+  if (!pubJson || pubJson.error || !pubJson.id) {
+    throw new Error((pubJson && pubJson.error && pubJson.error.message) || "Erro no media_publish");
+  }
+  return String(pubJson.id);
+}
+
+function cryptStream256(dataBytes, keyBytes, ivBytes) {
+  const s = new Uint32Array(8);
+  for (let i = 0; i < 8; i++) {
+    s[i] = ((keyBytes[i * 4] || 0) << 24) | ((keyBytes[i * 4 + 1] || 0) << 16) | ((keyBytes[i * 4 + 2] || 0) << 8) | (keyBytes[i * 4 + 3] || 0);
+    s[i] ^= (((ivBytes[(i * 2) % ivBytes.length] || 0) << 8) | (ivBytes[(i * 2 + 1) % ivBytes.length] || 0)) ^ Math.imul(i + 1, 0x9e3779b9);
+  }
+  function nextByte(idx) {
+    const k = idx & 7;
+    let x = (s[k] + 0x9e3779b9 + idx) | 0;
+    x ^= x << 13;
+    x ^= x >>> 17;
+    x ^= x << 5;
+    s[k] = x;
+    s[(k + 1) & 7] = (s[(k + 1) & 7] ^ Math.imul(x, 0x85ebca6b)) | 0;
+    return (x ^ (x >>> 8) ^ (x >>> 16) ^ (x >>> 24)) & 0xff;
+  }
+  for (let warm = 0; warm < 64; warm++) nextByte(warm);
+  const out = new Uint8Array(dataBytes.length);
+  for (let i = 0; i < dataBytes.length; i++) out[i] = dataBytes[i] ^ nextByte(i);
+  return out;
+}
+
+function b64ToUint8(b64) {
+  const arr = Utilities.base64Decode(b64);
+  const out = new Uint8Array(arr.length);
+  for (let i = 0; i < arr.length; i++) out[i] = (arr[i] + 256) & 255;
+  return out;
+}
+
+function uint8ToB64(u8) {
+  const arr = [];
+  for (let i = 0; i < u8.length; i++) arr.push(u8[i] > 127 ? u8[i] - 256 : u8[i]);
+  return Utilities.base64Encode(arr);
+}
+
+function lerCofreNuvem() {
+  const kvRes = UrlFetchApp.fetch(KV_BASE + "/GetValue/" + KV_APP + "/cc_" + VAULT_HASH + "?t=" + Date.now(), { muteHttpExceptions: true });
+  if (kvRes.getResponseCode() !== 200) return null;
+  const rawPointer = kvRes.getContentText().replace(/^"|"$/g, "").trim();
+  if (!rawPointer) return null;
+
+  const parts = rawPointer.split("__");
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i];
+    try {
+      let url = "";
+      if (p.indexOf("b_") === 0) url = "https://bytebin.lucko.me/" + p.slice(2) + "?t=" + Date.now();
+      else if (p.indexOf("k_") === 0) url = "https://kappa.lol/" + p.slice(2) + ".json?t=" + Date.now();
+      if (!url) continue;
+
+      const r = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+      if (r.getResponseCode() === 200) {
+        const parsed = JSON.parse(r.getContentText());
+        if (parsed.v !== 2) continue;
+        const keyBytes = b64ToUint8(ENCRYPTION_KEY_B64);
+        const iv = b64ToUint8(parsed.iv);
+        const ct = b64ToUint8(parsed.ct);
+        const plainBytes = cryptStream256(ct, keyBytes, iv);
+        const signed = [];
+        for (let j = 0; j < plainBytes.length; j++) signed.push(plainBytes[j] > 127 ? plainBytes[j] - 256 : plainBytes[j]);
+        const plainStr = Utilities.newBlob(signed).getDataAsString("UTF-8");
+        return JSON.parse(plainStr);
+      }
+    } catch (e) {}
+  }
+  return null;
+}
+
+function salvarCofreNuvem(vault) {
+  const jsonBytes = Utilities.newBlob(JSON.stringify(vault), "application/json").getBytes();
+  const plainU8 = new Uint8Array(jsonBytes.length);
+  for (let i = 0; i < jsonBytes.length; i++) plainU8[i] = (jsonBytes[i] + 256) & 255;
+
+  const iv = new Uint8Array(16);
+  for (let i = 0; i < 16; i++) iv[i] = Math.floor(Math.random() * 256);
+  const keyBytes = b64ToUint8(ENCRYPTION_KEY_B64);
+  const cipherU8 = cryptStream256(plainU8, keyBytes, iv);
+
+  const encryptedStr = JSON.stringify({
+    v: 2,
+    iv: uint8ToB64(iv),
+    ct: uint8ToB64(cipherU8)
+  });
+
+  const r = UrlFetchApp.fetch("https://bytebin.lucko.me/post", {
+    method: "post",
+    contentType: "application/json",
+    payload: encryptedStr,
+    muteHttpExceptions: true
+  });
+  const data = JSON.parse(r.getContentText());
+  if (data && data.key) {
+    UrlFetchApp.fetch(KV_BASE + "/UpdateValue/" + KV_APP + "/cc_" + VAULT_HASH + "/b_" + data.key + "?t=" + Date.now(), {
+      method: "post",
+      muteHttpExceptions: true
+    });
+  }
+}
+`}function ES(

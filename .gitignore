@@ -1,0 +1,15 @@
+# Mock local da nuvem (tools/dev-server.mjs) — nunca versionar os vídeos de teste
+.mock-cloud/
+
+# Dependências
+node_modules/
+
+# Sessão do robô Playwright (contém cookies de login da Meta!)
+sessao-meta/
+
+# Artefactos temporários das ferramentas
+tools/.syntax-*
+tools/.robo-24h-*
+
+# Sistema
+.DS_Store
