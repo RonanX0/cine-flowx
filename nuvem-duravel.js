@@ -109,10 +109,27 @@
     }
   }
 
+  /**
+   * Limpa o URL do Apps Script: espaços/zero-width colados da cópia e o "https://"
+   * que quase toda a gente se esquece de incluir. Sem isto o URL vira um caminho
+   * relativo do próprio site e o pedido morre com "Failed to fetch".
+   */
+  function normalizeScriptUrl(raw) {
+    var u = String(raw || "").trim().replace(/[\u200b-\u200f\ufeff]/g, "");
+    if (!u) return "";
+    u = u.replace(/\s+/g, "");
+    // "/drive-api" é um caminho relativo do próprio site (usado no preview local
+    // e em proxies) — deixa-se como está para o absolute() resolver contra a origem.
+    if (/^\/[^/]/.test(u)) return u;
+    if (/^\/\//.test(u)) u = "https:" + u;
+    else if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(u)) u = "https://" + u;
+    return u;
+  }
+
   function config() {
     var s = readSettings();
-    var r2Url = String(s.r2WorkerUrl || "").trim();
-    var driveUrl = String(s.driveScriptUrl || "").trim();
+    var r2Url = normalizeScriptUrl(s.r2WorkerUrl);
+    var driveUrl = normalizeScriptUrl(s.driveScriptUrl);
     return {
       workerUrl: r2Url ? absolute(r2Url) : "",
       token: String(s.r2Token || "").trim(),
@@ -297,6 +314,47 @@
     return null;
   }
 
+  /**
+   * Opções de fetch para o Apps Script:
+   *   • redirect:"follow" — o /exec responde 302 para script.googleusercontent.com
+   *     e é aí que vem o conteúdo (sem follow não se lê nada);
+   *   • credentials:"omit" — um pedido anónimo não choca com Access-Control-Allow-Origin:*;
+   *   • Content-Type text/plain (definido por quem chama) evita o preflight OPTIONS,
+   *     que o Apps Script não responde e o browser reporta como "Failed to fetch".
+   */
+  function driveFetchOpts(options) {
+    var o = options || {};
+    o.redirect = "follow";
+    o.cache = o.cache || "no-store";
+    o.credentials = "omit";
+    return o;
+  }
+
+  /** O app está dentro de um iframe? (aí o Google bloqueia cookies de terceiros) */
+  function inIframe() {
+    try {
+      return window.self !== window.top;
+    } catch (e) {
+      return true;
+    }
+  }
+
+  /**
+   * Quando o fetch falha, um pedido no-cors distingue as causas reais:
+   *   "blocked"     → o servidor respondeu, foi o browser que bloqueou a leitura
+   *   "unreachable" → nem em no-cors chega lá (URL errado, sem deploy, sem rede)
+   *   "reachable"   → chega e lê (falha intermitente)
+   */
+  async function probeBlocked(url) {
+    try {
+      var r = await fetch(url, driveFetchOpts({ mode: "no-cors" }));
+      if (r && (r.type === "opaque" || r.status === 0)) return "blocked";
+      return "reachable";
+    } catch (e) {
+      return "unreachable";
+    }
+  }
+
   function q(base, params) {
     var parts = [];
     Object.keys(params).forEach(function (k) {
@@ -465,7 +523,7 @@
       maxVideoBytes: 0
     };
     try {
-      var res = await fetchJson(q(cfg.driveUrl, { action: "health" }), { cache: "no-store" });
+      var res = await fetchJson(q(cfg.driveUrl, { action: "health" }), driveFetchOpts());
       var d = res.data || {};
       if (!d || d.ok !== true) return fallback;
       driveInfoCache = {
@@ -512,12 +570,11 @@
     }
 
     async function sendChunk(index, slice) {
-      var res = await fetch(chunkUrl(index), {
+      var res = await fetch(chunkUrl(index), driveFetchOpts({
         method: "POST",
         headers: { "Content-Type": "text/plain;charset=UTF-8" },
-        body: bufferToBase64(slice),
-        cache: "no-store"
-      });
+        body: bufferToBase64(slice)
+      }));
       var data = null;
       try {
         data = await res.json();
@@ -555,7 +612,7 @@
     }
 
     // Nenhum bloco confirmou o fim → pergunta ao backend
-    var done = await fetchJson(q(base, { action: "complete", token: cfg.driveToken, id: uploadId }), { cache: "no-store" });
+    var done = await fetchJson(q(base, { action: "complete", token: cfg.driveToken, id: uploadId }), driveFetchOpts());
     var dd = driveFailure(done.data);
     if (dd || !done.data || !done.data.url) {
       throw new Error("Drive: o upload terminou mas o ficheiro não ficou completo (" + (dd || "sem url") + ").");
@@ -737,7 +794,7 @@
         // troca action=video → action=videohead (resposta pequena, sem descarregar o vídeo)
         var headUrl = String(url).replace(/action=video(&|$)/, "action=videohead$1");
         if (headUrl === url && /[?&]id=/.test(url)) headUrl = q(cfg.driveUrl, { action: "videohead", id: (/[?&]id=([^&]+)/.exec(url) || [])[1] || "", token: cfg.driveToken });
-        var hres = await fetchJson(headUrl, { cache: "no-store" });
+        var hres = await fetchJson(headUrl, driveFetchOpts());
         var hf = driveFailure(hres.data);
         if (hf) {
           log("warn", "Link do Drive não confirmado: " + hf);
@@ -863,12 +920,11 @@
   }
 
   async function drivePutVault(cfg, vaultHash, cipher) {
-    var res = await fetch(q(cfg.driveUrl, { action: "vault", hash: vaultHash, token: cfg.driveToken }), {
+    var res = await fetch(q(cfg.driveUrl, { action: "vault", hash: vaultHash, token: cfg.driveToken }), driveFetchOpts({
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=UTF-8" },
-      body: cipher,
-      cache: "no-store"
-    });
+      body: cipher
+    }));
     var data = null;
     try {
       data = await res.json();
@@ -885,7 +941,7 @@
   }
 
   async function driveGetVaultCipher(cfg, vaultHash) {
-    var res = await fetchJson(q(cfg.driveUrl, { action: "vault", hash: vaultHash, token: cfg.driveToken }), { cache: "no-store" });
+    var res = await fetchJson(q(cfg.driveUrl, { action: "vault", hash: vaultHash, token: cfg.driveToken }), driveFetchOpts());
     var data = res.data;
     if (data && data.ok === false) {
       if (data.code === "not_found" || /não encontrado|not found/i.test(String(data.error || ""))) {
@@ -1118,8 +1174,27 @@
       out.message = "não configurado";
       return out;
     }
+    var healthUrl = q(cfg.driveUrl, { action: "health" });
+
+    // Erros de forma do URL, detetados antes de gastar um pedido.
+    // http:// só é aceite em localhost/origem própria (preview e testes locais) —
+    // um Apps Script a sério é sempre https://script.google.com/macros/s/…/exec
+    var urlLocal = /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/i.test(cfg.driveUrl) ||
+      sameTarget(cfg.driveUrl, window.location.origin);
+    if (!/^https:\/\//i.test(cfg.driveUrl) && !urlLocal) {
+      out.message = "o URL tem de começar por https:// (recebi: " + cfg.driveUrl.slice(0, 60) + "). Copia o URL da implantação em Implantar → Gerir implantações.";
+      return out;
+    }
+    if (/\/dev(\?|$)/.test(cfg.driveUrl)) {
+      out.message = "esse é o URL de desenvolvimento (/dev), que só funciona para ti com sessão iniciada. Usa o URL da implantação (/exec): Implantar → Gerir implantações → URL da app da Web.";
+      return out;
+    }
+    if (cfg.driveUrl.indexOf("script.google.com/macros/s/") < 0 && cfg.driveUrl.indexOf(window.location.hostname) < 0) {
+      log("warn", "URL do Apps Script invulgar (esperava script.google.com/macros/s/…): " + cfg.driveUrl);
+    }
+
     try {
-      var health = await fetchJson(q(cfg.driveUrl, { action: "health" }), { cache: "no-store" });
+      var health = await fetchJson(healthUrl, driveFetchOpts());
       var f = driveFailure(health.data);
       if (f || !health.data || health.data.ok !== true) {
         out.message = f || "respondeu mas não parece ser o backend CineClip (HTTP " + health.status + ")";
@@ -1127,7 +1202,23 @@
       }
       out.service = health.data.service;
     } catch (e) {
-      out.message = "inacessível: " + e.message + " (confirma que o deploy é 'App da Web' com acesso 'Qualquer pessoa')";
+      var why = await probeBlocked(healthUrl);
+      out.hint = why;
+      if (why === "blocked") {
+        out.message =
+          "o Apps Script RESPONDEU mas o browser bloqueou a leitura (CORS/cookies de terceiros). " +
+          (inIframe()
+            ? "Estás com o app dentro de um iframe (pré-visualização): abre-o num separador normal do browser e volta a testar."
+            : "Desativa extensões/bloqueadores para script.google.com, ou sai da navegação anónima, e volta a testar. Teste direto: " + healthUrl);
+      } else if (why === "unreachable") {
+        out.message =
+          "não consegui chegar ao URL (" + e.message + "). Faz este teste num separador: " + healthUrl +
+          " · se devolver JSON, o problema é só deste lado (browser/extensão); " +
+          "se pedir para iniciar sessão ou autorizar, corre a função setup() no editor do Apps Script, autoriza e cria uma NOVA VERSÃO da implantação; " +
+          "se der erro/404, confirma 'Quem pode aceder: Qualquer pessoa'.";
+      } else {
+        out.message = "inacessível: " + e.message + " (confirma que o deploy é 'App da Web' com acesso 'Qualquer pessoa')";
+      }
       return out;
     }
     if (!cfg.driveToken) {
@@ -1136,23 +1227,23 @@
     }
     try {
       var probeHash = "healthcheck";
-      var put = await fetchJson(q(cfg.driveUrl, { action: "vault", hash: probeHash, token: cfg.driveToken }), {
+      var put = await fetchJson(q(cfg.driveUrl, { action: "vault", hash: probeHash, token: cfg.driveToken }), driveFetchOpts({
         method: "POST",
         headers: { "Content-Type": "text/plain;charset=UTF-8" },
         body: JSON.stringify({ probe: now() })
-      });
+      }));
       var pf = driveFailure(put.data);
       if (pf) {
         out.message = pf;
         return out;
       }
-      var get = await fetchJson(q(cfg.driveUrl, { action: "vault", hash: probeHash, token: cfg.driveToken }), { cache: "no-store" });
+      var get = await fetchJson(q(cfg.driveUrl, { action: "vault", hash: probeHash, token: cfg.driveToken }), driveFetchOpts());
       var gf = driveFailure(get.data);
       if (gf || !get.data || !get.data.cipher) {
         out.message = gf || "gravei o cofre de teste mas não o consegui ler de volta";
         return out;
       }
-      var stats = await fetchJson(q(cfg.driveUrl, { action: "stats", token: cfg.driveToken }), { cache: "no-store" });
+      var stats = await fetchJson(q(cfg.driveUrl, { action: "stats", token: cfg.driveToken }), driveFetchOpts());
       if (!driveFailure(stats.data) && stats.data) out.stats = stats.data;
     } catch (e) {
       out.message = "erro no teste de escrita/leitura: " + e.message;

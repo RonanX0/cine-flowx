@@ -421,6 +421,25 @@ const msgTooBig = await expectThrow(
 check("o erro diz o tamanho e o limite", /3\.0 MB/.test(msgTooBig || "") && /no m[aá]ximo 2\.0 MB/i.test(msgTooBig || ""), msgTooBig);
 check("o erro aponta a solução (cortar o clipe ou usar o R2)", /R2|MAX_VIDEO_MB/i.test(msgTooBig || ""), msgTooBig);
 
+console.log("\nURL do Apps Script colado de qualquer maneira");
+const GAS = "https://script.google.com/macros/s/AKfycbTESTE123456789/exec";
+setSettings(sb, { driveScriptUrl: "script.google.com/macros/s/AKfycbTESTE123456789/exec", driveToken: DRIVE_TOKEN, cloudProvider: "drive" });
+check("sem https:// à frente → o app acrescenta (não vira caminho relativo)", CC.config().driveUrl === GAS, CC.config().driveUrl);
+setSettings(sb, { driveScriptUrl: "  " + GAS + "\n ", driveToken: "  " + DRIVE_TOKEN + "  ", cloudProvider: "drive" });
+check("espaços e quebras de linha da cópia são limpos", CC.config().driveUrl === GAS && CC.config().driveToken === DRIVE_TOKEN, JSON.stringify(CC.config().driveUrl));
+setSettings(sb, { driveScriptUrl: GAS.replace("/exec", "/dev"), driveToken: DRIVE_TOKEN, cloudProvider: "drive" });
+const hcDev = await CC.healthCheck();
+check("URL /dev é detetado e explicado (não dá um 'Failed to fetch' misterioso)", hcDev.ok === false && /\/dev/.test(hcDev.drive.message) && /\/exec/.test(hcDev.drive.message), hcDev.drive.message);
+setSettings(sb, { driveScriptUrl: "http://example.com/exec", driveToken: DRIVE_TOKEN, cloudProvider: "drive" });
+const hcHttp = await CC.healthCheck();
+check("http:// fora de localhost é recusado com explicação", hcHttp.ok === false && /https:\/\//.test(hcHttp.drive.message), hcHttp.drive.message);
+setSettings(sb, { driveScriptUrl: "/drive-api", driveToken: DRIVE_TOKEN, cloudProvider: "drive" });
+check("caminho relativo continua a resolver contra a origem (preview/mocks)", CC.config().driveUrl === BASE + "/drive-api", CC.config().driveUrl);
+setSettings(sb, { driveScriptUrl: "http://127.0.0.1:59999/drive-api", driveToken: DRIVE_TOKEN, cloudProvider: "drive" });
+const hcDown = await CC.healthCheck();
+check("backend em baixo → mensagem com o URL de teste direto e o que verificar", hcDown.ok === false && /action=health/.test(hcDown.drive.message) && /setup\(\)/.test(hcDown.drive.message), hcDown.drive.message.slice(0, 120));
+setSettings(sb, { driveScriptUrl: "/drive-api", driveToken: DRIVE_TOKEN, cloudProvider: "drive" });
+
 /* 11 — prioridade quando os dois estão configurados */
 console.log("\nPrioridade de providers (R2 + Drive configurados)");
 setSettings(sb, { r2WorkerUrl: "/cloud-api", r2Token: TOKEN, driveScriptUrl: "/drive-api", driveToken: DRIVE_TOKEN });
