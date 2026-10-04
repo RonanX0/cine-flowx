@@ -145,6 +145,11 @@ try {
   /* fica null */
 }
 check("vercel.json é JSON válido", !!vercel);
+check(
+  "Vercel executa o build estático e publica dist/",
+  !!vercel && vercel.buildCommand === "npm run build" && vercel.outputDirectory === "dist",
+  vercel ? `buildCommand=${vercel.buildCommand}; outputDirectory=${vercel.outputDirectory}` : "configuração inválida"
+);
 const cabecalhosVercel = (vercel && vercel.headers) || [];
 const regraVercel = cabecalhosVercel.find((h) => (h.headers || []).some((x) => x.key === "Cache-Control"));
 check("vercel.json declara Cache-Control", !!regraVercel, JSON.stringify(cabecalhosVercel));
