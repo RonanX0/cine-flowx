@@ -86,6 +86,17 @@ const P = {
     "overlayText:((ye=c.overlayText)==null?void 0:ye.trim())",
     "_g(h);"
   ),
+  // 🔒 Claims: reclama o item antes de publicar (impede publicar o mesmo Reel
+  // duas vezes quando o app e o Robô 24h correm ao mesmo tempo).
+  "19-claims-abrir": between(
+    'try{const q={...N,status:"publishing",lastStep:`A iniciar envio (${G.name})…`,errorMsg:void 0};',
+    "lastStep:`Publicado em ${G.name} com sucesso!`};"
+  ),
+  // 🔒 Claims: fecha o try interno e liberta a claim (sucesso ou erro).
+  "20-claims-libertar": between(
+    '}catch(q){const Z={...N,status:"error",errorMsg:',
+    "lastStep:void 0};"
+  ),
 };
 
 let failed = 0;

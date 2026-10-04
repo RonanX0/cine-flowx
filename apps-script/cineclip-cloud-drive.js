@@ -35,9 +35,20 @@
  *   - O link do vídeo (`?action=video&id=…`) não suporta HTTP Range: devolve o
  *     ficheiro completo. A Meta aceita; para verificar se o link está vivo usa
  *     `?action=videohead&id=…` (leve, devolve só o tamanho).
+ *
+ * 🔒 CLAIMS (anti-publicação duplicada)
+ *   O app (browser) e o Robô 24h podem estar acordados ao mesmo tempo. Sem uma
+ *   trava, ambos leem o cofre, ambos veem `status: "scheduled"` e ambos publicam
+ *   o mesmo Reel. Antes de publicar, cada lado reclama o item:
+ *     POST ?action=claim    body {"key":"…","owner":"…","ttlMs":600000}
+ *     POST ?action=release  body {"key":"…","owner":"…"}
+ *     GET  ?action=claims   (lista as reclamações ativas — diagnóstico)
+ *   A exclusão mútua é feita com LockService (o Apps Script não tem escrita
+ *   condicional) e as claims vivem nas Script Properties com TTL; expiram
+ *   sozinhas para uma execução interrompida nunca bloquear as publicações.
  */
 
-var VERSION = "1.0.0";
+var VERSION = "1.1.0";
 var FOLDER_NAME = "CineClip Cloud";
 var SINGLE_MAX_MB = 8;              // até aqui: 1 só pedido
 var CHUNK_RAW_BYTES = 2 * 1024 * 1024; // blocos de 2 MB (≈2,7 MB em base64)
@@ -101,6 +112,7 @@ function doGet(e) {
       if (authErr) out = authErr;
       else if (action === "vault") out = vaultGet_(p);
       else if (action === "stats") out = stats_();
+      else if (action === "claims") out = claimsList_();
       else if (action === "complete") out = uploadComplete_(p);
       else if (action === "abort") out = uploadAbort_(p);
       else out = { ok: false, error: "Ação desconhecida: " + action };
@@ -149,6 +161,8 @@ function doPost(e) {
 
     var body = e && e.postData && e.postData.contents ? e.postData.contents : "";
     if (action === "vault") return jsonOut_(vaultPut_(p, body));
+    if (action === "claim") return jsonOut_(claimAcquire_(p, body));
+    if (action === "release") return jsonOut_(claimRelease_(p, body));
     if (action === "upload") return jsonOut_(uploadChunk_(p, body));
     if (action === "complete") return jsonOut_(uploadComplete_(p));
     if (action === "abort") return jsonOut_(uploadAbort_(p));
@@ -173,6 +187,7 @@ function health_() {
     chunkBytes: CHUNK_RAW_BYTES,
     singleMaxBytes: SINGLE_MAX_MB * 1024 * 1024,
     maxVideoBytes: MAX_VIDEO_MB * 1024 * 1024,
+    claims: true,
     durable: true,
     time: new Date().toISOString()
   };
@@ -196,9 +211,185 @@ function stats_() {
     provider: "google-drive",
     videos: nVideos,
     vaults: countFiles_(vaults),
+    claims: countActiveClaims_(),
     bytes: bytes,
     version: VERSION
   };
+}
+
+/* ======================================== claims (anti-publicação dupla) */
+
+var CLAIM_TTL_DEFAULT_MS = 10 * 60 * 1000; // 10 min
+var CLAIM_TTL_MIN_MS = 60 * 1000;          // 1 min
+var CLAIM_TTL_MAX_MS = 60 * 60 * 1000;     // 1 h
+var CLAIM_PREFIX = "claim_";
+
+function clampClaimTtl_(value) {
+  var n = Number(value);
+  if (!isFinite(n) || n <= 0) return CLAIM_TTL_DEFAULT_MS;
+  return Math.min(Math.max(Math.round(n), CLAIM_TTL_MIN_MS), CLAIM_TTL_MAX_MS);
+}
+
+/** Nome da propriedade onde a claim vive (uma por item da fila). */
+function claimStorageKey_(key) {
+  return CLAIM_PREFIX + claimCleanKey_(key);
+}
+
+/** A chave como o cliente a conhece (sem o prefixo interno). */
+function claimCleanKey_(key) {
+  var clean = String(key || "").replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120);
+  if (!clean) throw new Error("Claim sem 'key' (identificador do item).");
+  return clean;
+}
+
+function readClaim_(props, storageKey) {
+  var raw = props.getProperty(storageKey);
+  if (!raw) return null;
+  try {
+    var claim = JSON.parse(raw);
+    return claim && claim.owner ? claim : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function claimHolder_(claim) {
+  return claim ? { owner: claim.owner, expiresAt: claim.expiresAt } : null;
+}
+
+function parseClaimBody_(body) {
+  try {
+    var parsed = JSON.parse(String(body || "").trim() || "{}");
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Reclama um item da fila. Devolve `acquired:false` (com o `holder`) quando
+ * outro dispositivo/Robô já o está a publicar — nesse caso NÃO se publica.
+ * O LockService garante a exclusão mútua entre execuções concorrentes.
+ */
+function claimAcquire_(p, body) {
+  var payload = parseClaimBody_(body);
+  if (!payload) return { ok: false, error: "JSON inválido no pedido de claim." };
+
+  var owner = String(payload.owner || p.owner || "").trim().slice(0, 120);
+  if (!owner) return { ok: false, error: "Claim sem 'owner' (quem está a publicar)." };
+
+  var storageKey;
+  var cleanKey;
+  try {
+    cleanKey = claimCleanKey_(payload.key || p.key);
+    storageKey = CLAIM_PREFIX + cleanKey;
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+  var ttlMs = clampClaimTtl_(payload.ttlMs || p.ttlMs);
+
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+  } catch (e) {
+    return { ok: false, error: "Não consegui obter o lock do Apps Script (tenta de novo)." };
+  }
+  try {
+    var props = PropertiesService.getScriptProperties();
+    var nowMs = Date.now();
+    var current = readClaim_(props, storageKey);
+
+    if (current && Number(current.expiresAt || 0) > nowMs && current.owner !== owner) {
+      return {
+        ok: true,
+        provider: "google-drive",
+        acquired: false,
+        holder: claimHolder_(current),
+        retryAfterMs: Number(current.expiresAt || 0) - nowMs
+      };
+    }
+
+    var claim = {
+      key: cleanKey,
+      owner: owner,
+      provider: "google-drive",
+      acquiredAt: nowMs,
+      expiresAt: nowMs + ttlMs
+    };
+    props.setProperty(storageKey, JSON.stringify(claim));
+    return { ok: true, provider: "google-drive", acquired: true, claim: claim };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function claimRelease_(p, body) {
+  var payload = parseClaimBody_(body);
+  if (!payload) return { ok: false, error: "JSON inválido no pedido de release." };
+
+  var owner = String(payload.owner || p.owner || "").trim().slice(0, 120);
+  if (!owner) return { ok: false, error: "Release sem 'owner'." };
+
+  var storageKey;
+  try {
+    storageKey = claimStorageKey_(payload.key || p.key);
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+  } catch (e) {
+    return { ok: false, error: "Não consegui obter o lock do Apps Script (tenta de novo)." };
+  }
+  try {
+    var props = PropertiesService.getScriptProperties();
+    var current = readClaim_(props, storageKey);
+    if (!current) return { ok: true, provider: "google-drive", released: false, note: "sem claim" };
+    if (current.owner !== owner) {
+      // Nunca apagar a claim de outro dono: seria publicar duas vezes.
+      return {
+        ok: true,
+        provider: "google-drive",
+        released: false,
+        holder: claimHolder_(current),
+        note: "claim de outro dono"
+      };
+    }
+    props.deleteProperty(storageKey);
+    return { ok: true, provider: "google-drive", released: true };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** Limpa claims expiradas e devolve as ativas (diagnóstico). */
+function claimsList_() {
+  var props = PropertiesService.getScriptProperties();
+  var keys = props.getKeys();
+  var nowMs = Date.now();
+  var active = [];
+  var cleaned = 0;
+  for (var i = 0; i < keys.length; i++) {
+    if (String(keys[i]).indexOf(CLAIM_PREFIX) !== 0) continue;
+    var claim = readClaim_(props, keys[i]);
+    if (claim && Number(claim.expiresAt || 0) > nowMs) {
+      active.push(claim);
+    } else {
+      props.deleteProperty(keys[i]);
+      cleaned++;
+    }
+  }
+  return { ok: true, provider: "google-drive", active: active, count: active.length, cleaned: cleaned };
+}
+
+function countActiveClaims_() {
+  try {
+    return claimsList_().count;
+  } catch (e) {
+    return 0;
+  }
 }
 
 /* ================================================================ cofre */

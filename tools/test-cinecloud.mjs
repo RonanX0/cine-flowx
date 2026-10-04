@@ -35,11 +35,15 @@ const TEST_PORT = Number(process.env.TEST_PORT || 4199);
 
 let BASE = process.env.CLOUD_BASE || "";
 let BASE_TINY = "";
+let BASE_OLD = process.env.CLOUD_BASE_OLD || "";
+let STORE_DIR = "";
 let server = null;
 let serverTiny = null;
+let serverOld = null;
 
 if (!BASE) {
   const storeDir = path.join(root, ".mock-cloud", "test");
+  STORE_DIR = storeDir;
   fs.rmSync(storeDir, { recursive: true, force: true });
   const handleCloud = createMockCloud({ storeDir });
   const handleDrive = createMockDrive({ storeDir });
@@ -79,6 +83,30 @@ if (!BASE) {
   });
   await new Promise((resolve) => serverTiny.listen(TEST_PORT + 1, "127.0.0.1", resolve));
   BASE_TINY = `http://127.0.0.1:${TEST_PORT + 1}`;
+
+  // "backend antigo": Worker/Apps Script SEM as rotas/ações de claims. Serve para
+  // provar que o cliente não bloqueia publicações quando o backend não foi atualizado.
+  const oldStore = path.join(storeDir, "old");
+  const handleCloudOld = createMockCloud({ storeDir: oldStore, noClaims: true });
+  const handleDriveOld = createMockDrive({ storeDir: oldStore, noClaims: true });
+  serverOld = http.createServer(async (req, res) => {
+    const pathname = new URL(req.url, `http://${req.headers.host || "localhost"}`).pathname;
+    try {
+      if (pathname === "/cloud-api" || pathname.startsWith("/cloud-api/")) {
+        return await handleCloudOld(req, res, pathname.slice("/cloud-api".length) || "/");
+      }
+      if (pathname === "/drive-api" || pathname.startsWith("/drive-api/")) {
+        return await handleDriveOld(req, res);
+      }
+    } catch (err) {
+      const status = err && err.status ? err.status : 500;
+      if (!res.headersSent) res.writeHead(status, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
+      return res.end(JSON.stringify({ ok: false, error: err && err.message ? err.message : "Erro interno" }));
+    }
+    res.writeHead(404).end("not found");
+  });
+  await new Promise((resolve) => serverOld.listen(TEST_PORT + 2, "127.0.0.1", resolve));
+  BASE_OLD = `http://127.0.0.1:${TEST_PORT + 2}`;
 }
 const BASE_SMALL = process.env.CLOUD_BASE_SMALL || BASE; // mesmo servidor: limite direto = 1 MB
 
@@ -580,7 +608,86 @@ const unreachableDrive = await CC.getVaultCipher("hash_drive_1");
 check("Apps Script em baixo → readFailed=true", unreachableDrive.readFailed === true && unreachableDrive.data === null, JSON.stringify(unreachableDrive.failures || null));
 await expectThrow("putVault com Apps Script em baixo lança erro", () => CC.putVault("hash_drive_1", cipher), "Drive");
 
-/* 14 — diagnóstico */
+/* 14 — 🔒 claims (anti-publicação duplicada) */
+console.log("\nClaims (anti-publicação duplicada)");
+const CFG_BOTH = { r2WorkerUrl: "/cloud-api", r2Token: TOKEN, driveScriptUrl: "/drive-api", driveToken: DRIVE_TOKEN };
+const CFG_DRIVE = { driveScriptUrl: "/drive-api", driveToken: DRIVE_TOKEN, cloudProvider: "drive" };
+setSettings(sb, CFG_BOTH);
+
+// Dois "aparelhos" com localStorage próprio ⇒ donos (owners) diferentes.
+const sb2 = createContext(BASE);
+const CC2 = sb2.window.CineCloud;
+setSettings(sb2, CFG_BOTH);
+
+const claimItem = { id: "reel_claims_1", title: "Reel de teste", vaultHash: "hash_claims" };
+
+const claimA = await CC.claimPublish(claimItem);
+check("claimPublish obtém a claim no R2", claimA.ok === true && claimA.provider === "r2" && !claimA.degraded, JSON.stringify({ ok: claimA.ok, provider: claimA.provider, degraded: claimA.degraded }));
+
+const claimB = await CC2.claimPublish(claimItem);
+check("segundo dispositivo é recusado (não publica duas vezes)", claimB.ok === false && claimB.reason === "held", JSON.stringify({ ok: claimB.ok, reason: claimB.reason }));
+check(
+  "a recusa diz quem está a publicar e até quando",
+  !!(claimB.holder && claimB.holder.owner && claimB.holder.expiresAt) &&
+    claimB.holder.owner === claimA.owner &&
+    claimB.holder.owner !== claimB.owner,
+  JSON.stringify({ holder: claimB.holder, quemReclamou: claimA.owner, quemFoiRecusado: claimB.owner })
+);
+check("claimSkipMessage explica o bloqueio", /já está a ser publicado/i.test(CC2.claimSkipMessage(claimB, claimItem.title)), CC2.claimSkipMessage(claimB, claimItem.title));
+
+const claimA2 = await CC.claimPublish(claimItem);
+check("o mesmo dono renova a claim (retry não se auto-bloqueia)", claimA2.ok === true && claimA2.provider === "r2", JSON.stringify({ ok: claimA2.ok, degraded: claimA2.degraded }));
+
+const actives = await CC.activeClaims();
+check("activeClaims() lista a claim ativa", actives.some((c) => c.key === claimA.key && c.owner === claimA.owner), JSON.stringify(actives));
+
+const relA = await CC.releaseClaim(claimA);
+check("releaseClaim liberta a claim", relA.ok === true && relA.released === true, JSON.stringify(relA));
+
+const claimB2 = await CC2.claimPublish(claimItem);
+check("libertada a claim, o outro aparelho publica", claimB2.ok === true && claimB2.provider === "r2" && !claimB2.degraded, JSON.stringify({ ok: claimB2.ok, degraded: claimB2.degraded }));
+
+const relWrong = await CC.releaseClaim({ ok: true, provider: "r2", key: claimB2.key, owner: claimA.owner });
+check("ninguém liberta a claim de outro dono", relWrong.ok === true && relWrong.released === false, JSON.stringify(relWrong));
+
+// Claim expirada: semeia-se uma claim já caduca no armazenamento do mock (esperar
+// 60 s pelo TTL mínimo tornaria o teste lento) e confirma-se o takeover.
+fs.writeFileSync(
+  path.join(STORE_DIR, "claims", `${claimB2.key}.json`),
+  JSON.stringify({ key: claimB2.key, owner: "dev_expirado", provider: "mock-r2", acquiredAt: Date.now() - 120000, expiresAt: Date.now() - 60000 })
+);
+const claimA3 = await CC.claimPublish(claimItem);
+check("claim expirada não bloqueia (takeover)", claimA3.ok === true && claimA3.provider === "r2", JSON.stringify({ ok: claimA3.ok, reason: claimA3.reason }));
+await CC.releaseClaim(claimA3);
+
+// Provider Drive (Apps Script)
+setSettings(sb, CFG_DRIVE);
+setSettings(sb2, CFG_DRIVE);
+const claimD = await CC.claimPublish({ id: "reel_claims_drive", vaultHash: "hash_claims" });
+check("claimPublish obtém a claim no Drive", claimD.ok === true && claimD.provider === "drive" && !claimD.degraded, JSON.stringify({ ok: claimD.ok, provider: claimD.provider, degraded: claimD.degraded }));
+const claimD2 = await CC2.claimPublish({ id: "reel_claims_drive", vaultHash: "hash_claims" });
+check("o Drive também bloqueia o segundo aparelho", claimD2.ok === false && claimD2.reason === "held", JSON.stringify({ ok: claimD2.ok, reason: claimD2.reason }));
+const relD = await CC.releaseClaim(claimD);
+check("releaseClaim funciona no Drive", relD.ok === true && relD.released === true, JSON.stringify(relD));
+
+// Modo compatível (o browser bloqueia a leitura do Apps Script → JSONP)
+const sb3 = createContext(BASE, { blockDrive: true, withDom: true });
+const CC3 = sb3.window.CineCloud;
+setSettings(sb3, CFG_DRIVE);
+const claimCompat = await CC3.claimPublish({ id: "reel_claims_compat", vaultHash: "hash_claims" });
+check("modo compatível (JSONP) também reclama o item", claimCompat.ok === true && claimCompat.provider === "drive" && !claimCompat.degraded, JSON.stringify({ ok: claimCompat.ok, provider: claimCompat.provider, degraded: claimCompat.degraded }));
+const claimCompatOther = await CC.claimPublish({ id: "reel_claims_compat", vaultHash: "hash_claims" });
+check("em modo compatível o segundo aparelho é recusado", claimCompatOther.ok === false && claimCompatOther.reason === "held", JSON.stringify({ ok: claimCompatOther.ok, reason: claimCompatOther.reason }));
+await CC3.releaseClaim(claimCompat);
+
+// Backend antigo (Worker/Apps Script sem claims) → degradação segura
+setSettings(sb, { r2WorkerUrl: BASE_OLD + "/cloud-api", r2Token: TOKEN, driveScriptUrl: BASE_OLD + "/drive-api", driveToken: DRIVE_TOKEN });
+const claimOld = await CC.claimPublish({ id: "reel_claims_antigo", vaultHash: "hash_claims" });
+check("backend sem claims → publica na mesma (degraded)", claimOld.ok === true && claimOld.degraded === true, JSON.stringify({ ok: claimOld.ok, degraded: claimOld.degraded }));
+const relOld = await CC.releaseClaim(claimOld);
+check("releaseClaim em modo degradado é no-op", relOld.ok === true && relOld.skipped === true, JSON.stringify(relOld));
+
+/* 15 — diagnóstico */
 console.log("\nDiagnóstico");
 setSettings(sb, { r2WorkerUrl: "/cloud-api", r2Token: TOKEN, driveScriptUrl: "/drive-api", driveToken: DRIVE_TOKEN });
 const diag = CC.diagnostics();
@@ -596,4 +703,5 @@ if (failures.length) {
 }
 if (server) server.close();
 if (serverTiny) serverTiny.close();
+if (serverOld) serverOld.close();
 process.exit(fail === 0 ? 0 : 1);
