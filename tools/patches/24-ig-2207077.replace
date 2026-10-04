@@ -1,0 +1,377 @@
+async function mS(r){return new Promise(o=>setTimeout(o,r))}
+/* ═══════════════════════════════════════════════════════════════════════════════════
+   CINECLIP · PUBLICAÇÃO DE REELS À PROVA DO ERRO 2207077 (Instagram / Meta)
+   ───────────────────────────────────────────────────────────────────────────────────
+   O Instagram devolve, na fase de processamento do container,
+   "Error: Media upload has failed with error code 2207077". Esse código não está na
+   tabela pública da Meta: ele aparece quando os servidores dela NÃO conseguem
+   descarregar/processar o ficheiro a partir do `video_url`. Gatilhos conhecidos:
+
+     • link de host temporário (uguu.se apaga em 3 h, litterbox em 12 h, kappa.lol
+       "pode remover a qualquer momento") já expirado quando o horário agendado chega;
+     • host que responde GET mas falha HEAD, ou que bloqueia o crawler da Meta;
+     • link que devolve HTML (login/erro/captcha) em vez dos bytes do .mp4;
+     • falha transitória do lado da Meta (o mesmo vídeo publica a seguir).
+
+   O que passou a ser feito:
+     1) ENVIO DIRETO (upload_type=resumable → rupload.facebook.com): o .mp4 sai do
+        browser direto para a Meta, sem depender de link público nenhum — é a correção
+        documentada para o 2207077 (a Meta deixa de "ir buscar" o ficheiro);
+     2) VIDEO_URL, com o link verificado antes de gastar a tentativa e renovado na
+        nuvem durável quando o link guardado é de host temporário, responde 404/410,
+        devolve HTML ou só serve por GET;
+     3) repetição com CONTAINER NOVO (o container que falhou fica inutilizável), até 3
+        tentativas, alternando as estratégias. Erros permanentes (formato 2207026,
+        limite de 50/24 h 2207042, conta restringida 2207050/2207051, token) não são
+        repetidos: saem logo com a dica certa para o utilizador.
+   ═══════════════════════════════════════════════════════════════════════════════════ */
+var IG_DICAS={
+  "2207077":"o Instagram não conseguiu descarregar/processar o vídeo a partir do link (host temporário já expirado, host que bloqueia a Meta ou link sem suporte a HEAD/Range).",
+  "2207052":"o Instagram não conseguiu descarregar o vídeo nem a capa — confirma que o link é público e responde video/mp4.",
+  "2207003":"o Instagram demorou demasiado a descarregar o vídeo (link lento ou instável).",
+  "2207026":"formato/codec recusado: o Reel tem de ser MP4 (H.264 + AAC), 9:16 e entre 3 s e 90 s.",
+  "2207042":"limite de publicações do Instagram atingido (50 em 24 h) — tenta mais tarde.",
+  "2207050":"a conta do Instagram está restringida — resolve isso na app do Instagram.",
+  "2207051":"o Instagram restringiu a atividade desta conta (possível spam) — abranda as publicações.",
+  "2207032":"instabilidade temporária da API do Instagram — vale a pena repetir.",
+  "2207053":"erro temporário no upload para o Instagram — vale a pena repetir.",
+  "2207001":"erro temporário no servidor do Instagram — vale a pena repetir."
+};
+var IG_PERMANENTES={"2207026":1,"2207042":1,"2207050":1,"2207051":1};
+function igNumeroErro(e){var m=/(?:error code|code)\D{0,6}(\d{4,})/i.exec(String((e&&e.message)||e||""));return m?m[1]:""}
+function igDica(cod){return cod&&IG_DICAS[cod]?IG_DICAS[cod]:""}
+function igErroTemporario(e){
+  if(e&&(e.igPermanente||e.igEtapa==="publish"||e.igEtapa==="processamento"))return!1;
+  var cod=igNumeroErro(e);
+  return cod?!IG_PERMANENTES[cod]:!0;
+}
+function igTamanho(bytes){
+  var b=Number(bytes)||0;
+  if(b<1048576)return(b/1024).toFixed(0)+" KB";
+  return(b/1048576).toFixed(1)+" MB";
+}
+function igTipoLink(url){
+  if(!url||!/^https?:/i.test(url))return "none";
+  try{if(window.CineCloud&&window.CineCloud.classifyUrl)return String(window.CineCloud.classifyUrl(url)||"unknown")}catch(e){}
+  return "unknown";
+}
+/* Sonda o link do vídeo como a Meta o vai buscar. Estados:
+     "ok"           → responde 2xx com o vídeo e aceita HEAD
+     "fraco"        → responde 2xx por GET mas recusa HEAD (gatilho conhecido do 2207077)
+     "morto"        → 404/410/403/400/401 ou devolve HTML
+     "inconclusivo" → CORS/rede/timeout (não prova que o link morreu) */
+async function igProbeVideoUrl(url){
+  var out={estado:"inconclusivo",status:0,tipo:"",ranges:!1,motivo:""};
+  if(!url||!/^https?:/i.test(url)){out.estado="morto";out.motivo="sem url";return out}
+  var ctl=null,to=null,parar=function(){if(to){clearTimeout(to);to=null}};
+  try{if(typeof AbortController!=="undefined")ctl=new AbortController()}catch(e){}
+  var pedir=async function(metodo,extra,limite){
+    var r={status:0,tipo:"",ranges:!1};
+    parar();
+    if(ctl)to=setTimeout(function(){try{ctl.abort()}catch(e){}},limite);
+    var res=await fetch(url,Object.assign({method:metodo,cache:"no-store",signal:ctl?ctl.signal:void 0},extra||{}));
+    r.status=res.status;
+    r.tipo=(res.headers.get("content-type")||"").toLowerCase();
+    r.ranges=(res.headers.get("accept-ranges")||"").toLowerCase().indexOf("bytes")>=0;
+    try{if(res.body&&res.body.cancel)res.body.cancel()}catch(e){}
+    return r;
+  };
+  var aplicar=function(r){out.status=r.status;out.tipo=r.tipo;out.ranges=r.ranges};
+  var bom=function(r){return r.status>=200&&r.status<300&&!/^text\/html/.test(r.tipo)};
+  var morto=function(r){return r.status===400||r.status===401||r.status===403||r.status===404||r.status===410||(r.status>=200&&r.status<300&&/^text\/html/.test(r.tipo))};
+  try{
+    var head=null,headFalhou=!1;
+    try{head=await pedir("HEAD",null,9000)}catch(e){headFalhou=!0}
+    var get=null;
+    if(!(head&&bom(head))){try{get=await pedir("GET",{headers:{Range:"bytes=0-1"}},12000)}catch(e){}}
+    if(head&&bom(head)){aplicar(head);out.estado="ok"}
+    else if(get&&bom(get)){aplicar(get);out.estado="fraco"}
+    else if(get&&morto(get)){aplicar(get);out.estado="morto"}
+    else if(head&&morto(head)){aplicar(head);out.estado="morto"}
+    else if(head){aplicar(head);out.estado="inconclusivo"}
+    else if(get){aplicar(get);out.estado="inconclusivo"}
+    else{out.estado="inconclusivo";out.motivo=headFalhou?"cors/rede":"timeout"}
+  }catch(e){
+    out.estado="inconclusivo";
+    out.motivo=(e&&e.name==="AbortError")?"timeout":"cors/rede";
+  }finally{parar()}
+  return out;
+}
+/* Erro devolvido pela Graph API (token, permissões, parâmetros). */
+function igErroGraph(res,prefixo){
+  var j=res&&res.json,e=j&&j.error;
+  var err=new Error((e&&e.message)||prefixo||"Erro na API do Instagram.");
+  err.igCode=(e&&e.code)?String(e.code):"";
+  err.igSubcode=(e&&e.error_subcode)?String(e.error_subcode):"";
+  err.igTrace=(e&&e.fbtrace_id)||"";
+  if(err.igCode==="190"||err.igCode==="102"||err.igCode==="10"||err.igCode==="200")err.igPermanente=!0;
+  return err;
+}
+async function igGraphPost(caminho,params){
+  var res;
+  try{
+    res=await fetch(Yo+caminho,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:params.toString()});
+  }catch(e){
+    var err=new Error("Sem ligação à API do Instagram ("+((e&&e.message)||e)+"). Verifica a internet e tenta outra vez.");
+    err.igRede=!0;throw err;
+  }
+  var json=null;
+  try{json=await res.json()}catch(e){}
+  return{ok:res.ok,status:res.status,json:json};
+}
+async function igGraphGet(caminho,params){
+  var res;
+  try{
+    res=await fetch(Yo+caminho+"?"+new URLSearchParams(params||{}).toString(),{cache:"no-store"});
+  }catch(e){
+    var err=new Error("Sem ligação à API do Instagram ("+((e&&e.message)||e)+").");
+    err.igRede=!0;throw err;
+  }
+  var json=null;
+  try{json=await res.json()}catch(e){}
+  return{ok:res.ok,status:res.status,json:json};
+}
+/* Cria o container REELS (com a capa; se o Instagram recusar a capa, tenta sem ela). */
+async function igCriarContainer(u,f,base,capa){
+  var tentar=async function(comCapa){
+    var p=new URLSearchParams(base);
+    if(comCapa&&capa)p.set("cover_url",capa);
+    return await igGraphPost("/"+encodeURIComponent(u)+"/media",p);
+  };
+  var res=await tentar(!!capa);
+  if((!res.ok||!res.json||res.json.error||!res.json.id)&&capa)res=await tentar(!1);
+  return res;
+}
+/* Estratégia 1: envio direto (upload_type=resumable). O ficheiro sai do browser para a
+   Meta; não há video_url, logo a Meta não tem o que "ir buscar" — mata o 2207077. */
+async function igContainerDireto(u,f,r,o,onStep){
+  onStep&&onStep("A abrir a sessão de envio direto no Instagram (sem link público)…");
+  var base={media_type:"REELS",upload_type:"resumable",caption:r.caption||"",share_to_feed:(o&&o.shareToFeed===!1)?"false":"true",access_token:f};
+  var res=await igCriarContainer(u,f,base,hS(r.poster));
+  if(!res.ok||!res.json||res.json.error||!res.json.id)throw igErroGraph(res,"Falha ao abrir a sessão de envio direto na API do Instagram.");
+  var id=String(res.json.id);
+  var uri=(res.json.uri&&String(res.json.uri))||("https://rupload.facebook.com/ig-api-upload/v21.0/"+encodeURIComponent(id));
+  onStep&&onStep("A enviar o .mp4 direto para o Instagram ("+igTamanho(r.videoBlob.size)+") — sem link público…");
+  var up=await igUploadBinario(uri,f,r.videoBlob,function(pct){onStep&&onStep("A enviar o .mp4 direto para o Instagram… "+pct+"%")});
+  if(up.status<200||up.status>=300){
+    var err=new Error("A Meta recusou o envio direto do .mp4 (HTTP "+up.status+" "+String(up.text||"").slice(0,160)+").");
+    err.igRede=!0;throw err;
+  }
+  return id;
+}
+/* Envio binário com XHR (dá progresso e timeout próprios). Se o navegador bloquear o
+   pedido (rede/CORS) a Promise rejeita e a publicação cai para a estratégia do link. */
+function igUploadBinario(url,token,blob,onProgress){
+  return new Promise(function(resolve,reject){
+    var xhr;
+    try{xhr=new XMLHttpRequest()}catch(e){reject(new Error("Este navegador não suporta o envio direto (XMLHttpRequest indisponível)."));return}
+    xhr.open("POST",url,!0);
+    xhr.timeout=15*60*1000;
+    try{
+      xhr.setRequestHeader("Authorization","OAuth "+token);
+      xhr.setRequestHeader("offset","0");
+      xhr.setRequestHeader("file_size",String(blob.size));
+    }catch(e){}
+    if(onProgress&&xhr.upload){xhr.upload.onprogress=function(ev){if(ev&&ev.lengthComputable&&ev.total>0)onProgress(Math.round(ev.loaded*100/ev.total))}}
+    xhr.onload=function(){resolve({status:xhr.status,text:xhr.responseText||""})};
+    xhr.onerror=function(){var e=new Error("O envio direto para o Instagram falhou (rede ou bloqueio CORS do navegador).");e.igRede=!0;reject(e)};
+    xhr.ontimeout=function(){var e=new Error("O envio direto para o Instagram excedeu o tempo limite.");e.igRede=!0;reject(e)};
+    xhr.onabort=function(){var e=new Error("O envio direto para o Instagram foi cancelado.");e.igRede=!0;reject(e)};
+    try{xhr.send(blob)}catch(e){var err=new Error("O navegador recusou iniciar o envio direto: "+((e&&e.message)||e));err.igRede=!0;reject(err)}
+  });
+}
+/* Estratégia 2: video_url (a Meta vai buscar o ficheiro ao link público). */
+async function igContainerLink(u,f,r,o,link){
+  var base={media_type:"REELS",video_url:link,caption:r.caption||"",share_to_feed:(o&&o.shareToFeed===!1)?"false":"true",access_token:f};
+  var res=await igCriarContainer(u,f,base,hS(r.poster));
+  if(!res.ok||!res.json||res.json.error||!res.json.id)throw igErroGraph(res,"Falha ao criar container de Reels na API do Instagram.");
+  return String(res.json.id);
+}
+/* Espera o processamento (status_code) e publica. Mantém a assinatura antiga:
+   pS(igUserId, containerId, accessToken, onStep). */
+async function pS(u,o,a,i){
+  var inicio=Date.now(),n=0;
+  for(;;){
+    n++;
+    var st=await igGraphGet("/"+encodeURIComponent(o),{fields:"status_code,status",access_token:a});
+    if(!st.ok||!st.json)throw igErroGraph(st,"Falha ao consultar o estado do vídeo no Instagram.");
+    var codigo=st.json.status_code;
+    if(codigo==="FINISHED")break;
+    if(codigo==="ERROR"||codigo==="EXPIRED"){
+      var detalhe=String(st.json.status||codigo);
+      var numero=(/(\d{4,})/.exec(detalhe)||[])[1]||"";
+      var dica=igDica(numero);
+      var erro=new Error("O Instagram recusou o processamento do vídeo"+(numero?(" (código "+numero+")"):"")+": "+detalhe+(dica?(" · Dica: "+dica):""));
+      erro.igCode=numero;erro.igStatus=detalhe;
+      throw erro;
+    }
+    if(Date.now()-inicio>360000){
+      var t=new Error("Tempo limite excedido enquanto o Instagram processava o vídeo (6 minutos). O container pode ainda ficar pronto — tenta publicar outra vez dentro de alguns minutos.");
+      t.igEtapa="processamento";throw t;
+    }
+    var passados=Math.round((Date.now()-inicio)/1000);
+    i&&i("O Instagram está a processar o vídeo ("+passados+"s)…");
+    await mS(n<=6?5000:(n<=14?10000:15000));
+  }
+  i&&i("A publicar Reels no perfil do Instagram…");
+  var pub=null,ultimo=null;
+  for(var tentativa=1;tentativa<=4;tentativa++){
+    var res=null;
+    try{
+      res=await igGraphPost("/"+encodeURIComponent(u)+"/media_publish",new URLSearchParams({creation_id:o,access_token:a}));
+    }catch(e){
+      /* Sem resposta da Meta não se sabe se publicou: repetir podia duplicar o Reel. */
+      if(e&&e.igRede)e.igEtapa="publish";
+      throw e;
+    }
+    if(res.ok&&res.json&&res.json.id&&!res.json.error){pub=res;break}
+    ultimo=igErroGraph(res,"Falha ao finalizar publicação do Reels.");
+    var codErro=(res.json&&res.json.error&&res.json.error.code)?String(res.json.error.code):"";
+    if(tentativa===4||IG_PERMANENTES[codErro]||codErro==="190"||codErro==="10"||codErro==="200")break;
+    await mS(4000*tentativa);
+  }
+  var j=pub&&pub.json;
+  if(!pub||!pub.ok||!j||j.error||!j.id){
+    if(ultimo){ultimo.igEtapa="publish";throw ultimo}
+    throw new Error("Falha ao finalizar publicação do Reels.");
+  }
+  var id=String(j.id),link="";
+  try{
+    var g=await igGraphGet("/"+encodeURIComponent(id),{fields:"permalink",access_token:a});
+    link=(g.json&&g.json.permalink)||"";
+  }catch(e){}
+  return{publishedId:id,publishedUrl:link};
+}
+async function gS(r,o,a){
+  if(!r.videoBlob&&!r.remoteVideoUrl)throw new Error("Este item não possui o ficheiro de vídeo (.mp4) anexado nem URL na nuvem.");
+  const i=hS(r.poster),temBlob=!!r.videoBlob;
+  /* Envia o .mp4 para a nuvem (Drive/R2 ou, em último recurso, host temporário). */
+  const enviarArquivo=async function(motivo){
+    if(!temBlob)return{url:"",erro:"Este aparelho não tem o ficheiro .mp4 deste Reel."};
+    a&&a(motivo||"A enviar ficheiro .mp4 direto da tua internet…");
+    try{
+      const url=await bg(r.videoBlob,r.videoFileName,function(p){a&&a(typeof p==="number"?("A enviar o .mp4 para a nuvem… "+Math.round(p)+"%"):p)});
+      if(!url)return{url:"",erro:"A nuvem não devolveu um link para o vídeo."};
+      return{url:String(url),erro:""};
+    }catch(e){return{url:"",erro:(e&&e.message)||String(e)}}
+  };
+  if(o.mode==="webhook"){
+    const w=o.webhookUrl.trim();
+    if(!w)throw new Error("Configura a URL do Webhook (Make / n8n) antes de enviar.");
+    let url=(r.remoteVideoUrl&&/^https?:/i.test(r.remoteVideoUrl))?r.remoteVideoUrl:"";
+    if(!url){const env=await enviarArquivo("");if(!env.url)throw new Error("Não foi possível gerar link direto (.mp4) do vídeo: "+env.erro);url=env.url}
+    a&&a(i?"A acionar Webhook com vídeo + pôster oficial de capa…":"A acionar Webhook (Make.com / n8n)…");
+    const k=await fetch(w,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:r.id,accountId:o.id||r.accountId||"acc_default",accountName:o.name||"@conta.principal",title:r.title,originalTitle:r.originalTitle,year:r.year,hookText:r.hookText,caption:r.caption,scheduledAt:r.scheduledAt,platforms:r.platforms,videoUrl:url,coverUrl:i||"",poster:i||"",videoFileName:r.videoFileName})});
+    if(!k.ok)throw new Error("O Webhook respondeu com erro HTTP "+k.status+".");
+    return{publishedId:"webhook_"+Date.now(),publishedUrl:url,remoteVideoUrl:url};
+  }
+  const u=o.igUserId.trim(),f=o.metaAccessToken.trim();
+  if(!u||!f)throw new Error("Configura o ID da Conta Instagram e o Access Token da Meta (ou muda para Webhook / Meta Business Suite).");
+  if(temBlob&&r.videoBlob.size>300*1048576)throw new Error("O ficheiro tem "+igTamanho(r.videoBlob.size)+" e o Instagram aceita no máximo 300 MB por Reel.");
+  let link=(r.remoteVideoUrl&&/^https?:/i.test(r.remoteVideoUrl))?r.remoteVideoUrl:"";
+  let linkFresco=!1,linkSuspeito=!1;
+  const usarLink=function(url){
+    if(!url)return;
+    link=url;r.remoteVideoUrl=url;
+    try{if(window.CineCloud&&window.CineCloud.classifyUrl)r.cloudProvider=window.CineCloud.classifyUrl(url)}catch(e){}
+  };
+  /* O link guardado ainda serve? Links de host temporário expiram em 3–72 h: se o
+     horário agendado chegou depois, a Meta leva 404 e devolve o 2207077. */
+  if(link){
+    const tipo=igTipoLink(link);
+    if(tipo==="temp"){
+      linkSuspeito=!0;
+      if(temBlob){
+        a&&a("O link guardado é de um host temporário (pode já ter expirado) — a enviar o .mp4 para a nuvem durável…");
+        const env=await enviarArquivo("A renovar o link do vídeo na nuvem durável…");
+        if(env.url){usarLink(env.url);linkFresco=!0;linkSuspeito=!1}
+        else a&&a("Não foi possível renovar o link ("+env.erro+") — a tentar com o link atual.");
+      }else{
+        a&&a("⚠️ Este Reel só tem um link de host temporário (pode já ter expirado). Se o Instagram recusar, reimporta o .mp4 neste aparelho.");
+      }
+    }else if(tipo==="unknown"||tipo==="local"){
+      const sonda=await igProbeVideoUrl(link);
+      if(sonda.estado==="morto"){
+        linkSuspeito=!0;
+        if(temBlob){
+          a&&a("O link guardado já não devolve o vídeo (HTTP "+sonda.status+") — a enviar o .mp4 de novo…");
+          const env=await enviarArquivo("A refazer o link do vídeo…");
+          if(env.url){usarLink(env.url);linkFresco=!0;linkSuspeito=!1}
+          else throw new Error("O link do vídeo já não existe (HTTP "+sonda.status+") e não foi possível reenviá-lo ("+env.erro+"). Reimporta o .mp4 neste aparelho antes de publicar.");
+        }else{
+          throw new Error("O link do vídeo já não existe (HTTP "+sonda.status+"). Reimporta o .mp4 neste aparelho e volta a publicar.");
+        }
+      }else if(sonda.estado==="fraco"&&temBlob){
+        linkSuspeito=!0;
+        a&&a("O host do link recusa pedidos HEAD (causa conhecida do erro 2207077) — a enviar o .mp4 de novo…");
+        const env=await enviarArquivo("A refazer o link do vídeo num host compatível…");
+        if(env.url){usarLink(env.url);linkFresco=!0;linkSuspeito=!1}
+      }
+    }
+  }
+  if(!link&&!temBlob)throw new Error("Este Reel não tem ficheiro .mp4 neste aparelho nem link na nuvem. Reimporta o .mp4 para o publicares.");
+  /* Ordem das tentativas: o envio direto evita a busca da Meta (logo, o 2207077) e é
+     a primeira escolha quando ainda não há link ou quando o link guardado é suspeito. */
+  const preferirDireto=temBlob&&(!link||linkSuspeito);
+  const plano=temBlob?(preferirDireto?["direto","link","link"]:["link","direto","link"]):["link","link"];
+  /* As tentativas podem demorar (envio + processamento): renova a claim antes de cada
+     uma para o TTL de 10 min não expirar a meio e outro aparelho/Robô publicar o mesmo
+     Reel em paralelo. Devolve false se a claim já for de outro dono. */
+  const renovarClaim=async function(){
+    try{
+      if(!window.CineCloud||typeof window.CineCloud.claimPublish!=="function")return true;
+      const c=await window.CineCloud.claimPublish(r,{ttlMs:30*60*1000});
+      return !(c&&c.ok===!1);
+    }catch(e){return true}
+  };
+  let ultimoErro=null,tentativasFeitas=0;
+  for(let t=0;t<plano.length;t++){
+    const modo=plano[t];
+    if(!(await renovarClaim())){
+      const erroClaim=new Error("Outro aparelho ou o Robô 24h está a publicar este Reel agora (proteção anti-duplicado). Tenta novamente dentro de alguns minutos.");
+      erroClaim.igPermanente=!0;ultimoErro=erroClaim;break;
+    }
+    tentativasFeitas++;
+    try{
+      let containerId="";
+      if(modo==="direto"){
+        containerId=await igContainerDireto(u,f,r,o,a);
+      }else{
+        if(t>0&&temBlob&&!linkFresco){
+          /* A tentativa anterior falhou a descarregar o ficheiro: link novo, mesmo que
+             o antigo fosse de nuvem durável (pode ter sido apagado/movido entretanto). */
+          a&&a("A repetir com um link novo — a enviar o .mp4 para a nuvem…");
+          const env=await enviarArquivo("A refazer o link do vídeo…");
+          if(env.url){usarLink(env.url);linkFresco=!0}
+        }
+        if(!link){
+          const env=await enviarArquivo("A enviar ficheiro .mp4 direto da tua internet…");
+          if(!env.url)throw new Error("Não foi possível gerar link direto (.mp4) do vídeo para o Instagram: "+env.erro);
+          usarLink(env.url);linkFresco=!0;
+        }
+        a&&a(i?"A criar container do Reels no Instagram (com Pôster Oficial de Capa)…":"A criar container do Reels no Instagram…");
+        containerId=await igContainerLink(u,f,r,o,link);
+      }
+      const res=await pS(u,containerId,f,a);
+      res.remoteVideoUrl=link||r.remoteVideoUrl;
+      return res;
+    }catch(e){
+      ultimoErro=e;
+      const cod=igNumeroErro(e);
+      if(!igErroTemporario(e))break;
+      if(t<plano.length-1){
+        a&&a("O Instagram recusou esta tentativa"+(cod?(" (erro "+cod+")"):"")+" — a repetir com um container novo ("+(t+2)+"/"+plano.length+")…");
+        await mS(2000+3000*t);
+      }
+    }
+  }
+  const codigo=igNumeroErro(ultimoErro);
+  const dica=igDica(codigo);
+  const base=(ultimoErro&&ultimoErro.message)||"Falha ao publicar o Reels no Instagram.";
+  const erro=new Error(base+((dica&&!/Dica:/.test(base))?(" · Dica: "+dica):"")+(tentativasFeitas>1?(" (após "+tentativasFeitas+" tentativas)"):""));
+  erro.igCode=codigo;
+  erro.igTentativas=tentativasFeitas;
+  if(ultimoErro&&ultimoErro.igEtapa)erro.igEtapa=ultimoErro.igEtapa;
+  throw erro;
+}
+/* ==CINECLIP-IG-FIM== */

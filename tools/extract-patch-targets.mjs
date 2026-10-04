@@ -100,6 +100,9 @@ const P = {
     '}catch(q){const Z={...N,status:"error",errorMsg:',
     "lastStep:void 0};"
   ),
+  // 🎬 Publicação de Reels à prova do erro 2207077: envio direto (resumable), link
+  // verificado/renovado e repetição com container novo.
+  "24-ig-2207077": between("async function mS(r){", "return await pS(u,String(x.id),f,a)}"),
 };
 
 let failed = 0;

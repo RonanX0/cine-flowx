@@ -52,6 +52,46 @@ Reels ou usar as setas ↑↓ — os horários ficam fixos e os Reels trocam de 
 Para o alterar, edita **só** `tools/agendador-ui/agendador.template.js` (código legível)
 e `tools/agendador-ui/agendador.css`, e corre `npm run patch:agendador`.
 
+## 🎬 Erro 2207077 no Instagram (`Media upload has failed`)
+
+> `Erro em @conta: O Instagram recusou o processamento do vídeo: Error: Media upload has failed with error code 2207077`
+
+Esse código não está na tabela pública da Meta: aparece quando os servidores dela **não
+conseguem descarregar/processar o `.mp4`** a partir do `video_url` que o app lhe entrega.
+Os gatilhos conhecidos são links de hosts **temporários** (`uguu.se` 3 h, `litterbox` 12 h,
+`kappa.lol`) já expirados quando o horário agendado chegou, hosts que respondem `GET` mas
+falham `HEAD` (ou bloqueiam o crawler da Meta), respostas em HTML (login/captcha) em vez dos
+bytes do vídeo e falhas transitórias da própria Meta.
+
+A partir do patch **`24-ig-2207077`** a publicação do Reel deixa de ter um único caminho:
+
+1. **Envio direto** (`POST /media?upload_type=resumable` → `rupload.facebook.com`, com
+   `offset`/`file_size` e progresso): o `.mp4` sai do browser direto para a Meta, **sem link
+   público nenhum** — é a correção documentada para o 2207077, porque a Meta deixa de "ir
+   buscar" o ficheiro. Se o navegador bloquear o pedido (rede/CORS), cai para o passo 2.
+2. **`video_url` verificado**: antes de gastar a tentativa o link guardado é sondado
+   (`HEAD` + `GET Range: bytes=0-1`); links de host temporário, links `404/410`, respostas em
+   HTML ou hosts que só servem por `GET` são substituídos por um envio novo à nuvem durável.
+3. **Repetição com container novo** (o container que falhou fica inutilizável), até 3
+   tentativas, alternando as duas estratégias. Erros permanentes — formato (`2207026`),
+   limite de 50/24 h (`2207042`), conta restringida (`2207050`/`2207051`), token — não são
+   repetidos: a mensagem sai logo com a dica certa. Um `media_publish` sem resposta **não**
+   é repetido automaticamente, para não duplicar o Reel.
+
+O erro mostrado na interface passa a trazer o código e a dica (ex.: *"O Instagram recusou o
+processamento do vídeo (código 2207077): … · Dica: … (após 3 tentativas)"*), e um Reel que
+ficou em erro pode ser reenviado pelo **Publicar agora** do Agendador.
+
+Cada tentativa **renova a claim anti-duplicado** (TTL de 30 min) para o TTL de 10 min do
+Worker/Apps Script não expirar a meio de um envio longo — e se a claim passar a ser de
+outro aparelho/Robô, a publicação para em vez de arriscar um Reel repetido.
+
+Testar tudo isto sem conta Meta (Graph API, `rupload.facebook.com` e XHR simulados):
+
+```bash
+npm run ig:test   # 46 verificações: envio direto, fallback, retries, links, claims, dicas
+```
+
 ## ☁️ Nuvem durável (Google Drive **ou** Cloudflare R2)
 
 Os Reels agendados desapareciam da "nuvem" porque o `.mp4` era enviado para hosts gratuitos
