@@ -7,7 +7,7 @@
     "dev": "vite --host 0.0.0.0",
     "build": "node tools/build-static.mjs",
     "preview": "vite preview --host 0.0.0.0",
-    "test": "npm run nuvem:test && npm run worker:test && node tools/test-nvidia-proxy.mjs && node tools/test-ig-publish.mjs && node tools/test-build-cache.mjs",
+    "test": "npm run nuvem:test && npm run worker:test && node tools/test-nvidia-proxy.mjs && node tools/test-ig-publish.mjs && node tools/test-agendador-publish.mjs && node tools/test-build-cache.mjs",
     "build:test": "node tools/test-build-cache.mjs",
     "ig:test": "node tools/test-ig-publish.mjs",
     "nuvem": "node tools/dev-server.mjs",
@@ -20,7 +20,8 @@
     "patch:base": "node tools/restore-base.mjs",
     "patch:full": "node tools/restore-base.mjs && node tools/extract-patch-targets.mjs && node tools/apply-cloud-patch.mjs --verify",
     "worker:test": "node tools/test-r2-worker.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "agendador:test": "node tools/test-agendador-publish.mjs"
   },
   "dependencies": {
     "@ffmpeg/ffmpeg": "^0.12.10",
@@ -45,5 +46,9 @@
     "tailwindcss": "^4.0.9",
     "typescript": "^5.7.3",
     "vite": "^6.2.0"
+  },
+  "devDependencies": {
+    "jsdom": "^26.1.0",
+    "fake-indexeddb": "^6.2.2"
   }
 }
