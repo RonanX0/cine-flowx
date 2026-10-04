@@ -775,19 +775,24 @@ async function gS(r,o,a){
   const plano=temBlob?(preferirDireto?["direto","link","link"]:["link","direto","link"]):["link","link"];
   /* As tentativas podem demorar (envio + processamento): renova a claim antes de cada
      uma para o TTL de 10 min não expirar a meio e outro aparelho/Robô publicar o mesmo
-     Reel em paralelo. Devolve false se a claim já for de outro dono. */
+     Reel em paralelo. Devolve a claim; `ok:false` = é de outro dono (não publicar). */
   const renovarClaim=async function(){
     try{
-      if(!window.CineCloud||typeof window.CineCloud.claimPublish!=="function")return true;
+      if(!window.CineCloud||typeof window.CineCloud.claimPublish!=="function")return{ok:!0};
       const c=await window.CineCloud.claimPublish(r,{ttlMs:30*60*1000});
-      return !(c&&c.ok===!1);
-    }catch(e){return true}
+      return c||{ok:!0};
+    }catch(e){return{ok:!0}}
   };
   let ultimoErro=null,tentativasFeitas=0;
   for(let t=0;t<plano.length;t++){
     const modo=plano[t];
-    if(!(await renovarClaim())){
-      const erroClaim=new Error("Outro aparelho ou o Robô 24h está a publicar este Reel agora (proteção anti-duplicado). Tenta novamente dentro de alguns minutos.");
+    const renovacao=await renovarClaim();
+    if(renovacao&&renovacao.ok===!1){
+      /* A claim é de outro dono: diz QUEM a tem e ATÉ QUANDO, para o utilizador
+         saber quando voltar a tentar (antes só dizia "tenta novamente"). */
+      let detalhe="";
+      try{if(window.CineCloud&&typeof window.CineCloud.claimSkipMessage==="function")detalhe=window.CineCloud.claimSkipMessage(renovacao,r.title)}catch(e){}
+      const erroClaim=new Error(detalhe?(detalhe+" Tenta novamente depois dessa hora."):"Outro aparelho ou o Robô 24h está a publicar este Reel agora (proteção anti-duplicado). Tenta novamente dentro de alguns minutos.");
       erroClaim.igPermanente=!0;ultimoErro=erroClaim;break;
     }
     tentativasFeitas++;

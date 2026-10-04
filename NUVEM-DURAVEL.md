@@ -83,6 +83,7 @@ Correções aplicadas ao bundle (`index.html` / `app-pronto.html`) pela camada
 | 13 | Validação de links do Drive por `?action=videohead` (o Apps Script não suporta `Range`; um GET normal descarregava o vídeo inteiro e gastava quota) | `verifyPublicUrl()`, `verificarLink()` |
 | 14 | Painel de diagnóstico no app (**Testar ligação Drive/R2**, **Copiar diagnóstico**) e no Apps Script (`testarLigacaoDrive`, `testarLigacaoR2`, `estadoDaFila`) | patches `13`, `15` |
 | 15 | 🔒 **Claims (anti-publicação duplicada)**: antes de publicar, o app/Robô reclama o item no backend e liberta-o no fim. Se o app e o Robô 24h acordarem ao mesmo tempo (ou houver 2 aparelhos com a mesma fila), só um publica. Se o backend ainda for antigo, publica-se na mesma (degradação segura) | patches `19`, `20`, `15` (Robô), `nuvem-duravel.js`, `cloudflare/r2-worker.js`, `apps-script/cineclip-cloud-drive.js` |
+| 16 | 🔒 **Renovação da claim no R2 corrigida**: o Worker usava sempre `onlyIf: { etagDoesNotMatch: "*" }`, por isso a **renovação pelo mesmo dono** (feita antes de cada tentativa de publicação) e o **takeover de uma claim expirada** falhavam para sempre — o app abortava com *"Outro aparelho ou o Robô 24h está a publicar este Reel"* mesmo sendo ele o dono, e nenhum aparelho voltava a publicar aquele Reel. Agora a renovação usa escrita condicional ao `ETag`, claims expiradas/ilegíveis são substituídas (ou apagadas) e a lista de diagnóstico limpa as caducas. O cliente confirma o estado da claim quando o backend a recusa sem dizer quem a tem, em vez de prender a fila | `cloudflare/r2-worker.js`, `nuvem-duravel.js`, `tools/test-r2-worker.mjs` |
 
 ---
 
@@ -311,7 +312,8 @@ Itens que o Robô 24h apanhou com link morto ficam marcados com `needsReupload` 
 | "sem binding R2 (BUCKET)" | `wrangler.toml` sem `[[r2_buckets]]` ou bucket com outro nome |
 | Meta rejeita o vídeo | o link tem de ser público e devolver `video/mp4` — Drive: `?action=video&id=…`; R2: `curl -I <link>` deve dar 200/206 |
 | Robô não publica nada | no Apps Script corre `testarLigacaoDrive` (ou `testarLigacaoR2`) e `estadoDaFila`; confirma que o código foi **recopiado** depois de configurares a nuvem |
-| 🔒 "já está a ser publicado por … — envio ignorado" | É a proteção anti-duplicado a funcionar: outro aparelho (ou o Robô 24h) tem a claim do item. Se ficar preso, vê as claims ativas com `?action=claims` (Drive) ou `GET /api/claims` (Worker) — as claims expiram sozinhas em 10 min |
+| 🔒 "já está a ser publicado por … — envio ignorado" | É a proteção anti-duplicado a funcionar: outro aparelho (ou o Robô 24h) tem a claim do item. A mensagem diz **quem** a tem e **até quando**; se ficar preso, vê as claims ativas com `?action=claims` (Drive) ou `GET /api/claims` (Worker) — as claims expiram sozinhas (10 min por omissão) e uma claim expirada já pode ser tomada |
+| 🔒 "Outro aparelho ou o Robô 24h está a publicar este Reel" e ninguém está a publicar | Era o **Worker R2 antigo** (renovação/takeover da claim falhavam sempre). Atualiza: `npx wrangler deploy`. O app atual confirma o estado da claim e publica na mesma se não houver nenhum dono vivo, mas o Worker corrigido é que resolve as tentativas do Robô e dos outros aparelhos |
 | 🔒 Aviso "Claims indisponíveis …" | O Worker/Apps Script configurado ainda não tem as rotas de claims (versão antiga). As publicações continuam a funcionar — atualiza o backend (secção 10) para ganhares a proteção |
 
 `window.CineCloud.report()` na consola do browser devolve o mesmo texto do botão
@@ -400,8 +402,10 @@ Respostas:
 * `POST` no Apps Script vai com `Content-Type: text/plain` (evita o preflight CORS que o
   Google não responde); em **modo compatível** o resultado é confirmado com
   `GET ?action=claims` por JSONP.
-* No Worker a escrita é condicional (`onlyIf`) e confirmada por releitura; no Apps Script
-  a exclusão mútua é feita com `LockService`.
+* No Worker a escrita é condicional (`onlyIf`) e confirmada por releitura — com a
+  pré-condição certa para cada caso: **criar** (`etagDoesNotMatch: "*"`) quando a chave está
+  vazia, **renovar/tomar** (`etagMatches`) quando já existe uma claim do mesmo dono ou uma
+  claim morta (expirada/ilegível). No Apps Script a exclusão mútua é feita com `LockService`.
 
 ### Degradação segura (importante)
 
@@ -416,6 +420,11 @@ atualizares o backend, é apenas a proteção contra Reels repetidos.
 ### Passos manuais para ativar a proteção
 
 1. **Worker (R2)** — `npx wrangler deploy` (as rotas novas entram no mesmo deployment).
+   ⚠️ **Se já tinhas o Worker instalado**, isto é obrigatório: o Worker até esta versão
+   recusava a renovação da claim do próprio dono e ficava preso numa claim expirada — o app
+   mostrava *"Outro aparelho ou o Robô 24h está a publicar este Reel agora"* sem ninguém
+   estar a publicar. Faz `npx wrangler deploy` de novo e confirma com
+   `curl -s <worker> | grep claims` (tem de dizer `"claims": true`).
 2. **Apps Script (Drive)** — cola outra vez o `apps-script/cineclip-cloud-drive.js` e cria
    **Implantar → Gerir implantações → ✏️ → Nova versão**.
 3. **Robô 24h** — no CineClip, gera e **cola o código outra vez** no Apps Script (o Robô que
@@ -428,6 +437,9 @@ atualizares o backend, é apenas a proteção contra Reels repetidos.
 ```bash
 npm test          # inclui os testes das claims: R2, Drive, modo compatível,
                   # expiração/takeover, dono errado a tentar libertar, backend antigo
+npm run worker:test   # 43 verificações do Worker REAL (cloudflare/r2-worker.js) contra
+                      # um bucket R2 falso: renovação do mesmo dono, takeover de claim
+                      # expirada/ilegível, corrida entre dois donos, runtimes sem `onlyIf`
 ```
 
 ---
@@ -466,8 +478,7 @@ O patch `24-ig-2207077` ataca as duas pontas:
 Testar sem conta Meta:
 
 ```bash
-npm run ig:test   # 53 verificações com a Graph API e o rupload simulados
-```
+# 56 verificações com a Graph API e o rupload simulados```
 
 Como agora se podem fazer até 3 tentativas (envio + processamento), o app **renova a claim
 antes de cada tentativa** (`ttlMs` de 30 min) — o TTL de 10 min do Worker/Apps Script nunca

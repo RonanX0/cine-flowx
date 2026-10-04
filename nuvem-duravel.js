@@ -1379,6 +1379,19 @@
     return { status: res.status, ok: res.ok, data: res.data };
   }
 
+  /** Estado de uma claim no Worker (GET /api/claims/:key) — usado quando o
+   *  backend recusa uma claim mas não diz quem a tem. */
+  async function r2ClaimStatus(cfg, key) {
+    var res = await fetchJson(cfg.workerUrl + "/api/claims/" + encodeURIComponent(key), {
+      headers: authHeaders(cfg, { "X-Cineclip-Client": "web/" + VERSION }),
+      cache: "no-store"
+    });
+    var data = res.data || {};
+    if (data.ok !== true) return null;
+    if (data.claim && data.claim.owner) return data.claim;
+    return null;
+  }
+
   /** Claims no Apps Script: lista as ativas (usada para confirmar em modo compatível). */
   async function driveClaimsLookup(cfg, key, forceJsonp) {
     var res = await driveReadJson(cfg, { action: "claims", token: cfg.driveToken }, forceJsonp);
@@ -1497,9 +1510,36 @@
           };
         }
         if (data.acquired === false) {
+          var holder = data.holder || null;
+          if (!holder) {
+            /* Recusa SEM dono: os backends só devolvem `acquired:false` com
+               `holder` quando há mesmo outro aparelho a publicar. Isto é o
+               sintoma de um Worker antigo (a renovação da própria claim e o
+               takeover de uma claim expirada falhavam sempre e a resposta saía
+               sem dono) — antes bloqueava a publicação para sempre com "Tenta
+               novamente dentro de alguns minutos". Confirma-se o estado real da
+               claim: se houver mesmo um dono, respeita-se; se não houver nada
+               vivo, degrada-se em segurança em vez de prender a fila. */
+            var live = null;
+            try {
+              live = provider === "r2"
+                ? await r2ClaimStatus(cfg, key)
+                : await driveClaimsLookup(cfg, key, true);
+            } catch (e) {
+              live = null;
+            }
+            if (live && live.owner) {
+              return {
+                ok: false, reason: "held", provider: provider, key: key, owner: owner,
+                holder: { owner: live.owner, expiresAt: live.expiresAt }
+              };
+            }
+            problems.push(provider + ": claim recusada sem dono (backend antigo ou claim presa)");
+            continue;
+          }
           return {
             ok: false, reason: "held", provider: provider, key: key, owner: owner,
-            holder: data.holder || null
+            holder: holder
           };
         }
         problems.push(provider + ": resposta inesperada (" + JSON.stringify(data).slice(0, 120) + ")");
