@@ -34,6 +34,17 @@ npm run preview
 > NVIDIA incluído. GitHub Pages serve apenas arquivos estáticos e não executa `/api/`; a
 > identificação que depende da NVIDIA precisa de um backend em Vercel/Netlify (ou outro host).
 
+## 📅 Agendador (layout)
+
+A aba **Agendador** tem um layout próprio: resumo (na fila / próximo post / publicados /
+erros), abas **Fila · Conta e horários · Robô 24h**, cartão *Novo agendamento* com atalhos
+para os próximos horários livres, fila agrupada por dia com filtros e detalhes expansíveis
+(reagendar, mudar de conta, legenda, baixar, reenviar, remover com confirmação) e editor
+de horários diários em chips.
+
+Para o alterar, edita **só** `tools/agendador-ui/agendador.template.js` (código legível)
+e `tools/agendador-ui/agendador.css`, e corre `npm run patch:agendador`.
+
 ## ☁️ Nuvem durável (Google Drive **ou** Cloudflare R2)
 
 Os Reels agendados desapareciam da "nuvem" porque o `.mp4` era enviado para hosts gratuitos
@@ -65,7 +76,8 @@ npm run nuvem          # app + mocks em http://localhost:4173 (/drive-api e /clo
 npm run nuvem:test     # testes ponta-a-ponta da camada de nuvem (arranca os mocks sozinho)
 npm test               # testes da nuvem + proxy NVIDIA
 npm run build          # gera dist/ para deploy estático
-npm run patch:full     # reconstrói/verifica o bundle e reaplica os 18 patches
+npm run patch:full     # reconstrói/verifica o bundle e reaplica os patches
+npm run patch:agendador # regenera e aplica o layout do Agendador (tools/agendador-ui/)
 ```
 
 - **[NUVEM-DURAVEL.md](NUVEM-DURAVEL.md)** — diagnóstico completo, setup do Drive e do R2,
