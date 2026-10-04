@@ -482,7 +482,9 @@ console.log("\n13. Claim renovada antes de cada tentativa (TTL longo)");
   const it = item({ remoteVideoUrl: "https://nuvem.exemplo/reel.mp4" });
   const out = await publicar(amb, it);
   check("publica na segunda tentativa (envio direto)", out.ok && out.res.publishedId === "MEDIA_PUBLICADA", out.erro && out.erro.message);
-  check("não consulta claims remotas nas tentativas", amb.claims.length === 0);
+  check("renovou a claim antes das duas tentativas", amb.claims.length === 2, JSON.stringify(amb.claims));
+  check("pediu um TTL de 30 minutos", amb.claims.every((c) => c.ttlMs === 30 * 60 * 1000));
+  check("renovou a claim do Reel certo", amb.claims.every((c) => c.id === "reel_1"));
 }
 
 /* 14 — outro aparelho/Robô tomou a claim → não publica (anti-duplicado) */
@@ -491,8 +493,9 @@ console.log("\n14. Claim tomada por outro aparelho → para antes de publicar");
   const amb = criarAmbiente({ claim: () => ({ ok: false, reason: "held" }) });
   const it = item();
   const out = await publicar(amb, it);
-  check("publica apesar da claim antiga do robô", out.ok, out.erro && out.erro.message);
-  check("não consulta claims remotas", amb.claims.length === 0);
+  check("não publica", !out.ok);
+  check("explica que outro aparelho está a publicar", !out.ok && /Outro aparelho ou o Robô 24h/.test(out.erro.message), !out.ok ? out.erro.message : "");
+  check("não chegou a criar containers", !amb.chamadas.some((c) => c.tipo === "fetch"));
 }
 
 /* 15 — capa do Reel: hS eleva o pôster do CDN do Instagram para w780 */
