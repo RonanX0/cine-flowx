@@ -426,6 +426,64 @@ atualizares o backend, é apenas a proteção contra Reels repetidos.
 ### Testar
 
 ```bash
-npm test          # inclui os testes das claims: R2, Drive, modo compatível,
-                  # expiração/takeover, dono errado a tentar libertar, backend antigo
+npm run worker:test   # 40 verificações do Worker REAL (cloudflare/r2-worker.js) contra um
+                      # bucket R2 falso: criação, RENOVAÇÃO do mesmo dono, takeover de claim
+                      # expirada/ilegível, corrida entre dois donos, release, TTLs, limpeza
+                      # no diagnóstico e runtimes sem escrita condicional
+npm test              # inclui os testes das claims no cliente: R2 (mock), Drive, modo
+                      # compatível, expiração/takeover, dono errado a tentar libertar,
+                      # backend antigo — além do proxy NVIDIA, publicação IG e build
 ```
+
+> ⚠️ **Se já tens o Worker instalado, faz `npx wrangler deploy` outra vez.** Até à versão
+> 1.2.0 o Worker usava `onlyIf: { etagDoesNotMatch: "*" }` em todas as escritas da claim —
+> a pré-condição de *criar* —, por isso a renovação pelo próprio dono e o takeover de uma
+> claim expirada falhavam sempre: o app abortava com *"Outro aparelho ou o Robô 24h está a
+> publicar este Reel agora"* sem ninguém a publicar, e aquele Reel ficava preso. Confirma o
+> deploy com `curl -s <worker> | grep claims` (tem de dizer `"claims": true` e
+> `"version": "1.2.0"`). `tools/repro-claim-wedge.mjs` reproduz o cenário (passa a dar ✔
+> com o Worker corrigido).
+
+---
+
+## 11. 🎬 "Media upload has failed with error code 2207077" na publicação
+
+Este erro não vem do armazenamento: vem do **Instagram** e significa que os servidores da
+Meta não conseguiram descarregar/processar o `.mp4` a partir do `video_url` que o app lhes
+deu. É a mesma família de problema que este documento descreve para a nuvem — ficheiros em
+hosts temporários (3–72 h) que já expiraram quando o horário agendado chegou, hosts que
+respondem `GET` mas falham `HEAD` e respostas em HTML em vez dos bytes do vídeo.
+
+O patch `24-ig-2207077` ataca as duas pontas:
+
+* **Envio direto** (`upload_type=resumable` → `rupload.facebook.com`): o `.mp4` sai do
+  browser direto para a Meta e **não precisa de link público nenhum** (por isso a Meta deixa
+  de "ir buscar" o ficheiro). Se a rede/CORS do navegador bloquear, o app volta sozinho ao
+  caminho do `video_url`.
+* **`video_url` verificado e renovado**: o link guardado é sondado antes de gastar a
+  tentativa (`HEAD` primeiro, `GET Range: bytes=0-1` a seguir). Links expirados, em HTML ou
+  de host que só aceita `GET` são substituídos por um envio novo à nuvem durável — ou seja,
+  a nuvem durável deixa de ser só "para não perder o vídeo" e passa a ser também o que
+  garante que o **Instagram consegue mesmo buscar** o ficheiro.
+* Em erro de processamento, a publicação repete com **container novo** (o que falhou fica
+  inutilizável) até 3 tentativas, alternando as estratégias; os erros permanentes
+  (`2207026`, `2207042`, `2207050`, `2207051`, token) terminam logo com a dica certa.
+
+> **Cuidado com helpers do bundle base.** O bloco do patch substitui um troço onde vivia o
+> `hS` (eleva a capa de `/t/p/w300/` para `/t/p/w780/`). Chamar nomes que ficaram para trás no
+> troço substituído dá `ReferenceError` só no browser — a publicação falhava com
+> `hS is not defined` apesar de os testes passarem, porque o contexto `vm` do teste injetava
+> um `hS` falso. O `hS` voltou a ser declarado dentro do bloco e a secção **0** do
+> `tools/test-ig-publish.mjs` falha se uma chamada apontar para um helper que já não exista
+> dentro do bloco (nem seja um dos dois do bundle que ele pode usar: `bg` e `Yo`).
+
+Testar sem conta Meta:
+
+```bash
+npm run ig:test   # 53 verificações com a Graph API e o rupload simulados
+```
+
+Como agora se podem fazer até 3 tentativas (envio + processamento), o app **renova a claim
+antes de cada tentativa** (`ttlMs` de 30 min) — o TTL de 10 min do Worker/Apps Script nunca
+expira a meio e, se a claim passar a ser de outro aparelho/Robô, a publicação para em vez de
+duplicar o Reel.

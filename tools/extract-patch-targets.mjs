@@ -46,6 +46,9 @@ function between(start, endMarker) {
   return src.slice(i, j + endMarker.length);
 }
 
+// Nota: os patches 22 (layout do Agendador) e 23 (CSS do Agendador) NÃO são
+// extraídos aqui — são gerados por tools/build-agendador-patch.mjs a partir de
+// tools/agendador-ui/ e aplicados por cima dos patches 01–21.
 const P = {
   "01-script-tag": `    <script type="module">`,
   "02-toast-export": `Iy.createRoot(document.getElementById("root"))`,
@@ -97,6 +100,14 @@ const P = {
     '}catch(q){const Z={...N,status:"error",errorMsg:',
     "lastStep:void 0};"
   ),
+  // 🔒 Cadeado de publicação: ref DEDICADO. Os patches 19/20 usavam `oe.current`,
+  // que é o ref do <input type="file"> do botão "Importar" — como esse ref está
+  // sempre preenchido depois de o componente montar, o handler de publicar saía
+  // pelo `if (...) return` e o botão não fazia nada (nem manual nem Auto-Pilot).
+  "25-publish-lock": `const[se,$]=b.useState(""),oe=b.useRef(null),he=b.useCallback`,
+  // 🎬 Publicação de Reels à prova do erro 2207077: envio direto (resumable), link
+  // verificado/renovado e repetição com container novo.
+  "24-ig-2207077": between("async function mS(r){", "return await pS(u,String(x.id),f,a)}"),
 };
 
 let failed = 0;

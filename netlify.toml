@@ -5,3 +5,26 @@
 
 [functions]
   node_bundler = "esbuild"
+
+# ── Cache ─────────────────────────────────────────────────────────────────────────────
+# O app é um index.html único mais o nuvem-duravel.js: nomes fixos, sem hash, que se
+# repetem em todos os deploys. Sem revalidação o browser reutiliza o bundle anterior e as
+# correções publicadas não chegam ao utilizador — foi assim que a correção do erro 2207077
+# do Instagram ficou invisível em produção. `must-revalidate` mantém a cache, mas obriga a
+# confirmar com o servidor antes de a reutilizar (resposta 304, custo quase nulo).
+# O mesmo está em _headers (Cloudflare Pages) e em vercel.json (Vercel).
+
+[[headers]]
+  for = "/*.html"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/nuvem-duravel.js"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"

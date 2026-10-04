@@ -14,6 +14,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { INICIO_BLOCO_IG, extrairBlocoIG, analisarAutossuficiencia } from "./ig-block.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const patchDir = path.join(root, "tools", "patches");
@@ -58,6 +59,21 @@ for (const file of targets) {
     if (countOf(html, replace) >= 1) {
       totalSkipped++;
       console.log(`   ⏭  ${name} (já aplicado)`);
+      continue;
+    }
+
+    // 1b) Absorvido por um patch posterior? (ex.: o 21-sync-queue reescreve a
+    //     zona que o 08-j-catch já tinha alterado — o .find do 21 contém o
+    //     .replace do 08). Se esse patch posterior já está aplicado, o 08 também.
+    const absorbedBy = names
+      .filter((later) => later > name)
+      .find((later) => {
+        const lp = readPatch(later);
+        return lp.find.includes(replace) && countOf(html, lp.replace) >= 1;
+      });
+    if (absorbedBy) {
+      totalSkipped++;
+      console.log(`   ⏭  ${name} (já incluído em ${absorbedBy})`);
       continue;
     }
 
@@ -152,6 +168,26 @@ for (const file of targets) {
     process.exitCode = 1;
   } else {
     console.log(`   ✔ ${file}: nuvem-duravel.js incluído antes do bundle`);
+  }
+
+  // O bloco do patch 24 é injetado por cima do bundle: nenhuma chamada pode apontar para
+  // um nome que só exista no troço substituído. Foi o caso do `hS`, que fazia a publicação
+  // rebentar com "hS is not defined" sem os testes — nem o `--check` de sintaxe — darem por isso.
+  const blocoIG = extrairBlocoIG(html);
+  if (!blocoIG) {
+    console.error(`   ❌ ${file}: bloco de publicação de Reels não encontrado (${INICIO_BLOCO_IG} …)`);
+    process.exitCode = 1;
+  } else {
+    const semDeclaracao = analisarAutossuficiencia(blocoIG);
+    if (semDeclaracao.length) {
+      console.error(
+        `   ❌ ${file}: o bloco de publicação chama helpers que não existem dentro dele: ${semDeclaracao.join(", ")}\n` +
+          "      Declara-os no bloco (tools/patches/24-ig-2207077.replace) — no browser dá ReferenceError."
+      );
+      process.exitCode = 1;
+    } else {
+      console.log(`   ✔ ${file}: bloco de publicação de Reels autossuficiente`);
+    }
   }
 
   // Gera o código do Robô 24h e valida a sintaxe do resultado
