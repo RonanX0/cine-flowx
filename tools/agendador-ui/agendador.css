@@ -1,4 +1,4 @@
-/* CineClip — Agendador (patch 22). Classes cc-* usadas por agendador.template.js */
+/* CineClip — Agendador (patch 23). Classes cc-* usadas por agendador.template.js */
 .cc-ag{--cc-r:var(--radius,.75rem);--cc-soft:color-mix(in oklab,var(--foreground) 4%,transparent);--cc-line:var(--border);display:flex;flex-direction:column;gap:1rem;color:var(--foreground)}
 .cc-ag .hidden{display:none}
 .cc-sub{display:block;font-size:.75rem;color:var(--muted-foreground);line-height:1.35}

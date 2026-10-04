@@ -1,9 +1,9 @@
 /* ==========================================================================
- * CineClip — novo layout do AGENDADOR (patch 21)
+ * CineClip — novo layout do AGENDADOR (patch 22)
  *
  * Este ficheiro é o código LEGÍVEL que substitui o "return" do componente
  * do Agendador (RS) no bundle. É inserido tal como está (sem minificar) por
- *   node tools/build-agendador-patch.mjs   →   tools/patches/21-agendador-ui.replace
+ *   node tools/build-agendador-patch.mjs   →   tools/patches/22-agendador-ui.replace
  *
  * Variáveis do componente original que podes usar aqui (nomes minificados):
  *   r  clipe atual (currentClip)          o  contas           i(contas,id) trocar conta

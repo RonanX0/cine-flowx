@@ -2,8 +2,8 @@
 /**
  * Gera os patches do NOVO LAYOUT DO AGENDADOR a partir de ficheiros legíveis:
  *
- *   tools/agendador-ui/agendador.template.js  →  tools/patches/21-agendador-ui.replace
- *   tools/agendador-ui/agendador.css          →  tools/patches/22-agendador-css.replace
+ *   tools/agendador-ui/agendador.template.js  →  tools/patches/22-agendador-ui.replace
+ *   tools/agendador-ui/agendador.css          →  tools/patches/23-agendador-css.replace
  *
  *   node tools/build-agendador-patch.mjs   (ou: npm run patch:agendador)
  *   npm run patch:nuvem                    (aplica todos os patches ao bundle)
@@ -11,10 +11,10 @@
  * Para mudar o visual do Agendador edita SÓ os dois ficheiros em
  * tools/agendador-ui/, corre `npm run patch:agendador` e recarrega o app.
  *
- * O patch 21 é aplicado DEPOIS dos patches 01–20, por isso o seu .find é o
+ * O patch 22 é aplicado DEPOIS dos patches 01–21, por isso o seu .find é o
  * "return" do componente do Agendador já com os patches 09/10 aplicados. Se o
- * .find ainda não existir, é extraído do index.html atual (antes do patch 21).
- * Se o 21 já estiver aplicado no index.html, ele é revertido e reaplicado com
+ * .find ainda não existir, é extraído do index.html atual (antes do patch 22).
+ * Se o 22 já estiver aplicado no index.html, ele é revertido e reaplicado com
  * o template novo (é isso que torna a edição iterativa simples).
  */
 import fs from "node:fs";
@@ -32,10 +32,10 @@ const RENDER_START =
 const RENDER_END = "]})}var Je;";
 
 const files = {
-  uiFind: path.join(patchDir, "21-agendador-ui.find"),
-  uiReplace: path.join(patchDir, "21-agendador-ui.replace"),
-  cssFind: path.join(patchDir, "22-agendador-css.find"),
-  cssReplace: path.join(patchDir, "22-agendador-css.replace"),
+  uiFind: path.join(patchDir, "22-agendador-ui.find"),
+  uiReplace: path.join(patchDir, "22-agendador-ui.replace"),
+  cssFind: path.join(patchDir, "23-agendador-css.find"),
+  cssReplace: path.join(patchDir, "23-agendador-css.replace"),
 };
 
 /* ---------------------------------------------------------------- .find */
@@ -49,7 +49,7 @@ if (fs.existsSync(files.uiFind)) {
   const e = html.indexOf(RENDER_END, i);
   FIND = html.slice(i, e + RENDER_END.length - "var Je;".length);
   fs.writeFileSync(files.uiFind, FIND);
-  console.log(`✔ 21-agendador-ui.find extraído (${FIND.length} bytes)`);
+  console.log(`✔ 22-agendador-ui.find extraído (${FIND.length} bytes)`);
 }
 
 /** Recorta FIND entre dois marcadores (start incluído, end excluído). */
@@ -136,6 +136,6 @@ for (const t of TARGETS) {
 fs.writeFileSync(files.uiReplace, REPLACE);
 fs.writeFileSync(files.cssFind, CSS_FIND);
 fs.writeFileSync(files.cssReplace, CSS_REPLACE);
-console.log(`✔ 21-agendador-ui.replace (${REPLACE.length} bytes)`);
-console.log(`✔ 22-agendador-css.replace (${CSS_REPLACE.length} bytes)`);
+console.log(`✔ 22-agendador-ui.replace (${REPLACE.length} bytes)`);
+console.log(`✔ 23-agendador-css.replace (${CSS_REPLACE.length} bytes)`);
 console.log("\nAgora corre: npm run patch:nuvem");

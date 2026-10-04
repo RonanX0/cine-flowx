@@ -46,9 +46,9 @@ function between(start, endMarker) {
   return src.slice(i, j + endMarker.length);
 }
 
-// Nota: os patches 21 (layout do Agendador) e 22 (CSS do Agendador) NÃO são
+// Nota: os patches 22 (layout do Agendador) e 23 (CSS do Agendador) NÃO são
 // extraídos aqui — são gerados por tools/build-agendador-patch.mjs a partir de
-// tools/agendador-ui/ e aplicados por cima dos patches 01–20.
+// tools/agendador-ui/ e aplicados por cima dos patches 01–21.
 const P = {
   "01-script-tag": `    <script type="module">`,
   "02-toast-export": `Iy.createRoot(document.getElementById("root"))`,

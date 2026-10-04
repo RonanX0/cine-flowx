@@ -61,6 +61,21 @@ for (const file of targets) {
       continue;
     }
 
+    // 1b) Absorvido por um patch posterior? (ex.: o 21-sync-queue reescreve a
+    //     zona que o 08-j-catch já tinha alterado — o .find do 21 contém o
+    //     .replace do 08). Se esse patch posterior já está aplicado, o 08 também.
+    const absorbedBy = names
+      .filter((later) => later > name)
+      .find((later) => {
+        const lp = readPatch(later);
+        return lp.find.includes(replace) && countOf(html, lp.replace) >= 1;
+      });
+    if (absorbedBy) {
+      totalSkipped++;
+      console.log(`   ⏭  ${name} (já incluído em ${absorbedBy})`);
+      continue;
+    }
+
     // 2) O alvo tem de existir exatamente 1x
     const occurrences = countOf(html, find);
     if (occurrences !== 1) {
