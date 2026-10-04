@@ -56,7 +56,12 @@ for (const file of targets) {
 
     // 1) Já aplicado? (alguns .replace CONTÊM o .find, por isso esta verificação
     //    tem de vir primeiro — senão o patch era aplicado em duplicado)
-    if (countOf(html, replace) >= 1) {
+    let effectiveReplace = replace;
+    for (const later of names.filter(n => n > name)) {
+      const lp = readPatch(later);
+      effectiveReplace = effectiveReplace.replace(lp.find, lp.replace);
+    }
+    if (countOf(html, replace) >= 1 || countOf(html, effectiveReplace) >= 1) {
       totalSkipped++;
       console.log(`   ⏭  ${name} (já aplicado)`);
       continue;
@@ -69,7 +74,13 @@ for (const file of targets) {
       .filter((later) => later > name)
       .find((later) => {
         const lp = readPatch(later);
-        return lp.find.includes(replace) && countOf(html, lp.replace) >= 1;
+        let effective = lp.replace;
+        // Later patches may refine an already-applied replacement.
+        for (const next of names.filter(n => n > later)) {
+          const np = readPatch(next);
+          effective = effective.replace(np.find, np.replace);
+        }
+        return lp.find.includes(replace) && countOf(html, effective) >= 1;
       });
     if (absorbedBy) {
       totalSkipped++;
@@ -192,10 +203,10 @@ for (const file of targets) {
 
   // Gera o código do Robô 24h e valida a sintaxe do resultado
   const ksStart = html.indexOf("function kS(r){");
-  const ksEnd = html.indexOf("`}function ES(", ksStart);
+  const ksEnd = html.indexOf("function ES(", ksStart);
   if (ksStart > 0 && ksEnd > ksStart) {
     // inclui o "`}"  final para termos a declaração completa da função kS
-    const ksSource = html.slice(ksStart, ksEnd + 2);
+    const ksSource = html.slice(ksStart, ksEnd);
     try {
       const makeKs = new Function(
         "Eg",
@@ -214,7 +225,7 @@ for (const file of targets) {
       fs.writeFileSync(tmpGas, gas);
       execFileSync(process.execPath, ["--check", tmpGas], { stdio: "pipe" });
       console.log(`   ✔ ${file}: Robô 24h gerado e com sintaxe OK (${gas.length} bytes)`);
-      if (!gas.includes("R2_WORKER_URL = \"https://cineclip-cloud.exemplo.workers.dev\"")) {
+      if (!gas.includes("desativarRobo24h") || gas.includes("UrlFetchApp")) {
         console.error(`   ❌ ${file}: o Robô 24h não recebeu a URL do Worker`);
         process.exitCode = 1;
       }
