@@ -1497,6 +1497,20 @@
           };
         }
         if (data.acquired === false) {
+          /* Alguns Workers antigos respondiam acquired:false durante a renovação
+             mesmo quando a claim continuava a ser do próprio aparelho. Isso gerava
+             um falso "Outro aparelho..." no meio do upload. Se o backend identifica
+             o mesmo owner, é seguro continuar: não há outro publicador a disputar o
+             Reel. Workers atuais devolvem acquired:true neste caso. */
+          if (data.holder && data.holder.owner === owner) {
+            saveState({ lastClaimAt: now(), lastClaimProvider: provider });
+            return {
+              ok: true, provider: provider, key: key, owner: owner,
+              expiresAt: data.holder.expiresAt || now() + ttlMs,
+              claim: data.claim || null, ownerLabel: o.ownerLabel || owner,
+              recovered: true
+            };
+          }
           return {
             ok: false, reason: "held", provider: provider, key: key, owner: owner,
             holder: data.holder || null

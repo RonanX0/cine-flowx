@@ -154,7 +154,10 @@ function criarAmbiente(opcoes = {}) {
         const r = params.get("upload_type") === "resumable" ? o.containerResumable(nContainers, params) : o.containerUrl(nContainers, params);
         return resposta(r.status ?? 200, r.json);
       }
-      if (acao === "media_publish") return resposta(o.publicar(nContainers).status ?? 200, o.publicar(nContainers).json);
+      if (acao === "media_publish") {
+        const r = o.publicar(nContainers);
+        return resposta(r.status ?? 200, r.json);
+      }
       const id = partes[1];
       if (u.searchParams.get("fields") === "permalink") {
         const r = o.permalink(id);
@@ -418,15 +421,16 @@ console.log("\n9. Publicação repetida quando o media ainda não está pronto")
   const amb = criarAmbiente({
     publicar: () => {
       n++;
-      return n === 1
-        ? { status: 400, json: { error: { message: "The media is not ready for publishing, please wait.", code: 9007 } } }
+      return n <= 6
+        ? { status: 400, json: { error: { message: "The media is still being processed. Please wait.", code: 9007 } } }
         : { status: 200, json: { id: "MEDIA_PUBLICADA" } };
     },
   });
   const it = item({ remoteVideoUrl: "https://nuvem.exemplo/reel.mp4" });
   const out = await publicar(amb, it);
   check("publica depois de repetir", out.ok && out.res.publishedId === "MEDIA_PUBLICADA", out.erro && out.erro.message);
-  check("não criou um segundo container", amb.contar("xhr") === 0 && amb.chamadas.filter((c) => c.corpo.includes("upload_type=resumable")).length === 0);
+  check("aguardou sem criar um segundo container", n === 7 && amb.contar("xhr") === 0 && amb.chamadas.filter((c) => c.corpo.includes("upload_type=resumable")).length === 0, `media_publish=${n}`);
+  check("mostrou que o mesmo Reel ainda estava a ser processado", out.passos.some((p) => /ainda está a processar/.test(p)), out.passos.join(" | "));
 }
 
 /* 10 — webhook continua a funcionar (Make/n8n) */

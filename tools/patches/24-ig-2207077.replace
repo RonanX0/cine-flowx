@@ -193,6 +193,14 @@ async function igContainerLink(u,f,r,o,link){
 }
 /* Espera o processamento (status_code) e publica. Mantém a assinatura antiga:
    pS(igUserId, containerId, accessToken, onStep). */
+function igMediaAindaProcessa(e){
+  var msg=String((e&&e.message)||e||"");
+  return /(media|m[ií]dia|reel|v[ií]deo|video).*(process|not ready|still|ready)|(process|not ready).*(media|m[ií]dia|reel|v[ií]deo|video)/i.test(msg);
+}
+/* Espera o processamento (status_code) e publica. O media_publish pode devolver
+   "The media is still being processed" mesmo depois de status_code=FINISHED —
+   é uma corrida transitória da Graph API, não um motivo para criar outro container.
+   Nesse caso repetimos o MESMO creation_id por mais tempo, sem duplicar o Reel. */
 async function pS(u,o,a,i){
   var inicio=Date.now(),n=0;
   for(;;){
@@ -218,8 +226,10 @@ async function pS(u,o,a,i){
     await mS(n<=6?5000:(n<=14?10000:15000));
   }
   i&&i("A publicar Reels no perfil do Instagram…");
-  var pub=null,ultimo=null;
-  for(var tentativa=1;tentativa<=4;tentativa++){
+  var pub=null,ultimo=null,mediaAindaProcessa=!1;
+  /* Até 12 tentativas para esta corrida específica. Repetir media_publish com o
+     mesmo creation_id é seguro; criar outro container é que poderia duplicar. */
+  for(var tentativa=1;tentativa<=12;tentativa++){
     var res=null;
     try{
       res=await igGraphPost("/"+encodeURIComponent(u)+"/media_publish",new URLSearchParams({creation_id:o,access_token:a}));
@@ -230,13 +240,26 @@ async function pS(u,o,a,i){
     }
     if(res.ok&&res.json&&res.json.id&&!res.json.error){pub=res;break}
     ultimo=igErroGraph(res,"Falha ao finalizar publicação do Reels.");
+    mediaAindaProcessa=igMediaAindaProcessa(ultimo);
     var codErro=(res.json&&res.json.error&&res.json.error.code)?String(res.json.error.code):"";
-    if(tentativa===4||IG_PERMANENTES[codErro]||codErro==="190"||codErro==="10"||codErro==="200")break;
-    await mS(4000*tentativa);
+    var limite=mediaAindaProcessa?12:4;
+    if(tentativa===limite||IG_PERMANENTES[codErro]||codErro==="190"||codErro==="10"||codErro==="200")break;
+    if(mediaAindaProcessa){
+      i&&i("O Instagram ainda está a processar o Reel — a aguardar antes de publicar novamente…");
+      await mS(Math.min(15000,3000*tentativa));
+    }else{
+      await mS(4000*tentativa);
+    }
   }
   var j=pub&&pub.json;
   if(!pub||!pub.ok||!j||j.error||!j.id){
-    if(ultimo){ultimo.igEtapa="publish";throw ultimo}
+    if(ultimo){
+      if(mediaAindaProcessa){
+        ultimo.igEtapa="processamento";
+        ultimo.message="O Instagram ainda está a processar este Reel. Aguarda alguns instantes e tenta novamente — o mesmo vídeo não será enviado outra vez automaticamente.";
+      }else ultimo.igEtapa="publish";
+      throw ultimo;
+    }
     throw new Error("Falha ao finalizar publicação do Reels.");
   }
   var id=String(j.id),link="";
@@ -246,7 +269,8 @@ async function pS(u,o,a,i){
   }catch(e){}
   return{publishedId:id,publishedUrl:link};
 }
-async function gS(r,o,a){
+
+async function gS(r,o,a,claim){
   if(!r.videoBlob&&!r.remoteVideoUrl)throw new Error("Este item não possui o ficheiro de vídeo (.mp4) anexado nem URL na nuvem.");
   const i=hS(r.poster),temBlob=!!r.videoBlob;
   /* Envia o .mp4 para a nuvem (Drive/R2 ou, em último recurso, host temporário). */
@@ -324,7 +348,7 @@ async function gS(r,o,a){
   const renovarClaim=async function(){
     try{
       if(!window.CineCloud||typeof window.CineCloud.claimPublish!=="function")return true;
-      const c=await window.CineCloud.claimPublish(r,{ttlMs:30*60*1000});
+      const c=await window.CineCloud.claimPublish(r,{ttlMs:30*60*1000,owner:claim&&claim.owner});
       return !(c&&c.ok===!1);
     }catch(e){return true}
   };
@@ -361,7 +385,7 @@ async function gS(r,o,a){
       return res;
     }catch(e){
       ultimoErro=e;
-      const cod=igNumeroErro(e);
+      const cod=String(e&&e.igCode||igNumeroErro(e)||"");
       if(!igErroTemporario(e))break;
       if(t<plano.length-1){
         a&&a("O Instagram recusou esta tentativa"+(cod?(" (erro "+cod+")"):"")+" — a repetir com um container novo ("+(t+2)+"/"+plano.length+")…");
@@ -369,7 +393,7 @@ async function gS(r,o,a){
       }
     }
   }
-  const codigo=igNumeroErro(ultimoErro);
+  const codigo=String(ultimoErro&&ultimoErro.igCode||igNumeroErro(ultimoErro)||"");
   const dica=igDica(codigo);
   const base=(ultimoErro&&ultimoErro.message)||"Falha ao publicar o Reels no Instagram.";
   const erro=new Error(base+((dica&&!/Dica:/.test(base))?(" · Dica: "+dica):"")+(tentativasFeitas>1?(" (após "+tentativasFeitas+" tentativas)"):""));
