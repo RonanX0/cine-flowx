@@ -1,1 +1,0 @@
-try{const q={...N,status:"publishing",lastStep:`A iniciar envio (${G.name})…`,errorMsg:void 0};await Rn(q),await he();const Z=await gS(q,G,async Ye=>{q.lastStep=Ye,await Rn({...q}),await he()}),Me={...q,status:"published",publishedId:Z.publishedId,publishedUrl:Z.publishedUrl,remoteVideoUrl:Z.remoteVideoUrl||q.remoteVideoUrl,lastStep:`Publicado em ${G.name} com sucesso!`};

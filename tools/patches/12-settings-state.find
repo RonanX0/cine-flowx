@@ -1,1 +1,0 @@
-function aS({open:r,onOpenChange:o,settings:a,onSave:i}){const[c,u]=b.useState(a);

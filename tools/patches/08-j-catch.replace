@@ -1,1 +1,0 @@
-catch(rt){const ms=(rt==null?void 0:rt.message)||"Erro ao sincronizar na nuvem.";Ue?je.error(ms):window.CineCloud?window.CineCloud.toastOnce("sync-auto",`⚠️ Sincronização automática falhou: ${ms}`,"error"):je.error(ms)}finally{i(!1)}},[r,C]);

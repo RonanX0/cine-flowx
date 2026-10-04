@@ -4,14 +4,21 @@ Aplicação web **100% no navegador** que limpa metadados de vídeos, corta até
 
 ## Estrutura do Projeto
 
-- `index.html` — aplicação React já compilada (interface, processamento com FFmpeg e identificação do filme)
-- `app-pronto.html` — cópia de distribuição do bundle principal
-- `nuvem-duravel.js` — camada de armazenamento durável (`window.CineCloud`), carregada antes do app
-- `apps-script/cineclip-cloud-drive.js` e `cloudflare/r2-worker.js` — backends do Google Drive e Cloudflare R2
-- `tools/` — servidor de preview, mocks, testes e ferramentas para reaplicar os patches do bundle
-- `vite.config.ts` — servidor de desenvolvimento e proxy local para NVIDIA
-- `api/public/nvidia.js` e `netlify/functions/nvidia.mjs` — proxy NVIDIA para deploys Vercel e Netlify
-- `_headers` (Netlify / Cloudflare Pages), `netlify.toml` e `vercel.json` — revalidação do HTML, para um deploy novo não ficar preso na cache do browser
+- `src/` — código-fonte da aplicação (React 18 + TypeScript + Vite + Tailwind 4):
+  - `src/lib/` — lógica pura, testável fora do browser: `video.ts` (pipeline FFmpeg 9:16 +
+    gancho), `ai.ts` (NVIDIA Vision, Gemini, TMDB, legenda), `ig.ts` (publicação na Graph
+    API), `cloud.ts` (camada de nuvem durável — antiga `nuvem-duravel.js`), `vault.ts`
+    (cofre encriptado), `robo.ts` (gerador do Robô 24h), `queue.ts`, `sync.ts`, etc.
+  - `src/components/` — interface: `Studio.tsx` (3 passos), `Agendador.tsx`, `Settings.tsx`,
+    `Login.tsx`, `Preview916.tsx` e primitivas em `ui.tsx`
+- `index.html` — entrada fina do Vite (sem bundle inline)
+- `apps-script/cineclip-cloud-drive.js` e `cloudflare/r2-worker.js` — backends do Google
+  Drive e do Cloudflare R2
+- `server/nvidia-proxy.mjs` — proxy NVIDIA partilhado (dev via `vite.config.ts`);
+  `api/public/nvidia.js` e `netlify/functions/nvidia.mjs` — o mesmo proxy para Vercel e Netlify
+- `tools/` — mocks locais da nuvem (R2 + Drive) e testes que correm contra `src/` e os
+  backends reais
+- `_headers` (Netlify / Cloudflare Pages), `netlify.toml` e `vercel.json` — revalidação do HTML
 
 ## Como executar localmente
 
@@ -20,23 +27,21 @@ npm install
 npm run dev
 ```
 
-Para gerar o build de produção:
+Para gerar o build de produção (assets com hash no nome — a cache do browser não volta a
+prender deploys novos):
 
 ```bash
 npm run build
 npm run preview
 ```
 
-> **Estado atual do repositório:** o código-fonte React (`src/`) não está versionado; a
-> interface está guardada como bundle em `index.html`. O `npm run build` copia esse bundle,
-> a camada de nuvem e o fallback 404 para `dist/` (sem tentar compilar o bundle de novo);
-> além da cópia, carimba `window.CINECLIP_BUILD` com a versão, serve
-> `nuvem-duravel.js?v=<hash>` e publica o `_headers`, para que um deploy novo chegue mesmo
-> ao browser — ver *[Ainda apanhas o 2207077?](#ainda-apanhas-o-2207077-confirma-que-estás-na-versão-nova)*.
-> Para testar o app com mocks locais da nuvem em `/drive-api` e `/cloud-api`, usa
-> `npm run nuvem`; esse servidor não precisa de `npm install`. Vercel e Netlify têm proxy
-> NVIDIA incluído. GitHub Pages serve apenas arquivos estáticos e não executa `/api/`; a
-> identificação que depende da NVIDIA precisa de um backend em Vercel/Netlify (ou outro host).
+> O dev do Vite já inclui, sem contas externas: proxy NVIDIA em `/api/public/nvidia`,
+> mock do Worker R2 em `/cloud-api` e mock do Apps Script em `/drive-api` (usa
+> `http://localhost:5173/cloud-api` / `/drive-api` em **Configurações → Nuvem durável**
+> com os tokens `cc_r2_token_de_teste` / `cc_drive_token_de_teste`). Vercel e Netlify têm
+> proxy NVIDIA incluído. GitHub Pages serve apenas arquivos estáticos e não executa
+> `/api/`; a identificação que depende da NVIDIA precisa de um backend em Vercel/Netlify
+> (ou outro host).
 
 ## 📅 Agendador (layout)
 
@@ -53,8 +58,8 @@ Reels ou usar as setas ↑↓ — os horários ficam fixos e os Reels trocam de 
 (corrige atrasados e fecha buracos), e itens atrasados/com erro têm o atalho
 *Mover p/ próximo horário livre*.
 
-Para o alterar, edita **só** `tools/agendador-ui/agendador.template.js` (código legível)
-e `tools/agendador-ui/agendador.css`, e corre `npm run patch:agendador`.
+O Agendador é código-fonte normal: `src/components/Agendador.tsx` (layout + lógica de UI)
+e `src/lib/queue.ts` / `src/lib/sync.ts` (horários e sincronização).
 
 ## 🤖 Publicação automática (Robô 24h)
 
@@ -75,7 +80,7 @@ Graph API e marca o resultado — **com o PC e o telemóvel desligados**.
 - **Regressão conhecida:** houve uma versão (PR #15, commit `5b07192`) em que o robô foi
   desligado e a publicação passou a ser só manual — o gerador foi trocado por um stub que
   apagava o acionador e a fila passou a sincronizar como `device_scheduled`. Está
-  revertida: o bundle volta a gerar o robô completo e `npm run robo:test` falha se
+  revertida: `src/lib/robo.ts` gera o robô completo e `tools/test-logic.mjs` falha se
   alguém o voltar a desligar (acionador de 5 min, Graph API, claims e ausência de
   vestígios do modo só-manual).
 
@@ -90,7 +95,7 @@ Os gatilhos conhecidos são links de hosts **temporários** (`uguu.se` 3 h, `lit
 falham `HEAD` (ou bloqueiam o crawler da Meta), respostas em HTML (login/captcha) em vez dos
 bytes do vídeo e falhas transitórias da própria Meta.
 
-A partir do patch **`24-ig-2207077`** a publicação do Reel deixa de ter um único caminho:
+Em `src/lib/ig.ts` a publicação do Reel não tem um único caminho:
 
 1. **Envio direto** (`POST /media?upload_type=resumable` → `rupload.facebook.com`, com
    `offset`/`file_size` e progresso): o `.mp4` sai do browser direto para a Meta, **sem link
@@ -124,13 +129,10 @@ ficou em erro pode ser reenviado pelo **Publicar agora** do Agendador.
 > verdade: **reimportar o `.mp4` neste aparelho** (Importar no Agendador), para a publicação
 > passar a usar o envio direto, sem depender de link nenhum.
 
-> **Regressão `hS is not defined`.** O `hS` — o helper que eleva a capa do Instagram
-> (`/t/p/w300/` → `/t/p/w780/`) — vivia **dentro** do troço do bundle que o patch 24 substitui.
-> Como o código novo continuava a chamá-lo, a publicação rebentava logo na primeira tentativa
-> (`ReferenceError: hS is not defined`), apesar de `npm run ig:test` passar: o contexto `vm` do
-> teste injetava um `hS` falso, escondendo exatamente o que falhava no browser. Agora o helper é
-> declarado dentro do próprio bloco e o teste tem a secção **0. Autossuficiência do bloco**, que
-> falha se uma chamada apontar para um helper que só exista no bundle que envolve o bloco.
+> **Histórico: `hS is not defined`.** Na era do bundle minificado, o helper que eleva a capa
+> do Instagram (`/t/p/w300/` → `/t/p/w780/`) podia ficar fora do troço substituído por um
+> patch e a publicação rebentava logo na primeira tentativa. Na reescrita o helper é a
+> função `boostPoster` de `src/lib/ai.ts`, coberta por `tools/test-logic.mjs`.
 
 Cada tentativa **renova a claim anti-duplicado** (TTL de 30 min) para o TTL de 10 min do
 Worker/Apps Script não expirar a meio de um envio longo — e se a claim passar a ser de
@@ -172,30 +174,22 @@ A mensagem diz-te qual o código que está a correr, **sem abrires o bundle**:
 | `… do vídeo (código 2207077): … · Dica: … (após 3 tentativas)` | versão **nova** — as 3 tentativas correram e a Meta recusou mesmo |
 | `… do vídeo: Error: Media upload has failed with error code 2207077` | versão **antiga** — sem `(código …)`, sem `· Dica:` e sem contagem: o browser está a servir o bundle pré-correção |
 
-Na consola (F12) escreve `CINECLIP_BUILD` para veres a versão exata:
+Na consola (F12), `document.querySelector("script[src*=assets]")?.src` mostra o bundle com
+hash que o browser carregou — se o hash for igual ao do `dist/index.html` do deploy, estás
+na versão nova. Em caso de dúvida, **recarregamento forçado** (`Ctrl+Shift+R` / `Cmd+Shift+R`).
 
-```js
-CINECLIP_BUILD   // { versao: "5cbf8666", data: "…", app: "…", nuvem: "…", ig2207077: true }
-```
+> **Histórico: a correção que não chegava ao browser.** Na era do bundle, `index.html` e
+> `nuvem-duravel.js` tinham nomes fixos, sem hash nem `Cache-Control`: a correção do
+> 2207077 ficava no repositório e verde nos testes, mas o browser continuava a servir a
+> cópia antiga. A reescrita em Vite resolve isto **estruturalmente**: cada build emite
+> `assets/index-<hash>.js` / `assets/index-<hash>.css` e o `index.html` é revalidado
+> (`_headers`, `netlify.toml`, `vercel.json`). `tools/test-build.mjs` falha se um build
+> algum dia voltar a emitir nomes sem hash.
 
-Se `ig2207077` for `true`, a correção está ativa. Se não aparecer nada, estás numa versão
-anterior a este build — faz **recarregamento forçado** (`Ctrl+Shift+R` / `Cmd+Shift+R`).
-
-> **Regressão da cache.** O CineClip não tem `src/`: o app é um `index.html` único e a camada
-> de nuvem é o `nuvem-duravel.js` — dois nomes que **nunca mudam**. Um build Vite normal emite
-> ficheiros com hash no nome (`app.a1b2c3.js`), por isso cada deploy muda os URLs e o browser é
-> obrigado a ir buscar o código novo; aqui não havia nem hash nem `Cache-Control`, e o browser
-> e o CDN continuavam a servir a cópia anterior. Resultado: a correção do 2207077 estava no
-> repositório e verde nos testes, mas **nunca chegava a executar** — o erro que chegava ao
-> utilizador vinha do bundle antigo. Agora `npm run build` carimba `window.CINECLIP_BUILD`,
-> serve `nuvem-duravel.js?v=<hash do conteúdo>` e publica `_headers`; `netlify.toml`,
-> `vercel.json` e `_headers` mandam revalidar o HTML (`max-age=0, must-revalidate`), e o build
-> **recusa-se a publicar** um bundle sem a correção. Coberto por `npm run build:test`.
-
-Testar tudo isto sem conta Meta (Graph API, `rupload.facebook.com` e XHR simulados):
+Testar tudo isto sem conta Meta:
 
 ```bash
-npm run ig:test   # 53 verificações: envio direto, fallback, retries, links, capa, claims, dicas
+npm test   # lógica + nuvem (mocks R2/Drive) + arranque da app + build + Worker R2 + proxy NVIDIA
 ```
 
 ## ☁️ Nuvem durável (Google Drive **ou** Cloudflare R2)
@@ -225,13 +219,11 @@ anti-apagão da fila, migração automática dos cofres antigos e selos honestos
 `⚠️ só neste aparelho` / `sem vídeo`) com botão **Reenviar p/ nuvem**.
 
 ```bash
-npm run nuvem          # app + mocks em http://localhost:4173 (/drive-api e /cloud-api) — testar sem contas
-npm run nuvem:test     # testes ponta-a-ponta da camada de nuvem (arranca os mocks sozinho)
-npm run robo:test      # guarda da publicação automática: o Robô 24h gerado tem de ser o robô a sério
-npm test               # nuvem + worker + robô 24h + proxy NVIDIA + Instagram + Agendador + build
-npm run build          # gera dist/ para deploy estático
-npm run patch:full     # reconstrói/verifica o bundle e reaplica os patches
-npm run patch:agendador # regenera e aplica o layout do Agendador (tools/agendador-ui/)
+npm run dev       # app + mocks da nuvem em http://localhost:5173 (/drive-api e /cloud-api) — sem contas
+npm test          # lógica + nuvem ponta-a-ponta (mocks) + arranque da app + build + Worker R2 + proxy NVIDIA
+npm run worker:test  # o Worker real da Cloudflare contra um bucket R2 falso (claims/ETag)
+npm run typecheck # tsc --noEmit
+npm run build     # gera dist/ para deploy estático (assets com hash)
 ```
 
 - **[NUVEM-DURAVEL.md](NUVEM-DURAVEL.md)** — diagnóstico completo, setup do Drive e do R2,
@@ -240,5 +232,5 @@ npm run patch:agendador # regenera e aplica o layout do Agendador (tools/agendad
   cofre encriptado, `videohead`, `health`, `stats` e o helper `setup()`.
 - `cloudflare/r2-worker.js` + `cloudflare/wrangler.toml` — backend R2 (upload, link público
   com Range/206 para a Meta, cofre, presign SigV4, stats).
-- `nuvem-duravel.js` — camada no browser (`window.CineCloud`), carregada antes do bundle.
-- `tools/` — patch reproduzível do bundle, mocks locais, servidor de preview e testes.
+- `src/lib/cloud.ts` — camada de nuvem no browser (antiga `nuvem-duravel.js`, portada 1:1).
+- `tools/` — mocks locais (R2 + Drive) e testes que correm contra `src/` e os backends reais.

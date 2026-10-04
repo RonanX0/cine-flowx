@@ -1,11 +1,10 @@
-#!/usr/bin/env node
 /**
  * Mock local do backend Google Drive (apps-script/cineclip-cloud-drive.js).
  * Replica o MESMO contrato — incluindo o detalhe importante de que o Apps Script
  * devolve sempre HTTP 200 e reporta os erros no corpo JSON ({ok:false,…}), e que
  * o link do vídeo NÃO suporta Range.
  *
- * Montado em /drive-api pelo tools/dev-server.mjs.
+ * Montado em /drive-api pelo plugin de dev do vite.config.ts.
  */
 import fs from "node:fs";
 import path from "node:path";
