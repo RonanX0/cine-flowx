@@ -111,6 +111,7 @@ function criarAmbiente(opcoes = {}) {
       bg: () => "https://nuvem.exemplo/reel.mp4",
       sonda: () => ({ status: 200, tipo: "video/mp4" }),
       claim: () => ({ ok: true, provider: "cloudflare-r2", key: "cc_hash_reel_1", owner: "app:1a2b" }),
+      claimSkipMessage: null, // se definido, é exposto no mock de window.CineCloud
     },
     opcoes
   );
@@ -202,6 +203,7 @@ function criarAmbiente(opcoes = {}) {
             claims.push({ id: it && it.id, ttlMs: opts && opts.ttlMs });
             return o.claim(it, opts);
           },
+          ...(o.claimSkipMessage ? { claimSkipMessage: o.claimSkipMessage } : {}),
         },
   };
 
@@ -461,6 +463,30 @@ console.log("\n14. Claim tomada por outro aparelho → para antes de publicar");
   check("não publica", !out.ok);
   check("explica que outro aparelho está a publicar", !out.ok && /Outro aparelho ou o Robô 24h/.test(out.erro.message), !out.ok ? out.erro.message : "");
   check("não chegou a criar containers", !amb.chamadas.some((c) => c.tipo === "fetch"));
+}
+
+/* 14b — a recusa explica quem tem a claim e até quando (mensagem do CineCloud) */
+console.log("\n14b. Claim tomada: a mensagem final diz quem publica e até quando");
+{
+  const ate = new Date(Date.now() + 5 * 60 * 1000);
+  const amb = criarAmbiente({
+    claim: () => ({ ok: false, reason: "held", holder: { owner: "robo:9x8y", expiresAt: ate.getTime() } }),
+    claimSkipMessage: (c, titulo) =>
+      `⏳ "${titulo}" já está a ser publicado por ${c.holder.owner} — envio ignorado para não publicar duas vezes.`,
+  });
+  const it = item();
+  const out = await publicar(amb, it);
+  check("não publica", !out.ok);
+  check(
+    "a mensagem diz quem está a publicar",
+    !out.ok && /robo:9x8y/.test(out.erro.message),
+    !out.ok ? out.erro.message : ""
+  );
+  check(
+    "a mensagem convida a tentar depois (sem prometer minutos mágicos)",
+    !out.ok && /Tenta novamente depois dessa hora\./.test(out.erro.message),
+    !out.ok ? out.erro.message : ""
+  );
 }
 
 /* ------------------------------------------------------------------ fim */

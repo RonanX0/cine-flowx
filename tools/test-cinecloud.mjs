@@ -36,10 +36,13 @@ const TEST_PORT = Number(process.env.TEST_PORT || 4199);
 let BASE = process.env.CLOUD_BASE || "";
 let BASE_TINY = "";
 let BASE_OLD = process.env.CLOUD_BASE_OLD || "";
+let BASE_STUCK = process.env.CLOUD_BASE_STUCK || "";
 let STORE_DIR = "";
 let server = null;
 let serverTiny = null;
 let serverOld = null;
+let serverStuck = null;
+let stuckState = null; // estado do "backend preso" (ver 14b)
 
 if (!BASE) {
   const storeDir = path.join(root, ".mock-cloud", "test");
@@ -107,6 +110,39 @@ if (!BASE) {
   });
   await new Promise((resolve) => serverOld.listen(TEST_PORT + 2, "127.0.0.1", resolve));
   BASE_OLD = `http://127.0.0.1:${TEST_PORT + 2}`;
+
+  // "backend preso": imita um Worker R2 ANTIGO (antes da correção da renovação):
+  // recusa TODAS as claims com `acquired:false` e `holder:null`, exatamente o que
+  // deixava o app a mostrar "Outro aparelho ou o Robô 24h está a publicar este
+  // Reel" para sempre. Serve para provar que a camada de nuvem confirma o estado
+  // real da claim e degrada em segurança em vez de prender a fila.
+  const stuck = { live: false, statusHits: 0 };
+  stuckState = stuck;
+  serverStuck = http.createServer(async (req, res) => {
+    const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+    const path = url.pathname.replace(/^\/cloud-api/, "") || "/";
+    const send = (status, data) => {
+      res.writeHead(status, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
+      res.end(JSON.stringify(data));
+    };
+    if (path === "/api/claims/acquire" && req.method === "POST") {
+      return send(200, {
+        ok: true, provider: "cloudflare-r2", acquired: false, holder: null,
+        note: "Não foi possível obter a claim (concorrência). Tenta de novo."
+      });
+    }
+    if (path.startsWith("/api/claims/") && req.method === "GET") {
+      stuck.statusHits++;
+      if (!stuck.live) return send(200, { ok: true, provider: "cloudflare-r2", active: false, claim: null, expired: true });
+      return send(200, {
+        ok: true, provider: "cloudflare-r2", active: true,
+        claim: { key: decodeURIComponent(path.slice("/api/claims/".length)), owner: "robo:antigo", expiresAt: Date.now() + 5 * 60 * 1000 }
+      });
+    }
+    send(404, { ok: false, error: "Rota desconhecida" });
+  });
+  await new Promise((resolve) => serverStuck.listen(TEST_PORT + 3, "127.0.0.1", resolve));
+  BASE_STUCK = `http://127.0.0.1:${TEST_PORT + 3}`;
 }
 const BASE_SMALL = process.env.CLOUD_BASE_SMALL || BASE; // mesmo servidor: limite direto = 1 MB
 
@@ -687,6 +723,32 @@ check("backend sem claims → publica na mesma (degraded)", claimOld.ok === true
 const relOld = await CC.releaseClaim(claimOld);
 check("releaseClaim em modo degradado é no-op", relOld.ok === true && relOld.skipped === true, JSON.stringify(relOld));
 
+/* 14b — backend que recusa claims SEM dizer quem as tem (Worker antigo preso) */
+console.log("\nClaim presa num Worker antigo (recusa sem dono)");
+if (BASE_STUCK) {
+  setSettings(sb, { r2WorkerUrl: BASE_STUCK + "/cloud-api", r2Token: TOKEN });
+  const stuck = stuckState;
+  stuck.live = false;
+  stuck.statusHits = 0;
+  const stuckNoOwner = await CC.claimPublish({ id: "reel_presa", vaultHash: "hash_claims" });
+  check("confirmou o estado da claim antes de decidir", stuck.statusHits > 0, String(stuck.statusHits));
+  check(
+    "recusa sem dono e sem claim viva → não bloqueia a publicação (degradado)",
+    stuckNoOwner.ok === true && stuckNoOwner.degraded === true,
+    JSON.stringify({ ok: stuckNoOwner.ok, degraded: stuckNoOwner.degraded, reason: stuckNoOwner.reason })
+  );
+
+  stuck.live = true;
+  const stuckHeld = await CC.claimPublish({ id: "reel_presa", vaultHash: "hash_claims" });
+  check(
+    "recusa sem dono mas com claim viva confirmada → respeita o dono",
+    stuckHeld.ok === false && stuckHeld.reason === "held" && stuckHeld.holder && stuckHeld.holder.owner === "robo:antigo",
+    JSON.stringify({ ok: stuckHeld.ok, reason: stuckHeld.reason, holder: stuckHeld.holder })
+  );
+} else {
+  console.log("   (BASE_STUCK não configurado — testes da claim presa ignorados)");
+}
+
 /* 15 — diagnóstico */
 console.log("\nDiagnóstico");
 setSettings(sb, { r2WorkerUrl: "/cloud-api", r2Token: TOKEN, driveScriptUrl: "/drive-api", driveToken: DRIVE_TOKEN });
@@ -704,4 +766,5 @@ if (failures.length) {
 if (server) server.close();
 if (serverTiny) serverTiny.close();
 if (serverOld) serverOld.close();
+if (serverStuck) serverStuck.close();
 process.exit(fail === 0 ? 0 : 1);

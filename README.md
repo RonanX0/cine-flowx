@@ -84,12 +84,26 @@ ficou em erro pode ser reenviado pelo **Publicar agora** do Agendador.
 
 Cada tentativa **renova a claim anti-duplicado** (TTL de 30 min) para o TTL de 10 min do
 Worker/Apps Script não expirar a meio de um envio longo — e se a claim passar a ser de
-outro aparelho/Robô, a publicação para em vez de arriscar um Reel repetido.
+outro aparelho/Robô, a publicação para em vez de arriscar um Reel repetido. A mensagem diz
+**quem** tem a claim e **até quando**, para se saber quando voltar a tentar.
+
+> 🔧 **Correção da renovação da claim (Worker R2).** O Worker usava sempre
+> `onlyIf: { etagDoesNotMatch: "*" }` ao gravar a claim. Como o objeto já existia (a claim
+> que o próprio app acabou de obter, ou uma claim expirada deixada por uma execução
+> interrompida), a renovação e o takeover falhavam sempre: o app recebia `acquired:false`
+> sem dono e abortava a publicação com *"Erro em …: Outro aparelho ou o Robô 24h está a
+> publicar este Reel agora (proteção anti-duplicado)"* — mesmo sem ninguém a publicar, e o
+> "tenta novamente dentro de alguns minutos" nunca se cumpria. Agora a renovação do mesmo
+> dono usa escrita condicional ao `ETag` e as claims mortas (expiradas/ilegíveis) são
+> substituídas ou apagadas. **Se já tens o Worker instalado, faz `npx wrangler deploy`
+> outra vez.** Ver `npm run worker:test` (43 verificações do Worker real contra um bucket R2
+> falso, incluindo renovação, takeover e corrida entre dois donos) e a secção 10 de
+> [NUVEM-DURAVEL.md](NUVEM-DURAVEL.md).
 
 Testar tudo isto sem conta Meta (Graph API, `rupload.facebook.com` e XHR simulados):
 
 ```bash
-npm run ig:test   # 46 verificações: envio direto, fallback, retries, links, claims, dicas
+npm run ig:test   # 49 verificações: envio direto, fallback, retries, links, claims, dicas
 ```
 
 ## ☁️ Nuvem durável (Google Drive **ou** Cloudflare R2)
@@ -121,7 +135,8 @@ anti-apagão da fila, migração automática dos cofres antigos e selos honestos
 ```bash
 npm run nuvem          # app + mocks em http://localhost:4173 (/drive-api e /cloud-api) — testar sem contas
 npm run nuvem:test     # testes ponta-a-ponta da camada de nuvem (arranca os mocks sozinho)
-npm test               # testes da nuvem + proxy NVIDIA
+npm run worker:test    # testes do Worker real (cloudflare/r2-worker.js) com um bucket R2 falso
+npm test               # testes da nuvem + Worker + proxy NVIDIA + publicação no Instagram
 npm run build          # gera dist/ para deploy estático
 npm run patch:full     # reconstrói/verifica o bundle e reaplica os patches
 npm run patch:agendador # regenera e aplica o layout do Agendador (tools/agendador-ui/)

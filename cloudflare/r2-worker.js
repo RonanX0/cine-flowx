@@ -386,10 +386,12 @@ async function handleStats(env) {
  *
  * Semântica:
  *   • `owner` diferente e claim viva → recusado (`acquired: false` + `holder`);
- *   • mesmo `owner` → renova (o TTL é estendido), para retries não se atropelarem;
- *   • claim expirada é ignorada e pode ser tomada por outro;
- *   • a escrita é condicional + verificada por releitura, para dois pedidos
- *     simultâneos não ficarem ambos a pensar que ganharam.
+ *   • mesmo `owner` → renova (o TTL é estendido), para os retries do mesmo
+ *     aparelho não se atropelarem;
+ *   • claim expirada/ilegível → ignorada, pode ser tomada por outro (o objeto
+ *     antigo é substituído ou apagado — a chave nunca fica presa);
+ *   • a escrita é condicional (ETag) + verificada por releitura, para dois
+ *     pedidos simultâneos não ficarem ambos a pensar que ganharam.
  */
 
 function clampClaimTtl(value) {
@@ -400,28 +402,60 @@ function clampClaimTtl(value) {
 
 const claimObjectName = (key) => `${CLAIM_PREFIX}${safeName(key)}.json`;
 
-async function readClaim(env, key) {
+/**
+ * Lê a claim e guarda o ETag: as escritas condicionais abaixo precisam dele para
+ * detetar que outro dispositivo escreveu no meio.
+ * @returns {Promise<{claim: object|null, etag: string|null, exists: boolean}>}
+ */
+async function readClaimEntry(env, key) {
   const object = await env.BUCKET.get(claimObjectName(key));
-  if (!object) return null;
+  if (!object) return { claim: null, etag: null, exists: false };
+  const etag = object.etag ? String(object.etag) : null;
   try {
     const claim = JSON.parse(await object.text());
-    if (!claim || typeof claim !== "object") return null;
+    if (!claim || typeof claim !== "object") return { claim: null, etag, exists: true };
     if (!claim.key) claim.key = key;
-    return claim;
+    return { claim, etag, exists: true };
   } catch {
-    return null;
+    // Objeto ilegível a ocupar a chave: tratado como claim morta.
+    return { claim: null, etag, exists: true };
   }
 }
 
-async function activeClaim(env, key, nowMs) {
-  const claim = await readClaim(env, key);
-  if (!claim) return null;
-  if (Number(claim.expiresAt || 0) <= nowMs) return null;
-  return claim;
+async function readClaim(env, key) {
+  return (await readClaimEntry(env, key)).claim;
 }
+
+const claimIsLive = (claim, nowMs) => !!(claim && Number(claim.expiresAt || 0) > nowMs);
 
 const holderOf = (claim) =>
   claim ? { owner: claim.owner, expiresAt: claim.expiresAt } : null;
+
+/**
+ * Escrita condicional no R2.
+ *   {ok:true,  written:true}   → gravou
+ *   {ok:true,  written:false}  → a pré-condição (`onlyIf`) falhou: alguém
+ *                                escreveu primeiro (é o caso normal do pedido
+ *                                concorrente — não é erro)
+ *   {ok:false, error}          → o R2 recusou mesmo a escrita
+ */
+async function putClaim(env, objectName, body, onlyIf) {
+  const meta = { httpMetadata: { contentType: "application/json; charset=utf-8" } };
+  try {
+    const written = await env.BUCKET.put(objectName, body, onlyIf ? { ...meta, onlyIf } : meta);
+    return { ok: true, written: written !== null };
+  } catch (err) {
+    if (!onlyIf) return { ok: false, error: err };
+    // Runtime antigo (sem `onlyIf`): escrita simples — a releitura no fim do
+    // ciclo continua a confirmar quem ficou com a claim.
+    try {
+      const written = await env.BUCKET.put(objectName, body, meta);
+      return { ok: true, written: written !== null };
+    } catch (err2) {
+      return { ok: false, error: err2 };
+    }
+  }
+}
 
 async function handleClaimAcquire(request, env) {
   if (!env.BUCKET) return fail("Worker sem binding R2 (BUCKET).", 500);
@@ -439,56 +473,94 @@ async function handleClaimAcquire(request, env) {
   if (!owner) return fail("Claim sem 'owner' (quem está a publicar).", 400);
 
   const ttlMs = clampClaimTtl(payload.ttlMs);
-  const nowMs = Date.now();
   const objectName = claimObjectName(key);
-  const meta = { httpMetadata: { contentType: "application/json; charset=utf-8" } };
   let lastHolder = null;
 
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    const current = await activeClaim(env, key, nowMs);
-    if (current && current.owner !== owner) {
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    const nowMs = Date.now();
+    const entry = await readClaimEntry(env, key);
+    const live = claimIsLive(entry.claim, nowMs);
+
+    if (live && entry.claim.owner !== owner) {
       return json({
         ok: true, provider: "cloudflare-r2", acquired: false,
-        holder: holderOf(current), retryAfterMs: Math.max(0, current.expiresAt - nowMs),
+        holder: holderOf(entry.claim),
+        retryAfterMs: Math.max(0, Number(entry.claim.expiresAt || 0) - nowMs),
       });
     }
 
     const claim = {
       key, owner, provider: "cloudflare-r2",
-      acquiredAt: nowMs, expiresAt: nowMs + ttlMs, renewals: attempt,
+      acquiredAt: live ? Number(entry.claim.acquiredAt) || nowMs : nowMs,
+      expiresAt: nowMs + ttlMs,
+      renewals: live ? (Number(entry.claim.renewals) || 0) + 1 : 1,
     };
     const body = JSON.stringify(claim);
 
-    try {
-      // 1ª tentativa: só cria se não existir nada (fecha a corrida de dois
-      // dispositivos a reclamar no mesmo instante). Se o runtime não suportar
-      // `onlyIf`, cai no put simples — a releitura abaixo ainda verifica.
-      const written = await env.BUCKET.put(objectName, body, {
-        ...meta,
-        onlyIf: { etagDoesNotMatch: "*" },
-      });
-      if (written === null) {
-        // Perdemos a corrida (ou existe uma claim expirada a ocupar o lugar):
-        // volta a ler no próximo ciclo do loop e decide.
+    // Que pré-condição usar na escrita:
+    //   • chave vazia → só cria se continuar vazia (fecha a corrida de dois
+    //     dispositivos a reclamar no mesmo instante);
+    //   • claim VIVA DO MESMO DONO (renovação — o app renova antes de cada
+    //     tentativa de publicação) ou claim expirada/ilegível (takeover): o
+    //     objeto já existe, logo a escrita é condicionada ao ETag lido.
+    // Este era o bug: com `etagDoesNotMatch: "*"` fixo, a renovação do mesmo
+    // dono falhava sempre, o app recebia `acquired:false` e abortava a
+    // publicação com "Outro aparelho ou o Robô 24h está a publicar este Reel".
+    const conditional = entry.exists
+      ? (entry.etag ? { etagMatches: entry.etag } : null)
+      : { etagDoesNotMatch: "*" };
+
+    let written = await putClaim(env, objectName, body, conditional);
+    if (!written.ok) {
+      const detail = written.error && written.error.message ? written.error.message : written.error;
+      return fail(`Falha ao gravar a claim no R2: ${detail}`, 500);
+    }
+
+    if (!written.written) {
+      // A pré-condição falhou: outro pedido escreveu entretanto. Decide pelo que
+      // está lá agora.
+      const again = await readClaimEntry(env, key);
+      const againLive = claimIsLive(again.claim, Date.now());
+
+      if (!again.exists || !againLive) {
+        // Claim morta (expirada ou ilegível) a ocupar a chave: liberta-a e
+        // repete. Sem isto a chave ficava presa para sempre e NENHUM aparelho
+        // voltava a conseguir publicar aquele Reel.
+        if (again.exists) {
+          try {
+            await env.BUCKET.delete(objectName);
+          } catch {
+            /* melhor esforço: o ciclo seguinte volta a tentar */
+          }
+        }
         continue;
       }
-    } catch (err) {
-      try {
-        await env.BUCKET.put(objectName, body, meta);
-      } catch (err2) {
-        return fail(
-          `Falha ao gravar a claim no R2: ${err2 && err2.message ? err2.message : err2}`,
-          500
-        );
+
+      if (again.claim.owner === owner) {
+        // A claim ainda é NOSSA e está viva (a condição por ETag pode não ser
+        // suportada por este runtime): renovar por cima é seguro, porque o
+        // Worker nunca deixa outro dono tomar uma claim viva.
+        written = await putClaim(env, objectName, body, null);
+        if (!written.ok) {
+          const detail = written.error && written.error.message ? written.error.message : written.error;
+          return fail(`Falha ao renovar a claim no R2: ${detail}`, 500);
+        }
+        if (!written.written) continue;
+      } else {
+        lastHolder = again.claim;
+        continue;
       }
     }
 
     // Verificação read-after-write: quem ficou gravado é o dono da claim.
-    const held = await readClaim(env, key);
-    if (held && held.owner === owner) {
-      return json({ ok: true, provider: "cloudflare-r2", acquired: true, claim: held });
+    const held = await readClaimEntry(env, key);
+    if (held.claim && held.claim.owner === owner) {
+      return json({
+        ok: true, provider: "cloudflare-r2", acquired: true,
+        renewed: live, claim: held.claim,
+      });
     }
-    lastHolder = held;
+    lastHolder = held.claim;
   }
 
   return json({
@@ -559,7 +631,17 @@ async function handleClaimsList(env) {
       } catch {
         continue;
       }
-      if (claim && Number(claim.expiresAt || 0) > nowMs) active.push(claim);
+      if (claim && Number(claim.expiresAt || 0) > nowMs) {
+        active.push(claim);
+      } else {
+        // Claim morta: limpa-a já, para o bucket não acumular objetos e para a
+        // listagem de diagnóstico dizer só a verdade (o Apps Script faz o mesmo).
+        try {
+          await env.BUCKET.delete(o.key);
+        } catch {
+          /* melhor esforço */
+        }
+      }
     }
     cursor = listed.cursor;
     guard++;
