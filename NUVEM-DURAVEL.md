@@ -467,11 +467,18 @@ O patch `24-ig-2207077` ataca as duas pontas:
   inutilizável) até 3 tentativas, alternando as estratégias; os erros permanentes
   (`2207026`, `2207042`, `2207050`, `2207051`, token) terminam logo com a dica certa.
 
+> **Cuidado com helpers do bundle base.** O bloco do patch substitui um troço onde vivia o
+> `hS` (eleva a capa de `/t/p/w300/` para `/t/p/w780/`). Chamar nomes que ficaram para trás no
+> troço substituído dá `ReferenceError` só no browser — a publicação falhava com
+> `hS is not defined` apesar de os testes passarem, porque o contexto `vm` do teste injetava
+> um `hS` falso. O `hS` voltou a ser declarado dentro do bloco e a secção **0** do
+> `tools/test-ig-publish.mjs` falha se uma chamada apontar para um helper que já não exista
+> dentro do bloco (nem seja um dos dois do bundle que ele pode usar: `bg` e `Yo`).
+
 Testar sem conta Meta:
 
 ```bash
-npm run ig:test   # 49 verificações com a Graph API e o rupload simulados
-```
+# 56 verificações com a Graph API e o rupload simulados```
 
 Como agora se podem fazer até 3 tentativas (envio + processamento), o app **renova a claim
 antes de cada tentativa** (`ttlMs` de 30 min) — o TTL de 10 min do Worker/Apps Script nunca

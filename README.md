@@ -82,6 +82,14 @@ O erro mostrado na interface passa a trazer o código e a dica (ex.: *"O Instagr
 processamento do vídeo (código 2207077): … · Dica: … (após 3 tentativas)"*), e um Reel que
 ficou em erro pode ser reenviado pelo **Publicar agora** do Agendador.
 
+> **Regressão `hS is not defined`.** O `hS` — o helper que eleva a capa do Instagram
+> (`/t/p/w300/` → `/t/p/w780/`) — vivia **dentro** do troço do bundle que o patch 24 substitui.
+> Como o código novo continuava a chamá-lo, a publicação rebentava logo na primeira tentativa
+> (`ReferenceError: hS is not defined`), apesar de `npm run ig:test` passar: o contexto `vm` do
+> teste injetava um `hS` falso, escondendo exatamente o que falhava no browser. Agora o helper é
+> declarado dentro do próprio bloco e o teste tem a secção **0. Autossuficiência do bloco**, que
+> falha se uma chamada apontar para um helper que só exista no bundle que envolve o bloco.
+
 Cada tentativa **renova a claim anti-duplicado** (TTL de 30 min) para o TTL de 10 min do
 Worker/Apps Script não expirar a meio de um envio longo — e se a claim passar a ser de
 outro aparelho/Robô, a publicação para em vez de arriscar um Reel repetido. A mensagem diz
@@ -103,8 +111,7 @@ outro aparelho/Robô, a publicação para em vez de arriscar um Reel repetido. A
 Testar tudo isto sem conta Meta (Graph API, `rupload.facebook.com` e XHR simulados):
 
 ```bash
-npm run ig:test   # 49 verificações: envio direto, fallback, retries, links, claims, dicas
-```
+# 56 verificações: envio direto, fallback, retries, links, capa, claims, dicas```
 
 ## ☁️ Nuvem durável (Google Drive **ou** Cloudflare R2)
 
