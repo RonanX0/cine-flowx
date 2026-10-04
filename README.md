@@ -112,6 +112,19 @@ outro aparelho/Robô, a publicação para em vez de arriscar um Reel repetido.
 > `npm run worker:test` (o Worker real contra um bucket R2 falso, incluindo renovação,
 > takeover, corrida entre dois donos e runtimes sem escrita condicional).
 
+> **Regressão do botão "Publicar agora" (o clique não fazia nada).** O patch das claims
+> (19/20) passou a usar `oe.current` como cadeado de publicação — mas `oe` é o **ref do
+> `<input type="file">`** do botão *Importar*, que é renderizado sempre que o Agendador
+> está aberto. Como o React preenche esse ref logo na montagem, `oe.current` era sempre
+> verdadeiro: o handler saía pelo `if(oe.current) return` e o clique não publicava, não
+> mostrava erro e nem sequer tocava na API da Meta. O **Auto-Pilot** (o intervalo de 30 s
+> chama o mesmo handler) também ficava mudo — parecia tudo normal, o Reel só nunca saía.
+> Os testes existentes não apanhavam isto porque cobriam `gS`/claims em isolamento, nunca
+> o clique. Agora o cadeado tem um ref **próprio** (`ccPubLock`, patch `25-publish-lock`),
+> o `oe` volta a servir só o `<input type="file">`, e `tools/test-agendador-publish.mjs`
+> arranca o bundle real em jsdom, faz login, clica no botão e exige um pedido a
+> `graph.facebook.com` — sem isso, o teste falha.
+
 ### Ainda apanhas o 2207077? Confirma que estás na versão nova
 
 A mensagem diz-te qual o código que está a correr, **sem abrires o bundle**:

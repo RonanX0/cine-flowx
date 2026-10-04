@@ -113,6 +113,14 @@ for (const f of PAGINAS) {
   check(`${f}: a mensagem de erro inclui o código`, html.includes('" (código "+numero+")"'));
   check(`${f}: tem o envio direto (resumable)`, html.includes("upload_type"));
   check(`${f}: o bloco de publicação está fechado`, html.includes("/* ==CINECLIP-IG-FIM== */"));
+  /* O botão "Publicar agora" do Agendador não pode voltar a usar o ref do
+     <input type="file"> (`oe`) como cadeado: esse ref está SEMPRE preenchido depois
+     de o componente montar, o handler saía pelo `if(oe.current)return` e o clique
+     não fazia nada (nem erro, nem pedido à Meta). O clique real é testado por
+     tools/test-agendador-publish.mjs; aqui garante-se que o deploy publicado tem
+     o cadeado dedicado. */
+  check(`${f}: o cadeado de publicação tem ref próprio`, html.includes("ccPubLock=b.useRef(null)"));
+  check(`${f}: o handler de publicar não usa o ref do input de ficheiro`, !html.includes("if(oe.current)return"));
 }
 const [a, b, c] = PAGINAS.map((f) => hash(fs.readFileSync(path.join(dist, f))));
 check("as três páginas servem o mesmo app", a === b && b === c);

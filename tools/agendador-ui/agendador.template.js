@@ -11,8 +11,10 @@
  *   D  id a publicar                      fe próximo horário livre
  *   se/$  data escolhida p/ agendar       V/te  horários (texto "12:00, 18:00")
  *   w/_  form. nova conta  k/C nome nova conta   g/v painel config (legado)
- *   oe ref do <input file>   he() recarregar fila   u() avisar a app (sync)
+ *   oe ref do <input file> (botão "Importar")   he() recarregar fila   u() avisar a app (sync)
  *   ye(patch) gravar conta  Te() criar conta  le(item) publicar agora
+ *   (o cadeado de publicação é `ccPubLock`, ref dedicado do patch 25 — NUNCA o `oe`,
+ *    que é o ref do <input type="file"> e está sempre preenchido depois de montar)
  *   ce() agendar clipe atual  z() salvar pacote  R(files) importar
  *   U(item,data) reagendar  K(item,conta) mover  H(id) remover  ne() exportar
  *   Ícones: xi CalendarClock, Kr Sparkles, Z0 Settings2, T0 FolderUp, Ko Download,
