@@ -14,6 +14,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { INICIO_BLOCO_IG, extrairBlocoIG, analisarAutossuficiencia } from "./ig-block.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const patchDir = path.join(root, "tools", "patches");
@@ -167,6 +168,26 @@ for (const file of targets) {
     process.exitCode = 1;
   } else {
     console.log(`   ✔ ${file}: nuvem-duravel.js incluído antes do bundle`);
+  }
+
+  // O bloco do patch 24 é injetado por cima do bundle: nenhuma chamada pode apontar para
+  // um nome que só exista no troço substituído. Foi o caso do `hS`, que fazia a publicação
+  // rebentar com "hS is not defined" sem os testes — nem o `--check` de sintaxe — darem por isso.
+  const blocoIG = extrairBlocoIG(html);
+  if (!blocoIG) {
+    console.error(`   ❌ ${file}: bloco de publicação de Reels não encontrado (${INICIO_BLOCO_IG} …)`);
+    process.exitCode = 1;
+  } else {
+    const semDeclaracao = analisarAutossuficiencia(blocoIG);
+    if (semDeclaracao.length) {
+      console.error(
+        `   ❌ ${file}: o bloco de publicação chama helpers que não existem dentro dele: ${semDeclaracao.join(", ")}\n` +
+          "      Declara-os no bloco (tools/patches/24-ig-2207077.replace) — no browser dá ReferenceError."
+      );
+      process.exitCode = 1;
+    } else {
+      console.log(`   ✔ ${file}: bloco de publicação de Reels autossuficiente`);
+    }
   }
 
   // Gera o código do Robô 24h e valida a sintaxe do resultado
