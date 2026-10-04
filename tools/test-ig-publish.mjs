@@ -11,7 +11,9 @@
  *   • quando o navegador bloqueia o envio direto, cai para o video_url;
  *   • um 2207077 no video_url é repetido com um container NOVO e outra estratégia;
  *   • links temporários/expirados são renovados antes de gastar a tentativa;
- *   • erros permanentes (2207042/2207026/2207050/2207051) não são repetidos.
+ *   • erros permanentes (2207042/2207026/2207050/2207051) não são repetidos;
+ *   • o bloco é AUTOSSUFICIENTE: não chama nenhum helper que só exista no bundle que o
+ *     envolve (regressão do `hS is not defined`, que bloqueava a publicação em produção).
  *
  *   node tools/test-ig-publish.mjs
  */
@@ -19,11 +21,17 @@ import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
 
+import {
+  INICIO_BLOCO_IG,
+  FIM_BLOCO_IG,
+  analisarAutossuficiencia,
+} from "./ig-block.mjs";
+
 const root = path.resolve(import.meta.dirname, "..");
 const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
 
-const INICIO = "async function mS(r){";
-const FIM = "/* ==CINECLIP-IG-FIM== */";
+const INICIO = INICIO_BLOCO_IG;
+const FIM = FIM_BLOCO_IG;
 const i0 = html.indexOf(INICIO);
 const i1 = html.indexOf(FIM, i0);
 if (i0 < 0 || i1 < 0) {
@@ -242,7 +250,10 @@ function criarAmbiente(opcoes = {}) {
       if (r && r.erro) throw new Error(r.erro);
       return r;
     },
-    hS: (poster) => poster || "",
+    // NOTA: `hS` NÃO é injetado aqui de propósito. Ele era um helper do bundle base que
+    // vivia dentro do troço substituído pelo patch 24; quando foi dado como falso global
+    // neste contexto, o teste escondeu o erro que rebentava em produção ("hS is not
+    // defined" ao publicar). O bloco tem de o declarar por si (ver secção 0).
     Yo: "https://graph.facebook.com/v21.0",
   };
 
@@ -272,6 +283,23 @@ async function publicar(ambiente, it, conta) {
 /* ----------------------------------------------------------------- testes */
 
 console.log(`\n🎬 Publicação de Reels — bloco extraído do bundle (${FONTE.length} bytes)\n`);
+
+/* 0 — o bloco tem de ser autossuficiente (regressão do "hS is not defined") */
+console.log("0. Autossuficiência do bloco (regressão do `hS is not defined`)");
+{
+  const refsH = (FONTE.match(/\bhS\s*\(/g) || []).length;
+  check(
+    "o helper da capa (hS) está declarado dentro do bloco",
+    refsH === 0 || /\bfunction\s+hS\s*\(/.test(FONTE),
+    `${refsH} referência(s) a hS sem declaração no bloco — é o erro "hS is not defined" da publicação`
+  );
+  const suspeitos = analisarAutossuficiencia(FONTE);
+  check(
+    "o bloco não chama helpers que só existam no bundle",
+    suspeitos.length === 0,
+    suspeitos.length ? `sem declaração dentro do bloco: ${suspeitos.join(", ")}` : ""
+  );
+}
 
 /* 1 — envio direto (resumable) sem link público nenhum */
 console.log("1. Envio direto (upload_type=resumable)");
@@ -461,6 +489,32 @@ console.log("\n14. Claim tomada por outro aparelho → para antes de publicar");
   check("não publica", !out.ok);
   check("explica que outro aparelho está a publicar", !out.ok && /Outro aparelho ou o Robô 24h/.test(out.erro.message), !out.ok ? out.erro.message : "");
   check("não chegou a criar containers", !amb.chamadas.some((c) => c.tipo === "fetch"));
+}
+
+/* 15 — capa do Reel: hS eleva o pôster do CDN do Instagram para w780 */
+console.log("\n15. Capa do Reel (hS eleva o pôster para w780)");
+{
+  const amb = criarAmbiente();
+  const poster = "https://scontent.cdninstagram.com/v/t51.2885-15/t/p/w300/capa.jpg";
+  const hSDoBloco = amb.api.hS;
+  check("hS fica disponível dentro do bloco", typeof hSDoBloco === "function");
+  check(
+    "hS eleva w300 → w780",
+    typeof hSDoBloco === "function" && hSDoBloco(poster) === poster.replace("/w300/", "/w780/"),
+    typeof hSDoBloco === "function" ? hSDoBloco(poster) : "hS não definido"
+  );
+  check(
+    "hS respeita pôsteres já maiores",
+    typeof hSDoBloco === "function" && hSDoBloco("https://x/t/p/w1080/capa.jpg") === "https://x/t/p/w1080/capa.jpg"
+  );
+  const out = await publicar(amb, item({ poster }));
+  check("publica com pôster oficial de capa", out.ok && out.res.publishedId === "MEDIA_PUBLICADA", out.erro && out.erro.message);
+  const container = amb.chamadas.find((c) => c.tipo === "fetch" && c.corpo.includes("upload_type=resumable"));
+  check(
+    "o container leva o cover_url elevado a w780",
+    !!container && container.corpo.includes(encodeURIComponent(poster.replace("/w300/", "/w780/"))),
+    container ? container.corpo.slice(0, 200) : "sem container"
+  );
 }
 
 /* ------------------------------------------------------------------ fim */

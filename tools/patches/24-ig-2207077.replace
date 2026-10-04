@@ -1,4 +1,8 @@
 async function mS(r){return new Promise(o=>setTimeout(o,r))}
+/* Helper do bundle base que vivia DENTRO do troço substituído por este patch: sem esta
+   declaração o bloco usava um global que já não existe e a publicação rebentava com
+   "hS is not defined". Fica aqui para o patch ser autossuficiente. */
+function hS(r){if(!(!r||!r.trim()))return r.trim().replace(/\/t\/p\/w(92|154|185|300|342|500)\//,"/t/p/w780/")}
 /* ═══════════════════════════════════════════════════════════════════════════════════
    CINECLIP · PUBLICAÇÃO DE REELS À PROVA DO ERRO 2207077 (Instagram / Meta)
    ───────────────────────────────────────────────────────────────────────────────────
