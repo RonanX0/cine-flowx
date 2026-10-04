@@ -18,6 +18,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import vm from "node:vm";
 
 const root = path.resolve(import.meta.dirname, "..");
 
@@ -120,11 +121,60 @@ check("a publicação do app usa claims", html.includes("renovarClaim"));
 check("avisa quando outro aparelho/Robô está a publicar", html.includes("Outro aparelho ou o Robô 24h está a publicar"));
 check("sem o comentário «Publicação apenas no dispositivo»", !html.includes("Publicação apenas no dispositivo"));
 check("sem o aviso de desativação do robô", !html.includes("A publicação automática funciona apenas enquanto"));
-check("a fila sincroniza como «scheduled» (não device_scheduled)", !html.includes("device_scheduled"));
+check("a fila continua a gravar-se como «scheduled» (a versão só-manual reescrevia para device_scheduled)", !html.includes('?"device_scheduled":'));
 check("a aba Robô 24h oferece o botão de instalação", html.includes("Copiar Código do Robô 24h"));
 
-/* ------------------------------------------------- 5. as três páginas iguais */
-console.log("\n5. Home, app-pronto.html e 404 servem o mesmo robô");
+/* ---------------------------- 5. fila gravada pela versão «só no dispositivo» */
+console.log("\n5. Migração: fila gravada como device_scheduled volta à fila do robô");
+
+check(
+  "o robô aceita um Reel guardado como device_scheduled",
+  /item\.status !== "scheduled" && item\.status !== "device_scheduled"/.test(gas)
+);
+{
+  // Lê-se o SS do bundle (o mesmo bloco que o patch 05 instala) e corre-se num
+  // contexto vm com a camada de nuvem falsa — a fila vem com device_scheduled.
+  const i0 = html.indexOf("async function SS(r){");
+  const i1 = html.indexOf("let Oa=null,", i0);
+  check("a função SS (leitura do cofre) existe no bundle", i0 > 0 && i1 > i0);
+  if (i0 > 0 && i1 > i0) {
+    const fonte = html.slice(i0, i1);
+    const fila = {
+      queue: [
+        { id: "r1", title: "Reel antigo", status: "device_scheduled" },
+        { id: "r2", title: "Publicado", status: "published" },
+        { id: "r3", title: "Com erro", status: "error" },
+      ],
+    };
+    const contexto = vm.createContext({
+      window: {
+        CineCloud: {
+          getVaultCipher: async () => ({ data: JSON.stringify(fila) }),
+          markReadFailure() {},
+          log() {
+            return null;
+          },
+        },
+      },
+      Gm: async (v) => JSON.parse(v),
+      fetch: async () => ({ ok: false }),
+    });
+    vm.runInContext(fonte + ";this.api={SS}", contexto);
+    let lido = null;
+    try {
+      lido = await contexto.api.SS({});
+    } catch (err) {
+      console.log(`   ❌ a leitura do cofre rebentou — ${err.message}`);
+      fail++;
+    }
+    check("device_scheduled volta a «scheduled»", !!lido && lido.queue[0].status === "scheduled", lido && JSON.stringify(lido.queue[0]));
+    check("não mexe nos outros estados", !!lido && lido.queue[1].status === "published" && lido.queue[2].status === "error");
+    check("o Robô 24h volta a ver esse Reel na fila", !!lido && lido.queue[0].status === "scheduled" && gas.includes('item.status !== "scheduled"'));
+  }
+}
+
+/* ------------------------------------------------- 6. as três páginas iguais */
+console.log("\n6. Home, app-pronto.html e 404 servem o mesmo robô");
 
 for (const file of ["app-pronto.html", "404.html"]) {
   const outro = fs.readFileSync(path.join(root, file), "utf8");

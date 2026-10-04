@@ -69,6 +69,9 @@ Graph API e marca o resultado — **com o PC e o telemóvel desligados**.
   na mesma (degradação segura). É por isso que **só um aparelho** deve publicar a mesma fila.
 - **Se o Apps Script/dev backend foi reimplantado**, volta a correr `ativarRobo24h` (e
   cria *Nova versão* da implantação): o `/exec` muda a cada reimplantação.
+- **Se usaste a versão só-manual** e sincronizaste a fila, os agendados ficaram gravados
+  como `device_scheduled`: o app converte-os de volta a `scheduled` ao ler o cofre e o
+  robô também os aceita — nenhum Reel fica preso por causa da mudança.
 - **Regressão conhecida:** houve uma versão (PR #15, commit `5b07192`) em que o robô foi
   desligado e a publicação passou a ser só manual — o gerador foi trocado por um stub que
   apagava o acionador e a fila passou a sincronizar como `device_scheduled`. Está

@@ -100,7 +100,10 @@ function verificarEPostarReels() {
 
   for (let i = 0; i < vault.queue.length; i++) {
     const item = vault.queue[i];
-    if (item.status !== "scheduled") continue;
+    // "device_scheduled" é o nome que a versão "só no dispositivo" (sem Robô 24h)
+    // gravava nos agendados. Só aparece em filas sincronizadas nesse modo: aceita-se
+    // como agendado normal, senão esses Reels ficavam invisíveis e nunca saíam.
+    if (item.status !== "scheduled" && item.status !== "device_scheduled") continue;
 
     const acc = accounts.find(function (a) { return a.id === (item.accountId || "acc_default"); }) || accounts[0];
     if (!acc || acc.autoPilot === false || acc.mode === "browser_bot") continue;
