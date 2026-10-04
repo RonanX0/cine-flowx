@@ -429,3 +429,39 @@ atualizares o backend, é apenas a proteção contra Reels repetidos.
 npm test          # inclui os testes das claims: R2, Drive, modo compatível,
                   # expiração/takeover, dono errado a tentar libertar, backend antigo
 ```
+
+---
+
+## 11. 🎬 "Media upload has failed with error code 2207077" na publicação
+
+Este erro não vem do armazenamento: vem do **Instagram** e significa que os servidores da
+Meta não conseguiram descarregar/processar o `.mp4` a partir do `video_url` que o app lhes
+deu. É a mesma família de problema que este documento descreve para a nuvem — ficheiros em
+hosts temporários (3–72 h) que já expiraram quando o horário agendado chegou, hosts que
+respondem `GET` mas falham `HEAD` e respostas em HTML em vez dos bytes do vídeo.
+
+O patch `24-ig-2207077` ataca as duas pontas:
+
+* **Envio direto** (`upload_type=resumable` → `rupload.facebook.com`): o `.mp4` sai do
+  browser direto para a Meta e **não precisa de link público nenhum** (por isso a Meta deixa
+  de "ir buscar" o ficheiro). Se a rede/CORS do navegador bloquear, o app volta sozinho ao
+  caminho do `video_url`.
+* **`video_url` verificado e renovado**: o link guardado é sondado antes de gastar a
+  tentativa (`HEAD` primeiro, `GET Range: bytes=0-1` a seguir). Links expirados, em HTML ou
+  de host que só aceita `GET` são substituídos por um envio novo à nuvem durável — ou seja,
+  a nuvem durável deixa de ser só "para não perder o vídeo" e passa a ser também o que
+  garante que o **Instagram consegue mesmo buscar** o ficheiro.
+* Em erro de processamento, a publicação repete com **container novo** (o que falhou fica
+  inutilizável) até 3 tentativas, alternando as estratégias; os erros permanentes
+  (`2207026`, `2207042`, `2207050`, `2207051`, token) terminam logo com a dica certa.
+
+Testar sem conta Meta:
+
+```bash
+npm run ig:test   # 46 verificações com a Graph API e o rupload simulados
+```
+
+Como agora se podem fazer até 3 tentativas (envio + processamento), o app **renova a claim
+antes de cada tentativa** (`ttlMs` de 30 min) — o TTL de 10 min do Worker/Apps Script nunca
+expira a meio e, se a claim passar a ser de outro aparelho/Robô, a publicação para em vez de
+duplicar o Reel.
