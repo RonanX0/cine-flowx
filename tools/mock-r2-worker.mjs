@@ -86,7 +86,15 @@ export function createMockCloud({ storeDir, noClaims }) {
     return `${proto}://${host}`;
   };
 
-  /* --- 🔒 claims: mesma semântica do Worker real (ver cloudflare/r2-worker.js) --- */
+  /* --- 🔒 claims: aproximação em memória da semântica do Worker real -----------
+   * ⚠️ Este mock NÃO tem a escrita condicional do R2 (`onlyIf`/ETag): em Node os
+   * `readClaim`+`writeFileSync` abaixo são atómicos dentro do bloco, mas no R2 não
+   * são. Renovação do mesmo dono, takeover de claims caducas e corridas entre dois
+   * donos têm de ser testados contra o Worker REAL, que é o que corre em produção —
+   * ver `tools/test-r2-worker.mjs` (`npm run worker:test`). Sem isso, o mock deixa
+   * passar defeitos que o Worker tem (foi assim que a claim ficou presa em produção:
+   * `onlyIf: { etagDoesNotMatch: "*" }` também na renovação).
+   * -------------------------------------------------------------------------- */
 
   const claimsDir = path.join(storeDir, "claims");
   const claimFile = (key) => path.join(claimsDir, `${safe(key)}.json`);
