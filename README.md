@@ -42,6 +42,13 @@ para os próximos horários livres, fila agrupada por dia com filtros e detalhes
 (reagendar, mudar de conta, legenda, baixar, reenviar, remover com confirmação) e editor
 de horários diários em chips.
 
+**Ordenar a fila:** ordena por horário (mais cedo / mais tarde), título ou situação (erros
+primeiro), com busca por título/legenda. Em *Horário (mais cedo)* podes **arrastar** os
+Reels ou usar as setas ↑↓ — os horários ficam fixos e os Reels trocam de lugar.
+**Reorganizar horários** redistribui os agendados pelos próximos horários livres
+(corrige atrasados e fecha buracos), e itens atrasados/com erro têm o atalho
+*Mover p/ próximo horário livre*.
+
 Para o alterar, edita **só** `tools/agendador-ui/agendador.template.js` (código legível)
 e `tools/agendador-ui/agendador.css`, e corre `npm run patch:agendador`.
 

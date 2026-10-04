@@ -36,6 +36,12 @@ const [cc_filter, cc_setFilter] = b.useState("pendentes");
 const [cc_open, cc_setOpen] = b.useState(null);
 const [cc_newSlot, cc_setNewSlot] = b.useState("");
 const [cc_custom, cc_setCustom] = b.useState(false);
+const [cc_sort, cc_setSortRaw] = b.useState(() => { try { return localStorage.getItem("cineclip.agenda.sort") || "hora"; } catch { return "hora"; } });
+const cc_setSort = (val) => { cc_setSortRaw(val); try { localStorage.setItem("cineclip.agenda.sort", val); } catch {} };
+const [cc_q, cc_setQ] = b.useState("");
+const [cc_drag, cc_setDrag] = b.useState(null);
+const [cc_over, cc_setOver] = b.useState(null);
+const [cc_busy, cc_setBusy] = b.useState(false);
 b.useEffect(() => {
   // Criar conta / abrir configuração (código antigo) passa a abrir a aba "Conta"
   if (g) { cc_setTab("conta"); v(!1); }
@@ -69,16 +75,90 @@ const cc_next = X.filter((it) => it.status === "scheduled" && it.scheduledAt.sli
   .sort((a1, a2) => a1.scheduledAt.localeCompare(a2.scheduledAt))[0];
 const cc_late = X.filter((it) => it.status === "scheduled" && it.scheduledAt.slice(0, 16) < cc_nowStr).length;
 
+/* ---------------------------------------------- filtro, busca e ordenação */
+const cc_norm = (s) => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+const cc_isLate = (it) => it.status === "scheduled" && it.scheduledAt.slice(0, 16) < cc_nowStr;
+const cc_rank = (it) => (it.status === "error" ? 0 : cc_isLate(it) ? 1 : it.status === "publishing" ? 2 : it.status === "published" ? 4 : 3);
+const cc_byTime = (a1, a2) => (a1.scheduledAt || "").localeCompare(a2.scheduledAt || "");
+const cc_sorters = {
+  hora: cc_byTime,
+  hora_desc: (a1, a2) => cc_byTime(a2, a1),
+  titulo: (a1, a2) => (a1.title || "").localeCompare(a2.title || "", "pt", { sensitivity: "base" }) || cc_byTime(a1, a2),
+  situacao: (a1, a2) => cc_rank(a1) - cc_rank(a2) || cc_byTime(a1, a2),
+};
+const cc_sortLabels = { hora: "Horário (mais cedo)", hora_desc: "Horário (mais tarde)", titulo: "Título (A–Z)", situacao: "Situação (erros primeiro)" };
+const cc_qn = cc_norm(cc_q.trim());
 const cc_list = X.filter((it) =>
   cc_filter === "todos" ? !0 : cc_filter === "publicados" ? it.status === "published" : cc_filter === "erros" ? it.status === "error" : cc_isPending(it),
-).sort((a1, a2) => (cc_filter === "publicados" ? a2.scheduledAt.localeCompare(a1.scheduledAt) : a1.scheduledAt.localeCompare(a2.scheduledAt)));
+).filter((it) => !cc_qn || cc_norm(`${it.title} ${it.originalTitle || ""} ${it.year || ""} ${it.caption || ""}`).includes(cc_qn))
+ .sort(cc_sorters[cc_sort] || cc_byTime);
+const cc_byDay = cc_sort === "hora" || cc_sort === "hora_desc";
 const cc_groups = [];
 for (const it of cc_list) {
-  const key = (it.scheduledAt || "").slice(0, 10);
+  const key = cc_byDay ? (it.scheduledAt || "").slice(0, 10) : "__all";
   const last = cc_groups[cc_groups.length - 1];
   if (last && last.key === key) last.items.push(it);
   else cc_groups.push({ key, items: [it] });
 }
+
+/* ------------------------------------------- reordenar (troca de horários)
+ * Os horários ficam onde estão; o que muda é QUAL Reel ocupa cada horário. */
+const cc_orderable = X.filter((it) => it.status === "scheduled" || it.status === "error").sort(cc_byTime);
+const cc_canReorder = cc_sort === "hora" && !cc_qn && (cc_filter === "pendentes" || cc_filter === "todos") && cc_orderable.length > 1 && !D;
+const cc_applyOrder = async (order, msg) => {
+  if (cc_busy) return;
+  const slots = order.map((it) => it.scheduledAt).sort();
+  const changed = order.map((it, n) => ({ it, at: slots[n] })).filter((c2) => c2.it.scheduledAt !== c2.at);
+  if (!changed.length) return;
+  cc_setBusy(!0);
+  try {
+    for (const c2 of changed) await Rn({ ...c2.it, scheduledAt: c2.at, updatedAt: Date.now() });
+    await he();
+    u == null || u();
+    je.success(msg || "Ordem atualizada — os Reels trocaram de horário.");
+  } catch (err) {
+    je.error((err == null ? void 0 : err.message) || "Não foi possível reordenar a fila.");
+  } finally { cc_setBusy(!1); }
+};
+const cc_moveBy = (it, dir) => {
+  const list = [...cc_orderable];
+  const n = list.findIndex((x2) => x2.id === it.id);
+  const m = n + dir;
+  if (n < 0 || m < 0 || m >= list.length) return;
+  [list[n], list[m]] = [list[m], list[n]];
+  cc_applyOrder(list, `"${it.title}" agora sai ${cc_when(cc_orderable[m].scheduledAt)}.`);
+};
+const cc_dropOn = (dragId, targetId) => {
+  if (!dragId || dragId === targetId) return;
+  const list = [...cc_orderable];
+  const from = list.findIndex((x2) => x2.id === dragId);
+  const to = list.findIndex((x2) => x2.id === targetId);
+  if (from < 0 || to < 0) return;
+  const [moved] = list.splice(from, 1);
+  list.splice(to, 0, moved);
+  cc_applyOrder(list, `"${moved.title}" agora sai ${cc_when(cc_orderable[to].scheduledAt)}.`);
+};
+// Redistribui os Reels agendados pelos próximos horários livres (fecha buracos e corrige atrasados)
+const cc_repack = async () => {
+  const items = X.filter((it) => it.status === "scheduled").sort(cc_byTime);
+  if (!items.length) { je.error("Não há Reels agendados para reorganizar."); return; }
+  if (!window.confirm(`Redistribuir ${items.length} Reel(s) de ${j.name} pelos próximos horários livres (${j.dailySlots.join(" · ")}), mantendo a ordem atual?`)) return;
+  const ids = new Set(items.map((it) => it.id));
+  const base = f.filter((it) => !ids.has(it.id));
+  cc_setBusy(!0);
+  try {
+    let n = 0;
+    for (const it of items) {
+      const at = za(base, j.dailySlots, j.id);
+      base.push({ ...it, scheduledAt: at });
+      if (at !== it.scheduledAt) { await Rn({ ...it, scheduledAt: at, updatedAt: Date.now() }); n++; }
+    }
+    await he();
+    u == null || u();
+    je.success(n ? `${n} Reel(s) reorganizado(s) nos próximos horários livres.` : "A fila já estava organizada.");
+  } finally { cc_setBusy(!1); }
+};
+const cc_nextFreeFor = (it) => za(f.filter((x2) => x2.id !== it.id), j.dailySlots, j.id);
 
 // Próximos horários livres desta conta (atalhos rápidos para agendar)
 const cc_quick = b.useMemo(() => {
@@ -160,7 +240,15 @@ const cc_accounts = cc_h("div", { className: "cc-accounts" },
   ),
 );
 
-const cc_compose = cc_h("div", { className: "cc-card cc-compose" },
+const cc_composeEmpty = cc_h("div", { className: "cc-card cc-compose-empty" },
+  cc_h("div", { className: "cc-poster cc-poster-empty" }, d.jsx(ip, { className: "h-4 w-4" })),
+  cc_h("div", { className: "cc-compose-txt" },
+    cc_h("strong", null, "Nenhum vídeo pronto para agendar"),
+    cc_h("span", { className: "cc-sub" }, "Processa um vídeo no Estúdio ou importa um .mp4 / pacote .cineclip — próximo horário livre: ", cc_when(fe))),
+  cc_h(Ae, { variant: "outline", onClick: () => { var el = oe.current; el && el.click(); }, title: "Importar vídeo .mp4 ou pacote .cineclip.json" },
+    d.jsx(T0, { className: "h-4 w-4" }), "Importar"),
+);
+const cc_compose = !(r && r.cleanBlob) ? cc_composeEmpty : cc_h("div", { className: "cc-card cc-compose" },
   cc_h("div", { className: "cc-compose-clip" },
     r && r.poster
       ? d.jsx("img", { src: r.poster, alt: "", className: "cc-poster cc-poster-lg" })
@@ -203,17 +291,36 @@ const cc_item = (N) => {
   const st = cc_statusInfo(N, late);
   const opened = cc_open === N.id;
   const canPublish = N.status !== "published" && !G && !!(N.videoBlob || N.remoteVideoUrl);
-  return cc_h("div", { key: N.id, className: qe("cc-item", st.cls, opened && "cc-item-open") },
+  const pos = cc_orderable.findIndex((x2) => x2.id === N.id);
+  const movable = cc_canReorder && pos >= 0 && !G;
+  const dragProps = movable ? {
+    draggable: !0,
+    onDragStart: (ev) => { cc_setDrag(N.id); ev.dataTransfer.effectAllowed = "move"; try { ev.dataTransfer.setData("text/plain", N.id); } catch {} },
+    onDragEnd: () => { cc_setDrag(null); cc_setOver(null); },
+    onDragOver: (ev) => { if (cc_drag && cc_drag !== N.id) { ev.preventDefault(); cc_over !== N.id && cc_setOver(N.id); } },
+    onDragLeave: () => cc_over === N.id && cc_setOver(null),
+    onDrop: (ev) => { ev.preventDefault(); const id = cc_drag; cc_setDrag(null); cc_setOver(null); cc_dropOn(id, N.id); },
+  } : {};
+  return cc_h("div", { key: N.id, ...dragProps, className: qe("cc-item", st.cls, opened && "cc-item-open", cc_drag === N.id && "cc-item-drag", cc_over === N.id && "cc-item-over", cc_busy && "cc-item-busy") },
     cc_h("div", { className: "cc-row", onClick: (ev) => { ev.target.closest("button,input,select,a") || cc_setOpen(opened ? null : N.id); } },
-      cc_h("div", { className: "cc-time" }, cc_h("strong", null, (N.scheduledAt || "").slice(11, 16)), cc_h("span", { className: qe("cc-pill", st.cls) }, st.label)),
+      movable && cc_h("span", { className: "cc-grip", title: "Arrasta para mudar a ordem (os horários ficam, os Reels trocam)" },
+        d.jsx("svg", { viewBox: "0 0 24 24", width: 14, height: 14, fill: "currentColor", children: d.jsx("path", { d: "M9 5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Zm0 7a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Zm-1.5 8.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3ZM18 5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Zm-1.5 8.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3ZM18 19a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Z" }) })),
+      cc_h("div", { className: "cc-time" }, !cc_byDay && cc_h("span", { className: "cc-time-day" }, cc_dayLabel((N.scheduledAt || "").slice(0, 10))), cc_h("strong", null, (N.scheduledAt || "").slice(11, 16)), cc_h("span", { className: qe("cc-pill", st.cls) }, st.label)),
       N.poster ? d.jsx("img", { src: N.poster, alt: "", className: "cc-poster" }) : cc_h("div", { className: "cc-poster cc-poster-empty" }, d.jsx(ip, { className: "h-4 w-4" })),
       cc_h("div", { className: "cc-main" },
         cc_h("div", { className: "cc-title" }, cc_h("span", { className: "cc-title-txt" }, N.title), N.year && cc_h("span", { className: "cc-muted" }, ` (${N.year})`)),
         cc_h("div", { className: "cc-badges" }, __CC_CLOUD_BADGE__, N.videoSize > 0 && cc_h("span", { className: "cc-size" }, Fa(N.videoSize))),
         N.lastStep && cc_h("p", { className: "cc-step" }, G && d.jsx(rr, { className: "h-3 w-3 animate-spin" }), N.lastStep),
         N.errorMsg && cc_h("p", { className: "cc-err" }, d.jsx(cx, { className: "h-3.5 w-3.5 shrink-0" }), N.errorMsg),
+        (late || N.status === "error") && !G && cc_h("button", { type: "button", className: "cc-link", onClick: () => U(N, cc_nextFreeFor(N)) },
+          d.jsx(w0, { className: "h-3 w-3" }), ` Mover p/ próximo horário livre (${cc_when(cc_nextFreeFor(N))})`),
       ),
       cc_h("div", { className: "cc-actions" },
+        movable && cc_h("div", { className: "cc-move" },
+          cc_h("button", { type: "button", disabled: pos === 0 || cc_busy, title: "Subir (troca de horário com o anterior)", onClick: () => cc_moveBy(N, -1) },
+            d.jsx("svg", { viewBox: "0 0 24 24", width: 14, height: 14, fill: "none", stroke: "currentColor", strokeWidth: 2.5, strokeLinecap: "round", strokeLinejoin: "round", children: d.jsx("path", { d: "m18 15-6-6-6 6" }) })),
+          cc_h("button", { type: "button", disabled: pos === cc_orderable.length - 1 || cc_busy, title: "Descer (troca de horário com o seguinte)", onClick: () => cc_moveBy(N, 1) },
+            d.jsx("svg", { viewBox: "0 0 24 24", width: 14, height: 14, fill: "none", stroke: "currentColor", strokeWidth: 2.5, strokeLinecap: "round", strokeLinejoin: "round", children: d.jsx("path", { d: "m6 9 6 6 6-6" }) }))),
         N.status !== "published" && cc_h(Ae, { size: "sm", disabled: !canPublish, onClick: () => le(N), title: N.videoBlob || N.remoteVideoUrl ? `Publicar agora em ${j.name}` : "Sem vídeo — importa o .mp4", className: "cc-pub" },
           G ? d.jsx(rr, { className: "h-3.5 w-3.5 animate-spin" }) : d.jsx(J0, { className: "h-3.5 w-3.5" }), cc_h("span", { className: "cc-hide-sm" }, "Publicar")),
         d.jsx(Ae, { size: "sm", variant: "ghost", className: "cc-icon-btn", title: "Copiar legenda", onClick: () => { navigator.clipboard.writeText(N.caption); je.success("Legenda copiada!"); }, children: d.jsx(Pc, { className: "h-4 w-4" }) }),
@@ -246,13 +353,25 @@ const cc_queue = cc_h("div", { className: "cc-queue" },
       cc_filterBtn("pendentes", "A publicar"), cc_filterBtn("publicados", "Publicados"), cc_filterBtn("erros", "Erros"), cc_filterBtn("todos", "Todos")),
     X.length > 0 && cc_h(Ae, { variant: "ghost", size: "sm", onClick: ne, title: "Exportar a fila para o Robô Playwright (.json)" }, d.jsx(Ko, { className: "h-3.5 w-3.5" }), cc_h("span", { className: "cc-hide-sm" }, "Exportar .json")),
   ),
+  X.length > 0 && cc_h("div", { className: "cc-tools" },
+    cc_h("label", { className: "cc-search" },
+      d.jsx(dp, { className: "h-3.5 w-3.5" }),
+      d.jsx("input", { type: "search", value: cc_q, onChange: (ev) => cc_setQ(ev.target.value), placeholder: "Buscar por título ou legenda…" })),
+    cc_h("label", { className: "cc-sort", title: "Ordenar a fila" },
+      cc_h("span", { className: "cc-hide-sm" }, "Ordenar:"),
+      d.jsx("select", { value: cc_sort, onChange: (ev) => cc_setSort(ev.target.value), className: "cc-input", children: Object.entries(cc_sortLabels).map(([id, label]) => d.jsx("option", { value: id, children: label }, id)) })),
+    cc_h(Ae, { variant: "outline", size: "sm", disabled: cc_busy || !!D, onClick: cc_repack, title: "Redistribui os Reels agendados pelos próximos horários livres, mantendo a ordem (corrige atrasados e fecha buracos)" },
+      cc_busy ? d.jsx(rr, { className: "h-3.5 w-3.5 animate-spin" }) : d.jsx(K0, { className: "h-3.5 w-3.5" }), "Reorganizar horários"),
+  ),
+  cc_canReorder && cc_h("p", { className: "cc-hint" }, "↕ Arrasta os Reels (ou usa as setas) para mudar a ordem — os horários ficam fixos, os Reels trocam de lugar."),
+  !cc_canReorder && cc_sort !== "hora" && cc_orderable.length > 1 && cc_h("p", { className: "cc-hint" }, `A ordenar por ${cc_sortLabels[cc_sort].toLowerCase()}. Para mudar a ordem de publicação, escolhe “Horário (mais cedo)”.`),
   cc_list.length === 0
     ? cc_h("div", { className: "cc-empty" },
         d.jsx(xi, { className: "h-8 w-8" }),
-        cc_h("strong", null, X.length === 0 ? `A fila de ${j.name} está vazia` : "Nada neste filtro"),
-        cc_h("span", null, X.length === 0 ? "Agenda o vídeo processado acima ou usa Importar para carregar vídeos já prontos." : "Escolhe outro filtro para ver os restantes Reels."))
+        cc_h("strong", null, X.length === 0 ? `A fila de ${j.name} está vazia` : cc_qn ? `Nada encontrado para “${cc_q.trim()}”` : "Nada neste filtro"),
+        cc_h("span", null, X.length === 0 ? "Agenda o vídeo processado no Estúdio ou usa Importar para carregar vídeos já prontos." : cc_qn ? "Tenta outra palavra ou limpa a busca." : "Escolhe outro filtro para ver os restantes Reels."))
     : cc_groups.map((grp) => cc_h("div", { key: grp.key, className: "cc-day" },
-        cc_h("div", { className: "cc-day-head" }, cc_h("span", null, cc_dayLabel(grp.key, !0)), cc_h("span", { className: "cc-day-n" }, `${grp.items.length} ${grp.items.length === 1 ? "Reel" : "Reels"}`)),
+        cc_h("div", { className: "cc-day-head" }, cc_h("span", null, grp.key === "__all" ? `Ordenado por ${cc_sortLabels[cc_sort].toLowerCase()}` : cc_dayLabel(grp.key, !0)), cc_h("span", { className: "cc-day-n" }, `${grp.items.length} ${grp.items.length === 1 ? "Reel" : "Reels"}`)),
         cc_h("div", { className: "cc-day-list" }, grp.items.map(cc_item)))),
 );
 

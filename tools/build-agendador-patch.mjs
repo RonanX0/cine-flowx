@@ -104,16 +104,29 @@ if (css.includes("</style")) throw new Error("O CSS não pode conter </style>.")
 const CSS_FIND = "  </head>";
 const CSS_REPLACE = `    <style id="cc-agendador-css">\n${css}\n    </style>\n  </head>`;
 
-/* --------------------------------- reverte versões antigas já aplicadas */
-const oldUi = fs.existsSync(files.uiReplace) ? strip(fs.readFileSync(files.uiReplace, "utf8")) : null;
-const oldCss = fs.existsSync(files.cssReplace) ? strip(fs.readFileSync(files.cssReplace, "utf8")) : null;
+/* --------------------------------- reverte versões antigas já aplicadas
+ * Procura pelos marcadores (e não pelo conteúdo exato), para funcionar mesmo
+ * que o .replace antigo já tenha sido apagado/alterado. */
+const UI_START = "/*cc-agendador:inicio*/";
+const UI_END = "/*cc-agendador:fim*/";
+const CSS_START = '    <style id="cc-agendador-css">';
 for (const t of TARGETS) {
   const p = path.join(root, t);
   if (!fs.existsSync(p)) continue;
   let html = fs.readFileSync(p, "utf8");
   const before = html;
-  if (oldUi && oldUi !== REPLACE && count(html, oldUi) === 1) html = html.replace(oldUi, () => FIND);
-  if (oldCss && oldCss !== CSS_REPLACE && count(html, oldCss) === 1) html = html.replace(oldCss, () => CSS_FIND);
+  const a = html.indexOf(UI_START);
+  if (a >= 0) {
+    const e = html.indexOf(UI_END, a);
+    if (e < 0) throw new Error(`${t}: marcador ${UI_END} em falta.`);
+    html = html.slice(0, a) + FIND + html.slice(e + UI_END.length);
+  }
+  const c = html.indexOf(CSS_START);
+  if (c >= 0) {
+    const e = html.indexOf(CSS_FIND, c);
+    if (e < 0) throw new Error(`${t}: fim do CSS do Agendador não encontrado.`);
+    html = html.slice(0, c) + CSS_FIND + html.slice(e + CSS_FIND.length);
+  }
   if (html !== before) {
     fs.writeFileSync(p, html);
     console.log(`↺ ${t}: versão anterior do Agendador revertida`);
