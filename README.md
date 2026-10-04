@@ -11,6 +11,7 @@ Aplicação web **100% no navegador** que limpa metadados de vídeos, corta até
 - `tools/` — servidor de preview, mocks, testes e ferramentas para reaplicar os patches do bundle
 - `vite.config.ts` — servidor de desenvolvimento e proxy local para NVIDIA
 - `api/public/nvidia.js` e `netlify/functions/nvidia.mjs` — proxy NVIDIA para deploys Vercel e Netlify
+- `_headers` (Netlify / Cloudflare Pages), `netlify.toml` e `vercel.json` — revalidação do HTML, para um deploy novo não ficar preso na cache do browser
 
 ## Como executar localmente
 
@@ -28,7 +29,10 @@ npm run preview
 
 > **Estado atual do repositório:** o código-fonte React (`src/`) não está versionado; a
 > interface está guardada como bundle em `index.html`. O `npm run build` copia esse bundle,
-> a camada de nuvem e o fallback 404 para `dist/` (sem tentar compilar o bundle de novo).
+> a camada de nuvem e o fallback 404 para `dist/` (sem tentar compilar o bundle de novo);
+> além da cópia, carimba `window.CINECLIP_BUILD` com a versão, serve
+> `nuvem-duravel.js?v=<hash>` e publica o `_headers`, para que um deploy novo chegue mesmo
+> ao browser — ver *[Ainda apanhas o 2207077?](#ainda-apanhas-o-2207077-confirma-que-estás-na-versão-nova)*.
 > Para testar o app com mocks locais da nuvem em `/drive-api` e `/cloud-api`, usa
 > `npm run nuvem`; esse servidor não precisa de `npm install`. Vercel e Netlify têm proxy
 > NVIDIA incluído. GitHub Pages serve apenas arquivos estáticos e não executa `/api/`; a
@@ -93,6 +97,35 @@ ficou em erro pode ser reenviado pelo **Publicar agora** do Agendador.
 Cada tentativa **renova a claim anti-duplicado** (TTL de 30 min) para o TTL de 10 min do
 Worker/Apps Script não expirar a meio de um envio longo — e se a claim passar a ser de
 outro aparelho/Robô, a publicação para em vez de arriscar um Reel repetido.
+
+### Ainda apanhas o 2207077? Confirma que estás na versão nova
+
+A mensagem diz-te qual o código que está a correr, **sem abrires o bundle**:
+
+| Mensagem que aparece | O que significa |
+| --- | --- |
+| `… do vídeo (código 2207077): … · Dica: … (após 3 tentativas)` | versão **nova** — as 3 tentativas correram e a Meta recusou mesmo |
+| `… do vídeo: Error: Media upload has failed with error code 2207077` | versão **antiga** — sem `(código …)`, sem `· Dica:` e sem contagem: o browser está a servir o bundle pré-correção |
+
+Na consola (F12) escreve `CINECLIP_BUILD` para veres a versão exata:
+
+```js
+CINECLIP_BUILD   // { versao: "5cbf8666", data: "…", app: "…", nuvem: "…", ig2207077: true }
+```
+
+Se `ig2207077` for `true`, a correção está ativa. Se não aparecer nada, estás numa versão
+anterior a este build — faz **recarregamento forçado** (`Ctrl+Shift+R` / `Cmd+Shift+R`).
+
+> **Regressão da cache.** O CineClip não tem `src/`: o app é um `index.html` único e a camada
+> de nuvem é o `nuvem-duravel.js` — dois nomes que **nunca mudam**. Um build Vite normal emite
+> ficheiros com hash no nome (`app.a1b2c3.js`), por isso cada deploy muda os URLs e o browser é
+> obrigado a ir buscar o código novo; aqui não havia nem hash nem `Cache-Control`, e o browser
+> e o CDN continuavam a servir a cópia anterior. Resultado: a correção do 2207077 estava no
+> repositório e verde nos testes, mas **nunca chegava a executar** — o erro que chegava ao
+> utilizador vinha do bundle antigo. Agora `npm run build` carimba `window.CINECLIP_BUILD`,
+> serve `nuvem-duravel.js?v=<hash do conteúdo>` e publica `_headers`; `netlify.toml`,
+> `vercel.json` e `_headers` mandam revalidar o HTML (`max-age=0, must-revalidate`), e o build
+> **recusa-se a publicar** um bundle sem a correção. Coberto por `npm run build:test`.
 
 Testar tudo isto sem conta Meta (Graph API, `rupload.facebook.com` e XHR simulados):
 

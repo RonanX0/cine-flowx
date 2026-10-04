@@ -1,0 +1,23 @@
+# Cabeçalhos de cache do CineClip (lidos pela Netlify e pela Cloudflare Pages).
+#
+# O app é servido como um index.html único mais o nuvem-duravel.js — nomes que nunca
+# mudam de deploy para deploy. Sem estes cabeçalhos o browser e o CDN continuam a servir
+# a cópia antiga e as correções publicadas não chegam ao utilizador: foi o que escondeu
+# a correção do erro 2207077 do Instagram, que chegava ao browser na versão pré-correção.
+#
+# `max-age=0, must-revalidate` não proíbe guardar em cache — obriga só a perguntar ao
+# servidor "mudou?" antes de reutilizar. Quando não mudou a resposta é um 304 vazio, por
+# isso o custo é praticamente nulo e um deploy novo aparece sempre à primeira.
+#
+# A Vercel não lê este ficheiro: a mesma política está em vercel.json.
+
+/*.html
+  Cache-Control: public, max-age=0, must-revalidate
+
+/
+  Cache-Control: public, max-age=0, must-revalidate
+
+# Carregado antes do bundle; o build serve-o como nuvem-duravel.js?v=<hash>, mas o
+# must-revalidate garante a atualização mesmo que algum proxy descarte a query.
+/nuvem-duravel.js
+  Cache-Control: public, max-age=0, must-revalidate

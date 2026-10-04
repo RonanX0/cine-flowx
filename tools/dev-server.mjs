@@ -4,8 +4,11 @@
  *
  *   node tools/dev-server.mjs            # http://0.0.0.0:4173
  *   PORT=8080 node tools/dev-server.mjs
+ *   DIST=1 node tools/dev-server.mjs     # serve dist/ (o que vai mesmo para o ar)
  *
  *  - serve os ficheiros estáticos do repo (index.html, nuvem-duravel.js, …)
+ *  - com DIST=1 serve o resultado de `npm run build`: é a única forma de ver localmente
+ *    o carimbo `window.CINECLIP_BUILD` e o `nuvem-duravel.js?v=<hash>` do deploy real
  *  - monta a API da nuvem em /cloud-api/*  (mock local do cloudflare/r2-worker.js)
  *
  * No preview, abre Configurações → Nuvem durável e usa:
@@ -20,6 +23,12 @@ import { createMockCloud } from "./mock-r2-worker.mjs";
 import { createMockDrive } from "./mock-drive-backend.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
+/* Raiz dos estáticos: o repositório, ou dist/ com DIST=1 para conferir o deploy real. */
+const estaticos = process.env.DIST === "1" ? path.join(root, "dist") : root;
+if (process.env.DIST === "1" && !fs.existsSync(path.join(estaticos, "index.html"))) {
+  console.error("❌ dist/index.html não existe. Corre primeiro: npm run build");
+  process.exit(1);
+}
 const PORT = Number(process.env.PORT || 4173);
 const HOST = process.env.HOST || "0.0.0.0";
 const CLOUD_PREFIX = "/cloud-api";
@@ -88,8 +97,8 @@ const server = http.createServer(async (req, res) => {
   }
 
   const requestedPath = pathname === "/" ? "index.html" : pathname.startsWith("/") ? pathname.slice(1) : pathname;
-  let filePath = path.resolve(root, requestedPath);
-  const relativePath = path.relative(root, filePath);
+  let filePath = path.resolve(estaticos, requestedPath);
+  const relativePath = path.relative(estaticos, filePath);
   if (relativePath === ".." || relativePath.startsWith(".." + path.sep) || path.isAbsolute(relativePath)) {
     res.writeHead(403).end("Forbidden");
     return;
@@ -104,7 +113,7 @@ const server = http.createServer(async (req, res) => {
   }
   if (!fs.existsSync(filePath)) {
     // SPA fallback (mesmo comportamento do _redirects / vercel.json)
-    filePath = path.join(root, "index.html");
+    filePath = path.join(estaticos, "index.html");
   }
 
   const ext = path.extname(filePath).toLowerCase();
@@ -117,11 +126,12 @@ const server = http.createServer(async (req, res) => {
   });
   if (req.method === "HEAD") return res.end();
   fs.createReadStream(filePath).pipe(res);
-  console.log(`📄 ${req.method} ${pathname} → ${path.relative(root, filePath)}`);
+  console.log(`📄 ${req.method} ${pathname} → ${path.relative(estaticos, filePath)}`);
 });
 
 server.listen(PORT, HOST, () => {
   console.log(`\n🎬 CineClip preview  →  http://${HOST}:${PORT}`,
+    `\n     A servir          : ${path.relative(root, estaticos) || "."}/ ${estaticos === root ? "(repositório)" : "(build de produção)"}`,
     `\n☁️  Mock R2           →  http://${HOST}:${PORT}${CLOUD_PREFIX}`,
     `\n     Worker URL no app : ${CLOUD_PREFIX}`,
     `\n     Token             : ${process.env.MOCK_CLOUD_TOKEN || "cc_r2_token_de_teste"}`,
