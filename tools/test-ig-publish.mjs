@@ -168,10 +168,10 @@ function criarAmbiente(opcoes = {}) {
       const st = typeof r === "string" ? { status_code: r, status: "" } : r;
       return resposta(200, st);
     }
-    // Sonda do link de vídeo (HEAD / GET com Range)
+    // Sonda do link de vídeo (HEAD / GET com Range) e videohead do Drive
     const r = o.sonda(metodo, String(url));
     if (r === null || r.falha) throw new TypeError("Failed to fetch");
-    return resposta(r.status ?? 200, {}, { "content-type": r.tipo || "video/mp4", "accept-ranges": r.ranges ? "bytes" : "none" });
+    return resposta(r.status ?? 200, r.json ?? {}, { "content-type": r.tipo || "video/mp4", "accept-ranges": r.ranges ? "bytes" : "none" });
   }
 
   class XHRFalso {
@@ -215,6 +215,9 @@ function criarAmbiente(opcoes = {}) {
           },
         },
   };
+  // Métodos extra da camada de nuvem (config/verifyPublicUrl) para os testes dos
+  // links de nuvem durável.
+  if (janela.CineCloud && o.cineCloud) Object.assign(janela.CineCloud, o.cineCloud);
 
   const contexto = {
     console,
@@ -516,6 +519,105 @@ console.log("\n15. Capa do Reel (hS eleva o pôster para w780)");
     !!container && container.corpo.includes(encodeURIComponent(poster.replace("/w300/", "/w780/"))),
     container ? container.corpo.slice(0, 200) : "sem container"
   );
+}
+
+/* 16 — Reel só com link, sem o .mp4 no aparelho (o 2207077 "após 2 tentativas") */
+console.log("\n16. Reel só com link na nuvem (sem .mp4 no aparelho)");
+{
+  // a) o Apps Script foi reimplantado: o link guardado aponta para o /exec antigo.
+  //    O bloco tem de o reconstruir contra o /exec configurado AGORA e publicar.
+  const amb = criarAmbiente({
+    cineCloud: {
+      config: () => ({ driveUrl: "https://script.google.com/macros/s/NOVO/exec" }),
+      verifyPublicUrl: async () => true,
+    },
+    sonda: (metodo, url) =>
+      url.includes("action=videohead")
+        ? { status: 200, tipo: "application/json", json: { ok: true, size: 8 * 1048576 } }
+        : { status: 200, tipo: "video/mp4" },
+  });
+  const it = item({
+    videoBlob: undefined,
+    remoteVideoUrl: "https://script.google.com/macros/s/ANTIGO/exec?action=video&id=FILE1",
+  });
+  const out = await publicar(amb, it);
+  check("publica com o link renovado", out.ok && out.res.publishedId === "MEDIA_PUBLICADA", out.erro && out.erro.message);
+  const comLink = amb.chamadas.find((c) => c.tipo === "fetch" && c.corpo.includes("video_url="));
+  check(
+    "o video_url aponta para a implantação ATUAL do Apps Script",
+    !!comLink &&
+      comLink.corpo.includes(encodeURIComponent("https://script.google.com/macros/s/NOVO/exec?action=video&id=FILE1")) &&
+      !comLink.corpo.includes("ANTIGO"),
+    comLink ? comLink.corpo.slice(0, 220) : "sem container"
+  );
+  check("guardou o link renovado no item", it.remoteVideoUrl.includes("/s/NOVO/"), it.remoteVideoUrl);
+  check("avisou que o link era de uma implantação antiga", out.passos.some((p) => /implantação antiga/.test(p)), out.passos.join(" | "));
+}
+{
+  // b) o vídeo tem mais de ~50 MB: o ?action=video do Apps Script (file.getBlob)
+  //    nunca vai conseguir servi-lo à Meta — erro imediato, sem gastar containers.
+  const amb = criarAmbiente({
+    cineCloud: { verifyPublicUrl: async () => true },
+    sonda: (metodo, url) =>
+      url.includes("action=videohead")
+        ? { status: 200, tipo: "application/json", json: { ok: true, size: 60 * 1048576 } }
+        : { status: 200, tipo: "video/mp4" },
+  });
+  const it = item({
+    videoBlob: undefined,
+    remoteVideoUrl: "https://script.google.com/macros/s/ABC/exec?action=video&id=GRANDE",
+  });
+  const out = await publicar(amb, it);
+  check("não publica um vídeo que o Apps Script não consegue servir", !out.ok);
+  check("explica o limite de ~50 MB do Apps Script", !out.ok && /50 MB/.test(out.erro.message), !out.ok ? out.erro.message : "");
+  check("não chegou a criar container", !amb.chamadas.some((c) => c.tipo === "fetch" && c.corpo.includes("media_type=REELS")));
+}
+{
+  // c) o videohead diz que o ficheiro já não está no Drive → erro claro, sem containers.
+  const amb = criarAmbiente({
+    sonda: (metodo, url) =>
+      url.includes("action=videohead")
+        ? { status: 200, tipo: "application/json", json: { ok: false, error: "File not found" } }
+        : { status: 200, tipo: "video/mp4" },
+  });
+  const it = item({
+    videoBlob: undefined,
+    remoteVideoUrl: "https://script.google.com/macros/s/ABC/exec?action=video&id=APAGADO",
+  });
+  const out = await publicar(amb, it);
+  check("não publica com o vídeo apagado do Drive", !out.ok);
+  check("explica que o vídeo já não está no Drive", !out.ok && /já não está no Google Drive/.test(out.erro.message), !out.ok ? out.erro.message : "");
+  check("pede para reimportar o .mp4", !out.ok && /[Rr]eimporta o \.mp4/.test(out.erro.message));
+  check("não chegou a criar container", !amb.chamadas.some((c) => c.tipo === "fetch" && c.corpo.includes("media_type=REELS")));
+}
+{
+  // d) 2207077 e o link morreu entretanto: sem o .mp4 a repetição reutilizaria o
+  //    MESMO link morto — o bloco tem de parar na 1.ª tentativa com a dica certa.
+  let sondas = 0;
+  const amb = criarAmbiente({
+    status: () => ({ status_code: "ERROR", status: "Error: Media upload has failed with error code 2207077" }),
+    sonda: () => (++sondas <= 1 ? { status: 200, tipo: "video/mp4" } : { status: 404, tipo: "text/html" }),
+  });
+  const it = item({ videoBlob: undefined, remoteVideoUrl: "https://meusite.exemplo/video.mp4" });
+  const out = await publicar(amb, it);
+  check("falha com o código 2207077", !out.ok && out.erro.igCode === "2207077", out.ok ? "publicou" : String(out.erro));
+  const msg = out.ok ? "" : out.erro.message;
+  check("não repetiu com o link morto (1 container só)", amb.chamadas.filter((c) => c.tipo === "fetch" && c.corpo.includes("media_type=REELS")).length === 1);
+  check("mensagem diz que o link já não responde", /link do vídeo já não responde/.test(msg), msg);
+  check("mensagem pede para reimportar o .mp4 (envio direto)", /reimporta o \.mp4/.test(msg) && /direto/.test(msg), msg);
+  check("não anuncia tentativas que não fez", !/após \d+ tentativas/.test(msg), msg);
+}
+{
+  // e) 2207077 persistente com o link vivo (host que bloqueia a Meta): repete as 2
+  //    tentativas e a mensagem final explica que falta o .mp4 neste aparelho.
+  const amb = criarAmbiente({
+    status: () => ({ status_code: "ERROR", status: "Error: Media upload has failed with error code 2207077" }),
+  });
+  const it = item({ videoBlob: undefined, remoteVideoUrl: "https://meusite.exemplo/video.mp4" });
+  const out = await publicar(amb, it);
+  check("falha com o código 2207077 após as 2 tentativas", !out.ok && out.erro.igCode === "2207077" && /após 2 tentativas/.test(out.erro.message), out.ok ? "publicou" : String(out.erro && out.erro.message));
+  check("explica que este aparelho não tem o .mp4", !out.ok && /não tem o ficheiro \.mp4/.test(out.erro.message), !out.ok ? out.erro.message : "");
+  check("aponta a solução: reimportar para envio direto", !out.ok && /reimporta o \.mp4/.test(out.erro.message) && /direto/.test(out.erro.message));
 }
 
 /* ------------------------------------------------------------------ fim */
