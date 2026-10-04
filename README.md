@@ -56,6 +56,29 @@ Reels ou usar as setas ↑↓ — os horários ficam fixos e os Reels trocam de 
 Para o alterar, edita **só** `tools/agendador-ui/agendador.template.js` (código legível)
 e `tools/agendador-ui/agendador.css`, e corre `npm run patch:agendador`.
 
+## 🤖 Publicação automática (Robô 24h)
+
+A publicação **não depende de o app estar aberto**: na aba **Agendador → Robô 24h** o
+botão *1. Copiar Código do Robô 24h* gera o script (já com a chave do teu cofre) para
+colares em <https://script.google.com> e correres `ativarRobo24h`. Fica um acionador de
+**5 em 5 minutos** nos servidores do Google: o robô lê a fila na nuvem, publica pela
+Graph API e marca o resultado — **com o PC e o telemóvel desligados**.
+
+- **Anti-publicação duplicada:** o robô e o app *reclamam* o Reel (claim, TTL 10 min)
+  antes de publicar e libertam-no no fim; se o backend ainda não tiver claims, publica-se
+  na mesma (degradação segura). É por isso que **só um aparelho** deve publicar a mesma fila.
+- **Se o Apps Script/dev backend foi reimplantado**, volta a correr `ativarRobo24h` (e
+  cria *Nova versão* da implantação): o `/exec` muda a cada reimplantação.
+- **Se usaste a versão só-manual** e sincronizaste a fila, os agendados ficaram gravados
+  como `device_scheduled`: o app converte-os de volta a `scheduled` ao ler o cofre e o
+  robô também os aceita — nenhum Reel fica preso por causa da mudança.
+- **Regressão conhecida:** houve uma versão (PR #15, commit `5b07192`) em que o robô foi
+  desligado e a publicação passou a ser só manual — o gerador foi trocado por um stub que
+  apagava o acionador e a fila passou a sincronizar como `device_scheduled`. Está
+  revertida: o bundle volta a gerar o robô completo e `npm run robo:test` falha se
+  alguém o voltar a desligar (acionador de 5 min, Graph API, claims e ausência de
+  vestígios do modo só-manual).
+
 ## 🎬 Erro 2207077 no Instagram (`Media upload has failed`)
 
 > `Erro em @conta: O Instagram recusou o processamento do vídeo: Error: Media upload has failed with error code 2207077`
@@ -204,7 +227,8 @@ anti-apagão da fila, migração automática dos cofres antigos e selos honestos
 ```bash
 npm run nuvem          # app + mocks em http://localhost:4173 (/drive-api e /cloud-api) — testar sem contas
 npm run nuvem:test     # testes ponta-a-ponta da camada de nuvem (arranca os mocks sozinho)
-npm test               # testes da nuvem + proxy NVIDIA
+npm run robo:test      # guarda da publicação automática: o Robô 24h gerado tem de ser o robô a sério
+npm test               # nuvem + worker + robô 24h + proxy NVIDIA + Instagram + Agendador + build
 npm run build          # gera dist/ para deploy estático
 npm run patch:full     # reconstrói/verifica o bundle e reaplica os patches
 npm run patch:agendador # regenera e aplica o layout do Agendador (tools/agendador-ui/)
