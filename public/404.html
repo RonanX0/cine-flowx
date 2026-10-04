@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="pt">
+  <head>
+    <meta charset="UTF-8" />
+    <title>CineClip — a redirecionar…</title>
+    <!-- O CineClip é uma SPA de rota única: qualquer URL desconhecido volta ao início. -->
+    <script>
+      var l = window.location;
+      l.replace(l.protocol + "//" + l.hostname + (l.port ? ":" + l.port : "") + "/" + l.hash);
+    </script>
+  </head>
+  <body>
+    <p style="font-family: system-ui; text-align: center; margin-top: 4rem; color: #9ca3af">
+      A voltar ao CineClip…
+    </p>
+  </body>
+</html>

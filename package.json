@@ -5,24 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
-    "build": "node tools/build-static.mjs",
+    "build": "vite build",
     "preview": "vite preview --host 0.0.0.0",
-    "test": "npm run nuvem:test && npm run worker:test && npm run robo:test && node tools/test-nvidia-proxy.mjs && node tools/test-ig-publish.mjs && node tools/test-agendador-publish.mjs && node tools/test-build-cache.mjs",
-    "robo:test": "node tools/test-robo-24h.mjs",
-    "build:test": "node tools/test-build-cache.mjs",
-    "ig:test": "node tools/test-ig-publish.mjs",
-    "nuvem": "node tools/dev-server.mjs",
-    "nuvem:dist": "DIST=1 node tools/dev-server.mjs",
-    "nuvem:presign": "PORT=4174 MOCK_MAX_DIRECT_MB=1 node tools/dev-server.mjs",
-    "nuvem:test": "node tools/test-cinecloud.mjs",
-    "patch:extrair": "node tools/extract-patch-targets.mjs",
-    "patch:nuvem": "node tools/apply-cloud-patch.mjs --verify",
-    "patch:agendador": "node tools/build-agendador-patch.mjs && node tools/apply-cloud-patch.mjs --verify",
-    "patch:base": "node tools/restore-base.mjs",
-    "patch:full": "node tools/restore-base.mjs && node tools/extract-patch-targets.mjs && node tools/apply-cloud-patch.mjs --verify",
-    "worker:test": "node tools/test-r2-worker.mjs",
     "typecheck": "tsc --noEmit",
-    "agendador:test": "node tools/test-agendador-publish.mjs"
+    "test": "node tools/test-logic.mjs && node tools/test-cloud-ig.mjs && node tools/test-app-boot.mjs && node tools/test-build.mjs && npm run worker:test && node tools/test-nvidia-proxy.mjs",
+    "worker:test": "node tools/test-r2-worker.mjs"
   },
   "dependencies": {
     "@ffmpeg/ffmpeg": "^0.12.10",

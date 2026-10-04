@@ -16,3 +16,4 @@ tools/.robo-24h-*
 
 # Sistema
 .DS_Store
+tools/.t-*.mjs

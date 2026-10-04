@@ -1,1 +1,0 @@
-const Sg="cineclip.settings",kg="cineclip.history",ki={geminiKey:"",nvidiaKey:"",overlayText:"Você precisa assistir esse filme 😳",tmdbKey:"",lang:"pt-PT",bold:!0,resolution:"720",driveScriptUrl:"",driveToken:"",driveChunkMb:2,driveSingleMaxMb:8,r2WorkerUrl:"",r2Token:"",r2MaxMb:95,r2Presign:!0,cloudMirrorLegacy:!0,cloudProvider:"auto"};

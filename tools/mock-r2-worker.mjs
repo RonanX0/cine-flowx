@@ -1,10 +1,9 @@
-#!/usr/bin/env node
 /**
  * Mock local do Cloudflare Worker (cloudflare/r2-worker.js).
  * Implementa exatamente o mesmo contrato de API, guardando os objetos em
  * .mock-cloud/ — serve para testar o fluxo completo no preview sem conta Cloudflare.
  *
- * Rotas (montadas em /cloud-api pelo tools/dev-server.mjs):
+ * Rotas (montadas em /cloud-api pelo plugin de dev do vite.config.ts):
  *   GET    /                      health
  *   POST   /api/video             upload direto
  *   POST   /api/video/presign     URL "pré-assinada" (aqui: PUT /s3/:key sem token)
