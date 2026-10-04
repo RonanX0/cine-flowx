@@ -59,6 +59,44 @@ function igTipoLink(url){
   try{if(window.CineCloud&&window.CineCloud.classifyUrl)return String(window.CineCloud.classifyUrl(url)||"unknown")}catch(e){}
   return "unknown";
 }
+/* Erros da Meta que significam "não consegui descarregar o vídeo a partir do link". */
+var IG_ERROS_DOWNLOAD={"2207077":1,"2207052":1,"2207003":1};
+/* Reconstrói o link ?action=video do Drive contra o /exec configurado AGORA.
+   Se o Apps Script foi reimplantado, o URL guardado aponta para a implantação antiga
+   (a Meta leva HTML/404 → 2207077) apesar de o ficheiro continuar no Drive. */
+function igLinkDriveAtual(url){
+  try{
+    if(!window.CineCloud||typeof window.CineCloud.config!=="function")return "";
+    var cfg=window.CineCloud.config();
+    if(!cfg||!cfg.driveUrl)return "";
+    var m=/[?&]id=([^&\s]+)/.exec(String(url||""));
+    if(!m||!/[?&]action=video\b/.test(String(url||"")))return "";
+    var novo=String(cfg.driveUrl).replace(/[?#].*$/,"")+"?action=video&id="+m[1];
+    return novo===String(url)?"":novo;
+  }catch(e){return ""}
+}
+/* O link de nuvem durável (Drive/R2) ainda responde? true/false/null (inconclusivo:
+   sem camada de nuvem carregada ou sem como verificar — não prova nada). */
+async function igLinkNuvemVivo(url){
+  try{
+    if(!window.CineCloud||typeof window.CineCloud.verifyPublicUrl!=="function")return null;
+    return (await window.CineCloud.verifyPublicUrl(url))?!0:!1;
+  }catch(e){return null}
+}
+/* Tamanho do vídeo servido pelo Apps Script (?action=videohead) — melhor esforço:
+   devolve {ok,size}, {ok:false} se o ficheiro já não existir, ou null (inconclusivo). */
+async function igDriveVideoHead(url){
+  try{
+    var u=String(url||"").replace(/([?&])action=video\b/,"$1action=videohead");
+    if(u===String(url))return null;
+    var res=await fetch(u,{cache:"no-store"});
+    if(!res.ok)return null;
+    var j=await res.json();
+    if(j&&j.ok)return{ok:!0,size:Number(j.size)||0};
+    if(j&&(j.ok===!1||j.error))return{ok:!1,size:0};
+    return null;
+  }catch(e){return null}
+}
 /* Sonda o link do vídeo como a Meta o vai buscar. Estados:
      "ok"           → responde 2xx com o vídeo e aceita HEAD
      "fraco"        → responde 2xx por GET mas recusa HEAD (gatilho conhecido do 2207077)
@@ -317,6 +355,43 @@ async function gS(r,o,a,claim){
       }else{
         a&&a("⚠️ Este Reel só tem um link de host temporário (pode já ter expirado). Se o Instagram recusar, reimporta o .mp4 neste aparelho.");
       }
+    }else if(tipo==="drive"||tipo==="r2"){
+      /* Nuvem durável. O caso clássico: o Apps Script foi reimplantado (o /exec muda)
+         e o link guardado aponta para a implantação antiga — atualiza-o primeiro. */
+      if(tipo==="drive"){
+        const atualizado=igLinkDriveAtual(link);
+        if(atualizado){usarLink(atualizado);a&&a("O link do vídeo apontava para uma implantação antiga do Apps Script — atualizado para a atual.")}
+      }
+      const vivo=await igLinkNuvemVivo(link);
+      if(vivo===!1){
+        linkSuspeito=!0;
+        if(temBlob){
+          a&&a("Não consegui confirmar o link do vídeo na nuvem durável — a enviar o .mp4 de novo…");
+          const env=await enviarArquivo("A refazer o link do vídeo na nuvem…");
+          if(env.url){usarLink(env.url);linkFresco=!0;linkSuspeito=!1}
+        }else{
+          a&&a("⚠️ O link deste Reel na nuvem não respondeu e este aparelho não tem o .mp4. Se o Instagram recusar (erro 2207077), reimporta o .mp4 neste aparelho.");
+        }
+      }else if(tipo==="drive"){
+        const cab=await igDriveVideoHead(link);
+        if(cab&&cab.ok===!1){
+          /* O videohead respondeu "ficheiro não existe": a Meta levaria 2207077. */
+          linkSuspeito=!0;
+          if(temBlob){
+            a&&a("O vídeo já não está no Google Drive — a enviar o .mp4 de novo…");
+            const env=await enviarArquivo("A refazer o link do vídeo na nuvem…");
+            if(env.url){usarLink(env.url);linkFresco=!0;linkSuspeito=!1}
+            else throw new Error("O vídeo já não está no Google Drive e não foi possível reenviá-lo. Reimporta o .mp4 neste aparelho antes de publicar.");
+          }else{
+            throw new Error("O vídeo já não está no Google Drive e este aparelho não tem o ficheiro .mp4. Reimporta o .mp4 neste aparelho e volta a publicar.");
+          }
+        }else if(cab&&cab.ok&&cab.size>49*1048576){
+          /* O ?action=video serve o ficheiro com file.getBlob(), limitado a 50 MB:
+             acima disso a Meta recebe uma página de erro — 2207077 garantido. */
+          if(temBlob){linkSuspeito=!0;a&&a("O vídeo tem "+igTamanho(cab.size)+" e o link do Apps Script só serve até ~50 MB — a dar prioridade ao envio direto.")}
+          else throw new Error("O vídeo tem "+igTamanho(cab.size)+" e o link do Google Drive (Apps Script) só consegue servir ficheiros até ~50 MB — o Instagram não vai conseguir descarregá-lo (erro 2207077). Reimporta o .mp4 neste aparelho (envio direto, sem link) ou usa o Cloudflare R2 para vídeos grandes.");
+        }
+      }
     }else if(tipo==="unknown"||tipo==="local"){
       const sonda=await igProbeVideoUrl(link);
       if(sonda.estado==="morto"){
@@ -375,6 +450,13 @@ async function gS(r,o,a,claim){
       const cod=String(e&&e.igCode||igNumeroErro(e)||"");
       if(!igErroTemporario(e))break;
       if(t<plano.length-1){
+        if(!temBlob&&IG_ERROS_DOWNLOAD[cod]&&link){
+          /* Sem o .mp4 neste aparelho a repetição reutiliza o MESMO link. Só vale a
+             pena se o link ainda estiver vivo (falha transitória da Meta): com o link
+             morto seria outro 2207077 garantido — mais vale parar já com a dica certa. */
+          const sonda=await igProbeVideoUrl(link);
+          if(sonda.estado==="morto"){e.igLinkMorto=!0;break}
+        }
         a&&a("O Instagram recusou esta tentativa"+(cod?(" (erro "+cod+")"):"")+" — a repetir com um container novo ("+(t+2)+"/"+plano.length+")…");
         await mS(2000+3000*t);
       }
@@ -383,7 +465,12 @@ async function gS(r,o,a,claim){
   const codigo=String(ultimoErro&&ultimoErro.igCode||igNumeroErro(ultimoErro)||"");
   const dica=igDica(codigo);
   const base=(ultimoErro&&ultimoErro.message)||"Falha ao publicar o Reels no Instagram.";
-  const erro=new Error(base+((dica&&!/Dica:/.test(base))?(" · Dica: "+dica):"")+(tentativasFeitas>1?(" (após "+tentativasFeitas+" tentativas)"):""));
+  /* Sem o .mp4 no aparelho o app só pode insistir no link — diz ao utilizador o que
+     desbloqueia de verdade: reimportar o ficheiro ⇒ envio direto, sem link público. */
+  const semArquivo=(!temBlob&&(IG_ERROS_DOWNLOAD[codigo]||(ultimoErro&&ultimoErro.igLinkMorto)))
+    ?(((ultimoErro&&ultimoErro.igLinkMorto)?" · O link do vídeo já não responde.":"")+" · Este aparelho não tem o ficheiro .mp4 deste Reel: reimporta o .mp4 no Agendador para o app o enviar direto para o Instagram, sem depender do link.")
+    :"";
+  const erro=new Error(base+((dica&&!/Dica:/.test(base))?(" · Dica: "+dica):"")+semArquivo+(tentativasFeitas>1?(" (após "+tentativasFeitas+" tentativas)"):""));
   erro.igCode=codigo;
   erro.igTentativas=tentativasFeitas;
   if(ultimoErro&&ultimoErro.igEtapa)erro.igEtapa=ultimoErro.igEtapa;

@@ -76,6 +76,12 @@ A partir do patch **`24-ig-2207077`** a publicação do Reel deixa de ter um ún
 2. **`video_url` verificado**: antes de gastar a tentativa o link guardado é sondado
    (`HEAD` + `GET Range: bytes=0-1`); links de host temporário, links `404/410`, respostas em
    HTML ou hosts que só servem por `GET` são substituídos por um envio novo à nuvem durável.
+   Os links de **nuvem durável** também são verificados: um link do Drive que aponte para uma
+   **implantação antiga do Apps Script** (o `/exec` muda a cada reimplantação) é reconstruído
+   contra o `/exec` configurado agora; o `?action=videohead` confirma que o ficheiro ainda
+   existe e que cabe no limite de ~50 MB do `file.getBlob()` do Apps Script (acima disso a
+   Meta receberia uma página de erro em vez do `.mp4` — 2207077 garantido, e o app explica
+   logo em vez de tentar).
 3. **Repetição com container novo** (o container que falhou fica inutilizável), até 3
    tentativas, alternando as duas estratégias. Erros permanentes — formato (`2207026`),
    limite de 50/24 h (`2207042`), conta restringida (`2207050`/`2207051`), token — não são
@@ -85,6 +91,15 @@ A partir do patch **`24-ig-2207077`** a publicação do Reel deixa de ter um ún
 O erro mostrado na interface passa a trazer o código e a dica (ex.: *"O Instagram recusou o
 processamento do vídeo (código 2207077): … · Dica: … (após 3 tentativas)"*), e um Reel que
 ficou em erro pode ser reenviado pelo **Publicar agora** do Agendador.
+
+> **E o `(após 2 tentativas)`?** Significa que o Reel **não tem o ficheiro `.mp4` neste
+> aparelho** (só o link na nuvem): sem o ficheiro não há envio direto nem renovação do link,
+> por isso o plano fica reduzido a duas tentativas por `video_url`. Nesse cenário o app agora
+> (1) renova links do Drive de implantações antigas e recusa logo links que o Apps Script não
+> consegue servir (ficheiro apagado ou >50 MB), (2) **não repete** com um link que a sonda
+> prova estar morto após o primeiro 2207077, e (3) diz na mensagem final o que desbloqueia de
+> verdade: **reimportar o `.mp4` neste aparelho** (Importar no Agendador), para a publicação
+> passar a usar o envio direto, sem depender de link nenhum.
 
 > **Regressão `hS is not defined`.** O `hS` — o helper que eleva a capa do Instagram
 > (`/t/p/w300/` → `/t/p/w780/`) — vivia **dentro** do troço do bundle que o patch 24 substitui.
