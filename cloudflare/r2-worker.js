@@ -28,7 +28,8 @@
  * As "claims" (reclamações) impedem que o mesmo Reel seja publicado duas vezes
  * quando o app e o Robô 24h correm ao mesmo tempo, ou quando há dois aparelhos
  * com a mesma fila. Têm TTL (10 min por omissão) e expiram sozinhas: uma claim
- * nunca bloqueia uma publicação para sempre.
+ * nunca bloqueia uma publicação para sempre — o mesmo dono renova-a e uma claim
+ * caduca pode ser tomada por outro (coberto por `npm run worker:test`).
  *
  * Segredos / variáveis (wrangler):
  *   BUCKET              → binding R2 (obrigatório)
@@ -45,7 +46,7 @@
  *   npx wrangler secret put CINECLIP_TOKEN
  */
 
-const VERSION = "1.1.0";
+const VERSION = "1.2.0";
 const MAX_DIRECT_UPLOAD = 100 * 1024 * 1024; // limite de corpo do Worker (plano free)
 const VAULT_PREFIX = "vaults/";
 const VIDEO_PREFIX = "videos/";
@@ -386,10 +387,20 @@ async function handleStats(env) {
  *
  * Semântica:
  *   • `owner` diferente e claim viva → recusado (`acquired: false` + `holder`);
- *   • mesmo `owner` → renova (o TTL é estendido), para retries não se atropelarem;
- *   • claim expirada é ignorada e pode ser tomada por outro;
- *   • a escrita é condicional + verificada por releitura, para dois pedidos
- *     simultâneos não ficarem ambos a pensar que ganharam.
+ *   • mesmo `owner` → renova (o TTL é estendido), para os retries do mesmo
+ *     aparelho não se auto-bloquearem;
+ *   • claim expirada/ilegível → considerada morta e substituída (takeover);
+ *   • a escrita é condicional ao ETag certo para cada caso + verificada por
+ *     releitura, para dois pedidos simultâneos não ficarem ambos a pensar que
+ *     ganharam.
+ *
+ * ⚠️ A pré-condição do `put` tem de acompanhar o caso: `etagDoesNotMatch: "*"`
+ * só serve para CRIAR (chave vazia). Usá-la sempre — como acontecia antes —
+ * fazia a renovação do próprio dono e o takeover de uma claim expirada falharem
+ * para sempre: o Worker respondia `acquired:false` sem dono, o app e o Robô
+ * abortavam com "Outro aparelho … está a publicar este Reel" e aquele Reel nunca
+ * mais era publicado. É este o cenário que `tools/repro-claim-wedge.mjs`
+ * reproduz e que `npm run worker:test` passa a cobrir.
  */
 
 function clampClaimTtl(value) {
@@ -400,25 +411,31 @@ function clampClaimTtl(value) {
 
 const claimObjectName = (key) => `${CLAIM_PREFIX}${safeName(key)}.json`;
 
-async function readClaim(env, key) {
+/**
+ * Lê a claim e guarda o ETag: as escritas condicionais abaixo precisam dele para
+ * detetar que outro dispositivo escreveu no meio.
+ * @returns {Promise<{claim: object|null, etag: string|null, exists: boolean}>}
+ */
+async function readClaimEntry(env, key) {
   const object = await env.BUCKET.get(claimObjectName(key));
-  if (!object) return null;
+  if (!object) return { claim: null, etag: null, exists: false };
+  const etag = object.etag ? String(object.etag) : null;
   try {
     const claim = JSON.parse(await object.text());
-    if (!claim || typeof claim !== "object") return null;
+    if (!claim || typeof claim !== "object") return { claim: null, etag, exists: true };
     if (!claim.key) claim.key = key;
-    return claim;
+    return { claim, etag, exists: true };
   } catch {
-    return null;
+    // Objeto ilegível a ocupar a chave: tratado como claim morta.
+    return { claim: null, etag, exists: true };
   }
 }
 
-async function activeClaim(env, key, nowMs) {
-  const claim = await readClaim(env, key);
-  if (!claim) return null;
-  if (Number(claim.expiresAt || 0) <= nowMs) return null;
-  return claim;
+async function readClaim(env, key) {
+  return (await readClaimEntry(env, key)).claim;
 }
+
+const claimIsLive = (claim, nowMs) => !!(claim && Number(claim.expiresAt || 0) > nowMs);
 
 const holderOf = (claim) =>
   claim ? { owner: claim.owner, expiresAt: claim.expiresAt } : null;
@@ -444,12 +461,14 @@ async function handleClaimAcquire(request, env) {
   const meta = { httpMetadata: { contentType: "application/json; charset=utf-8" } };
   let lastHolder = null;
 
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    const current = await activeClaim(env, key, nowMs);
-    if (current && current.owner !== owner) {
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    const entry = await readClaimEntry(env, key);
+
+    if (claimIsLive(entry.claim, nowMs) && entry.claim.owner !== owner) {
       return json({
         ok: true, provider: "cloudflare-r2", acquired: false,
-        holder: holderOf(current), retryAfterMs: Math.max(0, current.expiresAt - nowMs),
+        holder: holderOf(entry.claim),
+        retryAfterMs: Math.max(0, Number(entry.claim.expiresAt || 0) - nowMs),
       });
     }
 
@@ -459,17 +478,22 @@ async function handleClaimAcquire(request, env) {
     };
     const body = JSON.stringify(claim);
 
+    // Pré-condição certa para cada caso: CRIAR quando a chave está vazia
+    // (`etagDoesNotMatch: "*"`), RENOVAR/TOMAR quando já existe uma claim do
+    // mesmo dono ou uma claim morta (`etagMatches` do objeto lido). Sem o ETag
+    // (runtime antigo), o put simples + releitura abaixo ainda confirma o dono.
+    const onlyIf = !entry.exists
+      ? { etagDoesNotMatch: "*" }
+      : entry.etag
+        ? { etagMatches: entry.etag }
+        : null;
+
     try {
-      // 1ª tentativa: só cria se não existir nada (fecha a corrida de dois
-      // dispositivos a reclamar no mesmo instante). Se o runtime não suportar
-      // `onlyIf`, cai no put simples — a releitura abaixo ainda verifica.
-      const written = await env.BUCKET.put(objectName, body, {
-        ...meta,
-        onlyIf: { etagDoesNotMatch: "*" },
-      });
+      const written = onlyIf
+        ? await env.BUCKET.put(objectName, body, { ...meta, onlyIf })
+        : await env.BUCKET.put(objectName, body, meta);
       if (written === null) {
-        // Perdemos a corrida (ou existe uma claim expirada a ocupar o lugar):
-        // volta a ler no próximo ciclo do loop e decide.
+        // Outro pedido escreveu no meio: relê e decide no próximo ciclo.
         continue;
       }
     } catch (err) {
@@ -546,6 +570,7 @@ async function handleClaimsList(env) {
   if (!env.BUCKET) return fail("Worker sem binding R2 (BUCKET).", 500);
   const nowMs = Date.now();
   const active = [];
+  let cleaned = 0;
   let cursor;
   let guard = 0;
   do {
@@ -557,14 +582,21 @@ async function handleClaimsList(env) {
       try {
         claim = JSON.parse(await object.text());
       } catch {
-        continue;
+        claim = null;
       }
-      if (claim && Number(claim.expiresAt || 0) > nowMs) active.push(claim);
+      if (claimIsLive(claim, nowMs)) {
+        active.push(claim);
+      } else {
+        // Claim caduca/ilegível: sai da lista E da chave — se ficasse lá, o
+        // diagnóstico mostrava "nenhuma claim" e a fila continuava presa.
+        await env.BUCKET.delete(o.key);
+        cleaned++;
+      }
     }
     cursor = listed.cursor;
     guard++;
   } while (cursor && guard < 10);
-  return json({ ok: true, provider: "cloudflare-r2", active, count: active.length });
+  return json({ ok: true, provider: "cloudflare-r2", active, count: active.length, cleaned });
 }
 
 /* ------------------------------------------------------------------ main */

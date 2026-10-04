@@ -98,6 +98,20 @@ Cada tentativa **renova a claim anti-duplicado** (TTL de 30 min) para o TTL de 1
 Worker/Apps Script não expirar a meio de um envio longo — e se a claim passar a ser de
 outro aparelho/Robô, a publicação para em vez de arriscar um Reel repetido.
 
+> **Regressão da claim no Worker R2 (`Outro aparelho ou o Robô 24h está a publicar este
+> Reel` sem ninguém a publicar).** O Worker gravava a claim sempre com
+> `onlyIf: { etagDoesNotMatch: "*" }` — a pré-condição de *criar*, que só funciona com a
+> chave vazia. Depois da primeira aquisição a chave nunca mais estava vazia, por isso a
+> **renovação do mesmo dono** (feita antes de cada tentativa) e o **takeover de uma claim
+> expirada** falhavam sempre: o Worker respondia `acquired:false` sem dono, o app e o Robô
+> abortavam com a mensagem acima e aquele Reel nunca mais era publicado. A escrita passou a
+> usar a pré-condição certa para cada caso — criar com `etagDoesNotMatch:"*"`, renovar/tomar
+> com `etagMatches` do objeto lido — e o diagnóstico (`GET /api/claims`) limpa as claims
+> caducas em vez de as esconder. Como o Worker corre na Cloudflare, **é preciso
+> `npx wrangler deploy` outra vez**; o site sozinho não atualiza o backend. Coberto por
+> `npm run worker:test` (o Worker real contra um bucket R2 falso, incluindo renovação,
+> takeover, corrida entre dois donos e runtimes sem escrita condicional).
+
 ### Ainda apanhas o 2207077? Confirma que estás na versão nova
 
 A mensagem diz-te qual o código que está a correr, **sem abrires o bundle**:

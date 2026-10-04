@@ -426,9 +426,23 @@ atualizares o backend, é apenas a proteção contra Reels repetidos.
 ### Testar
 
 ```bash
-npm test          # inclui os testes das claims: R2, Drive, modo compatível,
-                  # expiração/takeover, dono errado a tentar libertar, backend antigo
+npm run worker:test   # 40 verificações do Worker REAL (cloudflare/r2-worker.js) contra um
+                      # bucket R2 falso: criação, RENOVAÇÃO do mesmo dono, takeover de claim
+                      # expirada/ilegível, corrida entre dois donos, release, TTLs, limpeza
+                      # no diagnóstico e runtimes sem escrita condicional
+npm test              # inclui os testes das claims no cliente: R2 (mock), Drive, modo
+                      # compatível, expiração/takeover, dono errado a tentar libertar,
+                      # backend antigo — além do proxy NVIDIA, publicação IG e build
 ```
+
+> ⚠️ **Se já tens o Worker instalado, faz `npx wrangler deploy` outra vez.** Até à versão
+> 1.2.0 o Worker usava `onlyIf: { etagDoesNotMatch: "*" }` em todas as escritas da claim —
+> a pré-condição de *criar* —, por isso a renovação pelo próprio dono e o takeover de uma
+> claim expirada falhavam sempre: o app abortava com *"Outro aparelho ou o Robô 24h está a
+> publicar este Reel agora"* sem ninguém a publicar, e aquele Reel ficava preso. Confirma o
+> deploy com `curl -s <worker> | grep claims` (tem de dizer `"claims": true` e
+> `"version": "1.2.0"`). `tools/repro-claim-wedge.mjs` reproduz o cenário (passa a dar ✔
+> com o Worker corrigido).
 
 ---
 

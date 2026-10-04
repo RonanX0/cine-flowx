@@ -7,7 +7,7 @@
     "dev": "vite --host 0.0.0.0",
     "build": "node tools/build-static.mjs",
     "preview": "vite preview --host 0.0.0.0",
-    "test": "npm run nuvem:test && node tools/test-nvidia-proxy.mjs && node tools/test-ig-publish.mjs && node tools/test-build-cache.mjs",
+    "test": "npm run nuvem:test && npm run worker:test && node tools/test-nvidia-proxy.mjs && node tools/test-ig-publish.mjs && node tools/test-build-cache.mjs",
     "build:test": "node tools/test-build-cache.mjs",
     "ig:test": "node tools/test-ig-publish.mjs",
     "nuvem": "node tools/dev-server.mjs",
@@ -18,7 +18,9 @@
     "patch:nuvem": "node tools/apply-cloud-patch.mjs --verify",
     "patch:agendador": "node tools/build-agendador-patch.mjs && node tools/apply-cloud-patch.mjs --verify",
     "patch:base": "node tools/restore-base.mjs",
-    "patch:full": "node tools/restore-base.mjs && node tools/extract-patch-targets.mjs && node tools/apply-cloud-patch.mjs --verify"
+    "patch:full": "node tools/restore-base.mjs && node tools/extract-patch-targets.mjs && node tools/apply-cloud-patch.mjs --verify",
+    "worker:test": "node tools/test-r2-worker.mjs",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@ffmpeg/ffmpeg": "^0.12.10",

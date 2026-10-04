@@ -30,7 +30,7 @@ async function uploadBufferToDirectMp4Host(
     const form = new FormData();
     form.append(
       "files[]",
-      new Blob([buffer], { type: "video/mp4" }),
+      new Blob([new Uint8Array(buffer)], { type: "video/mp4" }),
       safeName.endsWith(".mp4") ? safeName : `${safeName}.mp4`
     );
     const res = await fetch("https://uguu.se/upload", {
@@ -53,7 +53,7 @@ async function uploadBufferToDirectMp4Host(
     form2.append("time", "12h");
     form2.append(
       "fileToUpload",
-      new Blob([buffer], { type: "video/mp4" }),
+      new Blob([new Uint8Array(buffer)], { type: "video/mp4" }),
       safeName.endsWith(".mp4") ? safeName : `${safeName}.mp4`
     );
     const res2 = await fetch(
@@ -282,7 +282,7 @@ function apiProxyPlugin(): Plugin {
           Authorization: String(auth),
           ...(isPost ? { "Content-Type": "application/json" } : {}),
         },
-        body: isPost && bodyBuffer ? bodyBuffer : undefined,
+        body: isPost && bodyBuffer ? new Uint8Array(bodyBuffer) : undefined,
       });
 
       res.statusCode = upstream.status;
