@@ -1,0 +1,3 @@
+function kS(r){return `function desativarRobo24h() { ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === "verificarEPostarReels").forEach(t => ScriptApp.deleteTrigger(t)); }
+function ativarRobo24h() { desativarRobo24h(); }
+function verificarEPostarReels() { desativarRobo24h(); }`;}function ES(
