@@ -9,6 +9,7 @@ Aplicação web **100% no navegador** que limpa metadados de vídeos, corta até
 - `nuvem-duravel.js` — camada de armazenamento durável (`window.CineCloud`), carregada antes do app
 - `apps-script/cineclip-cloud-drive.js` e `cloudflare/r2-worker.js` — backends do Google Drive e Cloudflare R2
 - `tools/` — servidor de preview, mocks, testes e ferramentas para reaplicar os patches do bundle
+- `tools/renovar-cloudflare.mjs` — renova o backend Cloudflare (`npm run cloudflare:renovar`):deploy + verificação do link `/v/:key`, das claims e do espaço no R2
 - `vite.config.ts` — servidor de desenvolvimento e proxy local para NVIDIA
 - `api/public/nvidia.js` e `netlify/functions/nvidia.mjs` — proxy NVIDIA para deploys Vercel e Netlify
 - `_headers` (Netlify / Cloudflare Pages), `netlify.toml` e `vercel.json` — revalidação do HTML, para um deploy novo não ficar preso na cache do browser
@@ -115,6 +116,12 @@ O erro mostrado na interface passa a trazer o código e a dica (ex.: *"O Instagr
 processamento do vídeo (código 2207077): … · Dica: … (após 3 tentativas)"*), e um Reel que
 ficou em erro pode ser reenviado pelo **Publicar agora** do Agendador.
 
+> **E se o link for do R2?** Até ao Worker 1.2.0 o `GET /v/:key` rebentava com `500` (HTML em
+> vez do `.mp4`) porque chamava `headers.set(...)` sobre o objeto simples do CORS. Era exatamente
+> o padrão que a Meta recusa — o `curl -i <link>` mostrava `text/html`. Corrigido na **1.3.0**
+> (e a decisão 200/206 passou a depender do pedido, não do que o backend devolve; há `304`
+> para `If-None-Match`), com regressão coberta pela secção 10 de `npm run worker:test`.
+
 > **E o `(após 2 tentativas)`?** Significa que o Reel **não tem o ficheiro `.mp4` neste
 > aparelho** (só o link na nuvem): sem o ficheiro não há envio direto nem renovação do link,
 > por isso o plano fica reduzido a duas tentativas por `video_url`. Nesse cenário o app agora
@@ -147,7 +154,7 @@ outro aparelho/Robô, a publicação para em vez de arriscar um Reel repetido.
 > com `etagMatches` do objeto lido — e o diagnóstico (`GET /api/claims`) limpa as claims
 > caducas em vez de as esconder. Como o Worker corre na Cloudflare, **é preciso
 > `npx wrangler deploy` outra vez**; o site sozinho não atualiza o backend. Coberto por
-> `npm run worker:test` (o Worker real contra um bucket R2 falso, incluindo renovação,
+> `npm run worker:test` (72 verificações: o Worker real contra um bucket R2 falso, incluindo renovação,
 > takeover, corrida entre dois donos e runtimes sem escrita condicional).
 
 > **Regressão do botão "Publicar agora" (o clique não fazia nada).** O patch das claims
@@ -210,6 +217,13 @@ sincronização que podia sobrescrever a fila com dados vazios.
 Agora o armazenamento é **teu** e durável, com duas opções à escolha (o app usa a que estiver
 configurada e, se tiveres as duas, faz failover automático R2 → Drive):
 
+> **Renovar o Cloudflare** (depois de mexeres em `cloudflare/r2-worker.js` ou no
+> `wrangler.toml`): `npm run cloudflare:renovar`. Faz `wrangler deploy` **e** prova o que
+> ficou online — health, `version` igual à do repositório, `GET /v/:key` a devolver os bytes
+> do `.mp4`, `Range`/`HEAD` (as sondas que o app faz antes de publicar), o ciclo das claims e
+> os GB usados no bucket. Precisa da tua sessão Cloudflare (`npx wrangler login`); o script não
+> guarda nem pede credenciais. Com `--dry` fica só pelas verificações locais, sem rede.
+
 | | **Google Drive** (recomendado) | **Cloudflare R2** |
 |---|---|---|
 | Custo | **0 €**, sem cartão | 10 GB/mês grátis, mas o checkout pede cartão (e há relatos de exigir Workers Paid, 5 USD/mês) |
@@ -229,6 +243,7 @@ npm run nuvem          # app + mocks em http://localhost:4173 (/drive-api e /clo
 npm run nuvem:test     # testes ponta-a-ponta da camada de nuvem (arranca os mocks sozinho)
 npm run robo:test      # guarda da publicação automática: o Robô 24h gerado tem de ser o robô a sério
 npm test               # nuvem + worker + robô 24h + proxy NVIDIA + Instagram + Agendador + build
+npm run cloudflare:renovar # renova o Worker na Cloudflare e verifica o que ficou online
 npm run build          # gera dist/ para deploy estático
 npm run patch:full     # reconstrói/verifica o bundle e reaplica os patches
 npm run patch:agendador # regenera e aplica o layout do Agendador (tools/agendador-ui/)

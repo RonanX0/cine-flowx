@@ -14,5 +14,10 @@ sessao-meta/
 tools/.syntax-*
 tools/.robo-24h-*
 
+# Segredos locais do wrangler (npx wrangler dev) — nunca versionar
+cloudflare/.dev.vars
+.dev.vars
+.wrangler/
+
 # Sistema
 .DS_Store

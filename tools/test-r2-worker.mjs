@@ -20,20 +20,72 @@ const TOKEN = "cc_token_de_teste";
 
 /* --------------------- bucket R2 falso (semântica verdadeira) --------------------- */
 
-function createFakeBucket({ suportaOnlyIf = true } = {}) {
+/**
+ * O Worker grava o .mp4 com `put(key, request.body)` — um ReadableStream, não uma
+ * string. Um bucket falso que só sabe ler strings faria o upload rebentar antes de
+ * o teste chegar ao /v/:key, por isso o corpo é lido como no R2 real.
+ */
+async function readBucketBody(body) {
+  if (body == null) return Buffer.alloc(0);
+  if (typeof body === "string") return body;
+  if (typeof body.getReader === "function") {
+    const reader = body.getReader();
+    const chunks = [];
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(Buffer.from(value));
+    }
+    return Buffer.concat(chunks);
+  }
+  if (ArrayBuffer.isView(body)) return Buffer.from(body.buffer, body.byteOffset, body.byteLength);
+  if (body instanceof ArrayBuffer) return Buffer.from(body);
+  return Buffer.from(body);
+}
+
+function createFakeBucket({ suportaOnlyIf = true, rangeSempre = false } = {}) {
   const objects = new Map(); // nome -> { body, etag }
   let seq = 0;
   const newEtag = () => `etag-${++seq}`;
   return {
     objects,
     puts: [],
-    async get(name) {
+    async get(name, opts = {}) {
       const o = objects.get(name);
       if (!o) return null;
       const buffer = Buffer.from(o.body);
+      const size = buffer.byteLength;
+      // O R2 real aceita `range: {offset, length}` e `{suffix}` e devolve só esse
+      // bocado + um `range` a dizer o que foi entregue. O `get` do /v/:key depende
+      // disso para responder 206 com Content-Range — sem isto o teste não vê nada.
+      const r = opts && opts.range;
+      if (r && (Number.isFinite(r.offset) || Number.isFinite(r.suffix))) {
+        let start = 0;
+        let len = size;
+        if (Number.isFinite(r.suffix)) {
+          len = Math.min(size, r.suffix);
+          start = size - len;
+        } else {
+          start = Math.min(size, Math.max(0, r.offset));
+          len = Number.isFinite(r.length) ? Math.min(r.length, size - start) : size - start;
+        }
+        return {
+          etag: o.etag,
+          size,
+          range: { offset: start, length: len },
+          body: buffer.subarray(start, start + len),
+          httpMetadata: o.httpMetadata || { contentType: "application/json" },
+          text: async () => buffer.subarray(start, start + len).toString("utf8"),
+        };
+      }
       return {
         etag: o.etag,
-        size: buffer.byteLength,
+        size,
+        // `rangeSempre`: alguns runtime (o Miniflare do `wrangler dev`, por
+        // exemplo) devolvem um `range` mesmo num GET que não pediu Range. Um
+        // handler que decida 200/206 por `object.range` em vez de por o pedido
+        // responderia 206 a tudo — foi isso que o smoke de 2026-10 apanhou.
+        range: rangeSempre ? { offset: 0 } : undefined,
         body: buffer,
         httpMetadata: o.httpMetadata || { contentType: "application/json" },
         text: async () => o.body,
@@ -42,7 +94,8 @@ function createFakeBucket({ suportaOnlyIf = true } = {}) {
     async put(name, body, opts = {}) {
       const existing = objects.get(name);
       const onlyIf = opts && opts.onlyIf;
-      const text = typeof body === "string" ? body : Buffer.from(body).toString("utf8");
+      const raw = await readBucketBody(body);
+      const text = typeof raw === "string" ? raw : raw.toString("utf8");
       this.puts.push({ name, text, onlyIf: onlyIf ? { ...onlyIf } : null });
       if (onlyIf && suportaOnlyIf) {
         // R2: `etagDoesNotMatch:"*"` = só grava se a chave estiver vazia.
@@ -59,8 +112,15 @@ function createFakeBucket({ suportaOnlyIf = true } = {}) {
         }
       }
       const etag = newEtag();
-      objects.set(name, { body: text, etag, httpMetadata: opts && opts.httpMetadata });
+      objects.set(name, { body: raw, etag, httpMetadata: opts && opts.httpMetadata });
       return { etag };
+    },
+    // O Worker usa head() para confirmar o tamanho gravado antes de devolver a URL.
+    async head(name) {
+      const o = objects.get(name);
+      if (!o) return null;
+      const buffer = Buffer.from(o.body);
+      return { etag: o.etag, size: buffer.byteLength, httpMetadata: o.httpMetadata || {} };
     },
     async delete(name) { objects.delete(name); },
     async list({ prefix = "", cursor, limit = 1000 } = {}) {
@@ -88,6 +148,20 @@ const call = (bucket, path, { method = "GET", body, token = TOKEN } = {}) =>
       { BUCKET: bucket, CINECLIP_TOKEN: TOKEN }
     )
     .then(async (r) => ({ status: r.status, data: await r.json() }));
+
+/**
+ * Pedido "cru": permite corpo binário e cabeçalhos arbitrários (Range, If-None-Match,
+ * HEAD) ao Worker real. O `call` acima só sabe mandar JSON.
+ */
+const callRaw = (bucket, path, { method = "GET", body, headers = {}, token = null } = {}) =>
+  worker.fetch(
+    new Request("https://worker.example" + path, {
+      method,
+      headers: token ? { Authorization: "Bearer " + token, ...headers } : { ...headers },
+      body: method === "GET" || method === "HEAD" ? undefined : body,
+    }),
+    { BUCKET: bucket, CINECLIP_TOKEN: TOKEN }
+  );
 
 /* ------------------------------------ runner ------------------------------------ */
 
@@ -271,7 +345,141 @@ console.log("\n9. Health check anuncia as claims");
   const bucket = createFakeBucket();
   const r = await call(bucket, "/", { token: "" });
   check("GET / é público e diz claims:true", r.status === 200 && r.data.claims === true, JSON.stringify(r.data));
-  check("a versão do Worker é a nova (1.2.0)", r.data.version === "1.2.0", String(r.data.version));
+  check("a versão do Worker é a nova (1.3.0)", r.data.version === "1.3.0", String(r.data.version));
+}
+
+console.log("\n10. O link público /v/:key devolve bytes (a regressão do 500)");
+{
+  // Porque é que esta secção existe: `corsHeaders()` devolve um objeto simples e o
+  // handler do vídeo chamava `headers.set(...)` em cima dele. Resultado: TODO
+  // `GET /v/:key` rebentava com 500 + HTML — exatamente o que o crawler da Meta
+  // apanhava no lugar do .mp4 (o sabor do "Media upload has failed / 2207077"), e o
+  // `HEAD`/`Range` de verificação do app também. Os 40 testes antigos nunca pediram
+  // um vídeo, por isso nunca viram isto.
+  const bucket = createFakeBucket();
+  // bytes todos < 0x80, para sobreviver à volta em string que o cofre usa
+  const MP4 = Buffer.concat([Buffer.from("000000206674797069736f6d", "hex"), Buffer.alloc(2040, 0x41)]);
+  const SIZE = MP4.byteLength;
+
+  const up = await callRaw(bucket, "/api/video", {
+    method: "POST",
+    token: TOKEN,
+    headers: { "Content-Type": "video/mp4", "X-File-Name": "meu reel.mp4", "X-File-Size": String(SIZE) },
+    body: MP4,
+  });
+  const upJson = await up.json();
+  const keyPath = String(upJson.url || "").replace(/^https?:\/\/worker\.example/, "");
+  check("upload direto → 200 com key e URL pública do Worker", up.status === 200 && /^\/v\//.test(keyPath), keyPath);
+
+  const full = await callRaw(bucket, keyPath);
+  const fullBuf = Buffer.from(await full.arrayBuffer());
+  check("GET /v/:key → 200 (não 500, não 206)", full.status === 200, String(full.status));
+  check("os bytes do vídeo chegam intactos", fullBuf.length === SIZE && fullBuf.equals(MP4), `${fullBuf.length}/${SIZE}`);
+  check("Content-Type é o do vídeo", full.headers.get("content-type") === "video/mp4", String(full.headers.get("content-type")));
+  check("Content-Length bate certo com o tamanho", full.headers.get("content-length") === String(SIZE), String(full.headers.get("content-length")));
+  check("Accept-Ranges: bytes (a Meta pede Range)", full.headers.get("accept-ranges") === "bytes");
+  check("CORS * no link público (o browser tem de o poder ler)", full.headers.get("access-control-allow-origin") === "*");
+  check("o link público não pede token", full.headers.get("x-cineclip-durable") === "1");
+
+  const firstBytes = await callRaw(bucket, keyPath, { headers: { Range: "bytes=0-1" } });
+  const firstBuf = Buffer.from(await firstBytes.arrayBuffer());
+  check("GET com Range → 206 Partial Content", firstBytes.status === 206, String(firstBytes.status));
+  check("Content-Range a dizer o pedaço certo", firstBytes.headers.get("content-range") === `bytes 0-1/${SIZE}`, String(firstBytes.headers.get("content-range")));
+  check("o app lê mesmo 2 bytes (a sonda antes de publicar)", firstBuf.length === 2 && firstBuf.equals(MP4.subarray(0, 2)), String(firstBuf.length));
+
+  const mid = await callRaw(bucket, keyPath, { headers: { Range: `bytes=1000-1999` } });
+  const midBuf = Buffer.from(await mid.arrayBuffer());
+  check("Range no meio do ficheiro → 1000 bytes do sítio certo", mid.status === 206 && midBuf.length === 1000 && midBuf.equals(MP4.subarray(1000, 2000)), `${midBuf.length}`);
+
+  const tail = await callRaw(bucket, keyPath, { headers: { Range: "bytes=-512" } });
+  const tailBuf = Buffer.from(await tail.arrayBuffer());
+  check("Range de sufixo (bytes=-512) devolve o fim do vídeo", tail.status === 206 && tailBuf.length === 512 && tailBuf.equals(MP4.subarray(SIZE - 512)), `${tailBuf.length}`);
+
+  const head = await callRaw(bucket, keyPath, { method: "HEAD" });
+  const headBuf = await head.arrayBuffer();
+  check("HEAD → 200 com Content-Length e corpo vazio", head.status === 200 && head.headers.get("content-length") === String(SIZE) && headBuf.byteLength === 0, `${head.status}/${head.headers.get("content-length")}`);
+
+  const headRange = await callRaw(bucket, keyPath, { method: "HEAD", headers: { Range: "bytes=0-1" } });
+  check("HEAD com Range → 206 + Content-Range, sem corpo", headRange.status === 206 && headRange.headers.get("content-range") === `bytes 0-1/${SIZE}` && (await headRange.arrayBuffer()).byteLength === 0, String(headRange.status));
+
+  const inm = await callRaw(bucket, keyPath, { headers: { "If-None-Match": String(full.headers.get("etag")) } });
+  check("If-None-Match com o ETag → 304 sem corpo (o .mp4 é imutável)", inm.status === 304 && (await inm.arrayBuffer()).byteLength === 0, String(inm.status));
+  const inmOutdated = await callRaw(bucket, keyPath, { headers: { "If-None-Match": '"outro-etag"' } });
+  check("If-None-Match com ETag velho → 200 com o vídeo", inmOutdated.status === 200 && (await inmOutdated.arrayBuffer()).byteLength === SIZE, String(inmOutdated.status));
+
+  const rangeMalformed = await callRaw(bucket, keyPath, { headers: { Range: "bytes=" } });
+  check("Range destralhado → serve o vídeo todo (200), não rebenta", rangeMalformed.status === 200 && (await rangeMalformed.arrayBuffer()).byteLength === SIZE, String(rangeMalformed.status));
+
+  // Runtime que mente com um `range` vazio: o 200/206 tem de se decidir pelo
+  // PEDIDO, nunca pelo que o backend devolve.
+  {
+    const bucketMentiroso = createFakeBucket({ rangeSempre: true });
+    const upM = await callRaw(bucketMentiroso, "/api/video", {
+      method: "POST", token: TOKEN,
+      headers: { "Content-Type": "video/mp4", "X-File-Size": String(SIZE) },
+      body: MP4,
+    });
+    const pathM = String((await upM.json()).url || "").replace(/^https?:\/\/worker\.example/, "");
+    const fullM = await callRaw(bucketMentiroso, pathM);
+    const bufM = Buffer.from(await fullM.arrayBuffer());
+    check("GET sem Range continua 200 mesmo se o backend vier com `range`", fullM.status === 200 && bufM.length === SIZE, `${fullM.status}/${bufM.length}`);
+    const rangeM = await callRaw(bucketMentiroso, pathM, { headers: { Range: "bytes=0-1" } });
+    check("e com Range vem 206 com Content-Range", rangeM.status === 206 && /^bytes 0-1\//.test(String(rangeM.headers.get("content-range"))), String(rangeM.status));
+  }
+
+  const semObjecto = await callRaw(bucket, "/v/videos/nao-existe.mp4");
+  check("chave inexistente → 404 honesto", semObjecto.status === 404, String(semObjecto.status));
+  const travessia = await callRaw(bucket, "/v/..%2F..%2Fetc%2Fpasswd");
+  check("chave com ../ → 400 (não lê fora do prefixo)", travessia.status === 400, String(travessia.status));
+
+  const contentType = await callRaw(bucket, keyPath);
+  check("a cache é longa e imutável (o link não muda)", /max-age=31536000, immutable/.test(String(contentType.headers.get("cache-control"))), String(contentType.headers.get("cache-control")));
+}
+
+console.log("\n11. cloudflare/wrangler.toml compatível com o runtime de 2026");
+{
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const url = await import("node:url");
+  const tomlPath = path.join(path.dirname(url.fileURLToPath(import.meta.url)), "..", "cloudflare", "wrangler.toml");
+  const toml = fs.readFileSync(tomlPath, "utf8");
+  // comentários fora; cada linha guarda o índice original para saber onde começam as tabelas
+  const code = toml.split("\n").map((l) => (/^\s*#/.test(l) ? "" : l));
+  const body = code.join("\n");
+  const val = (key) => {
+    const m = new RegExp(`^\\s*${key}\\s*=\\s*(.+?)\\s*$`, "m").exec(body);
+    return m ? m[1].replace(/^"|"$/g, "") : undefined;
+  };
+  const compatDate = val("compatibility_date");
+  const flagsMatch = /compatibility_flags\s*=\s*\[([^\]]*)\]/.exec(body);
+  const flags = flagsMatch ? flagsMatch[1].split(",").map((f) => f.trim().replace(/^"|"$/g, "")).filter(Boolean) : [];
+  const NODEJS_COMPAT_DEFAULT_SINCE = "2026-08-04";
+
+  check("compatibility_date definida (AAAAMM-DD)", /^\d{4}-\d{2}-\d{2}$/.test(String(compatDate)), String(compatDate));
+  check("compatibility_date renovada (≥ " + NODEJS_COMPAT_DEFAULT_SINCE + ")", String(compatDate) >= NODEJS_COMPAT_DEFAULT_SINCE, String(compatDate));
+  // nodejs_compat passou a ser o default em 2026-08-04 e o workerd dessa versão
+  // chumbava o arranque quando a flag era dita à mão → `wrangler deploy`/`dev`
+  // a falhar. Com data nova a flag tem de FÔRA da config; com data velha tem de lá estar.
+  check(
+    String(compatDate) >= NODEJS_COMPAT_DEFAULT_SINCE
+      ? "sem nodejs_compat redundante (é o default desde " + NODEJS_COMPAT_DEFAULT_SINCE + ")"
+      : "com nodejs_compat (necessária antes de " + NODEJS_COMPAT_DEFAULT_SINCE + ")",
+    String(compatDate) >= NODEJS_COMPAT_DEFAULT_SINCE ? !flags.includes("nodejs_compat") : flags.includes("nodejs_compat"),
+    flags.join(",") || "(sem flags)"
+  );
+  // O TOML lê `chave = valor` como parte da tabela onde cai: com workers_dev
+  // depois de [[r2_buckets]] o wrangler avisava "Unexpected fields found in
+  // r2_buckets[0]: workers_dev" e a chave era ignorada. As chaves do Worker têm
+  // de estar antes da primeira tabela ([vars]/[[r2_buckets]]/[observability]).
+  const idxWorkersDev = code.findIndex((l) => /^\s*workers_dev\s*=/.test(l));
+  const idxFirstTable = code.findIndex((l) => /^\s*\[/.test(l));
+  check("workers_dev antes da primeira tabela (senão o TOML engole-o)", idxWorkersDev !== -1 && idxFirstTable !== -1 && idxWorkersDev < idxFirstTable, `workers_dev@${idxWorkersDev} tabela@${idxFirstTable}`);
+  check("workers_dev ligado (o link /v/:key tem de ser público)", /^\s*workers_dev\s*=\s*true\s*$/m.test(body));
+  check("main aponta para o Worker que testamos aqui", val("main") === "r2-worker.js", String(val("main")));
+  check("nome do Worker é cineclip-cloud", val("name") === "cineclip-cloud", String(val("name")));
+  check("binding BUCKET → bucket R2 declarado", /\[\[r2_buckets\]\][\s\S]*?binding\s*=\s*"BUCKET"/.test(body));
+  // segredos nunca no repositório: nem o token, nem as chaves S3 do presign
+  check("segredos fora do wrangler.toml", !/^\s*(CINECLIP_TOKEN|R2_ACCESS_KEY_ID|R2_SECRET_ACCESS_KEY)\s*=/m.test(body));
 }
 
 console.log(`\n${fail === 0 ? "✅" : "❌"} ${pass} passaram, ${fail} falharam`);

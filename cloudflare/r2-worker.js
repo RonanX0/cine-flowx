@@ -41,12 +41,17 @@
  *   R2_SECRET_ACCESS_KEY→ secret opcional: só para /api/video/presign
  *   R2_BUCKET_NAME      → var opcional: só para /api/video/presign
  *
- * Deploy:
- *   npx wrangler deploy
- *   npx wrangler secret put CINECLIP_TOKEN
+ * Deploy (renovar o Worker depois de qualquer mudança neste ficheiro):
+ *   npm run cloudflare:renovar     # deploy + verificação do link /v/ e das claims
+ *   (por baixo: npx wrangler deploy && npx wrangler secret put CINECLIP_TOKEN)
+ *
+ * Versões: 1.3.0 — o link público /v/:key devolvia 500 (`headers.set` num objeto
+ *            simples); rebentava com `Range` e com `HEAD`, que é exatamente o que
+ *            a verificação do app e o crawler da Meta fazem → 2207077.
+ *          1.2.0 — claims com escrita condicional (renovar/takeover)
  */
 
-const VERSION = "1.2.0";
+const VERSION = "1.3.0";
 const MAX_DIRECT_UPLOAD = 100 * 1024 * 1024; // limite de corpo do Worker (plano free)
 const VAULT_PREFIX = "vaults/";
 const VIDEO_PREFIX = "videos/";
@@ -276,16 +281,34 @@ async function handlePresign(request, env, url) {
   });
 }
 
+/**
+ * Serve o .mp4 a partir do R2. É o único caminho público do Worker (sem token),
+ * porque é este URL que o Instagram/Meta vai descarregar.
+ *
+ * Regras que têm de continuar verdadeiras (cobertas pela secção 10 de
+ * `npm run worker:test`):
+ *   • GET simples            → 200 + bytes todos + Content-Length do tamanho total;
+ *   • GET com `Range: a-b`   → 206 + Content-Range + só esses bytes;
+ *   • HEAD                   → mesmo estado, sem corpo (o app usa isto para
+ *                              verificar o link antes de gastar uma tentativa);
+ *   • If-None-Match igual    → 304 sem corpo (o `.mp4` é imutável);
+ *   • sempre `Accept-Ranges: bytes` e CORS `*`.
+ *
+ * ⚠️ O 206/200 decide-se pelo **pedido**, nunca por `object.range`: alguns runtimes
+ * devolvem `range: {offset: 0}` mesmo num `GET` sem `Range`, e responder
+ * 206 a um pedido que não pediu range deixa o crawler da Meta com um link que
+ * "responde mas não é o vídeo" — o mesmo sabor de falha do 2207077.
+ */
 async function handleServeVideo(request, env, key) {
   if (!env.BUCKET) return fail("Worker sem binding R2 (BUCKET).", 500);
   const decoded = decodeURIComponent(key);
   if (decoded.includes("..")) return fail("Chave inválida.", 400);
 
-  const range = request.headers.get("range");
+  const wanted = parseRange(request.headers.get("range")); // undefined = sem Range
   let object;
   try {
-    object = range
-      ? await env.BUCKET.get(decoded, { range: parseRange(range) })
+    object = wanted
+      ? await env.BUCKET.get(decoded, { range: wanted })
       : await env.BUCKET.get(decoded);
   } catch (err) {
     return fail(`Erro a ler do R2: ${err && err.message ? err.message : err}`, 500);
@@ -293,25 +316,51 @@ async function handleServeVideo(request, env, key) {
 
   if (!object) return fail("Vídeo não encontrado (404).", 404);
 
-  const headers = corsHeaders({
-    "Content-Type": object.httpMetadata?.contentType || "video/mp4",
-    "Accept-Ranges": "bytes",
-    "Cache-Control": "public, max-age=31536000, immutable",
-    ETag: `"${object.etag || object.httpEtag?.replace(/"/g, "") || ""}"`,
-    "X-Cineclip-Durable": "1",
-  });
+  const etag = `"${object.etag || object.httpEtag?.replace(/"/g, "") || ""}"`;
+  // ⚠️ `corsHeaders()` devolve um objeto simples; `.set(...)` em baixo é um método
+  // do `Headers`. Era isto que rebentava com o link público (`headers.set is not a
+  // function` → 500 com HTML em vez dos bytes do vídeo).
+  const headers = new Headers(
+    corsHeaders({
+      "Content-Type": object.httpMetadata?.contentType || "video/mp4",
+      "Accept-Ranges": "bytes",
+      "Cache-Control": "public, max-age=31536000, immutable",
+      ETag: etag,
+      "X-Cineclip-Durable": "1",
+    })
+  );
 
-  if (object.range) {
-    const start = object.range.offset ?? 0;
-    const end = object.range.length ? start + object.range.length - 1 : object.size - 1;
-    headers.set("Content-Range", `bytes ${start}-${end}/${object.size}`);
-    headers.set("Content-Length", String(object.range.length || object.size));
-    return new Response(object.body, { status: 206, headers });
+  const notModified = request.headers.get("if-none-match");
+  if (!wanted && notModified && etagSplit(notModified).includes(etag)) {
+    return new Response(null, { status: 304, headers });
   }
 
+  const isHead = request.method === "HEAD";
+
+  if (wanted && object.range) {
+    const start = object.range.offset ?? 0;
+    const len = Number.isFinite(object.range.length)
+      ? object.range.length
+      : Math.max(0, object.size - start);
+    const end = start + Math.max(0, len - 1);
+    headers.set("Content-Range", `bytes ${start}-${end}/${object.size}`);
+    headers.set("Content-Length", String(len));
+    return new Response(isHead ? null : object.body, { status: 206, headers });
+  }
+
+  // Resposta completa (inclui o caso "pediram um Range que o runtime não honrou":
+  // melhor entregar o vídeo todo com 200 do que um 206 mentiroso).
   headers.set("Content-Length", String(object.size));
-  if (request.method === "HEAD") return new Response(null, { status: 200, headers });
+  if (isHead) return new Response(null, { status: 200, headers });
   return new Response(object.body, { status: 200, headers });
+}
+
+/** `If-None-Match` pode trazer vários ETags ("a", "b") ou um fraco (W/"a"). */
+function etagSplit(header) {
+  return String(header || "")
+    .split(",")
+    .map((s) => s.trim().replace(/^W\//, ""))
+    .filter(Boolean);
 }
 
 function parseRange(header) {

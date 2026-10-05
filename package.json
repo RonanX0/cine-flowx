@@ -22,7 +22,14 @@
     "patch:full": "node tools/restore-base.mjs && node tools/extract-patch-targets.mjs && node tools/apply-cloud-patch.mjs --verify",
     "worker:test": "node tools/test-r2-worker.mjs",
     "typecheck": "tsc --noEmit",
-    "agendador:test": "node tools/test-agendador-publish.mjs"
+    "agendador:test": "node tools/test-agendador-publish.mjs",
+    "cloudflare:renovar": "node tools/renovar-cloudflare.mjs",
+    "cloudflare:deploy": "npx wrangler deploy --config cloudflare/wrangler.toml",
+    "cloudflare:dev": "npx wrangler dev --config cloudflare/wrangler.toml",
+    "cloudflare:secret": "npx wrangler secret put CINECLIP_TOKEN --config cloudflare/wrangler.toml",
+    "cloudflare:logs": "npx wrangler tail --config cloudflare/wrangler.toml",
+    "cloudflare:bucket": "npx wrangler r2 bucket create cineclip-reels",
+    "cloudflare:test": "node tools/test-r2-worker.mjs"
   },
   "dependencies": {
     "@ffmpeg/ffmpeg": "^0.12.10",
