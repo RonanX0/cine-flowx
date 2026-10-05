@@ -130,3 +130,63 @@ Internet para validar os CDNs externos (`unpkg`, NVIDIA, Meta).
    pré-voo agora diz isso em vez de rebentar a meio. Decidir: refazer as âncoras ou apagar
    o script.
 4. **Erro 5** (higiene) ficou como estava — diz se queres que trate.
+
+---
+
+## 6. 🔴 Erro encontrado em 2026-10-05 (branch `arena/01a1096d-cine-flowx`) ao *renovar* o Cloudflare
+
+| Gravidade | Erro | Onde | Estado |
+|---|---|---|---|
+| 🔴 **Crítico** | **Todos** os `GET/HEAD /v/:key` do Worker R2 respondiam **500 com HTML** em vez dos bytes do `.mp4` — ou seja, o Instagram recebia uma página de erro no lugar do vídeo (o padrão do 2207077) e a sonda do app "link verificado" falhava sempre | `cloudflare/r2-worker.js` (`handleServeVideo`) | ✅ **Corrigido** (Worker **1.3.0**) |
+
+**Causa.** `corsHeaders()` devolve um **objeto simples**; o handler do vídeo chamava
+`headers.set("Content-Length", …)` em cima dele. `set` é método do `Headers`, não do objeto →
+`TypeError: headers.set is not a function`, atirado **em todos os pedidos** (Range ou não,
+`GET` ou `HEAD`). Só apanhado porque corri o Worker no runtime real:
+
+```
+[wrangler:error] TypeError: headers.set is not a function
+    at handleServeVideo (cloudflare/r2-worker.js:307:13)
+[wrangler:info] GET /v/videos%2F…_reel_teste.mp4 500 Internal Server Error
+```
+
+**Porque é que `npm test` dava verde.** As 40 verificações de `tools/test-r2-worker.mjs` cobriam
+claims, cofre e validações — **nunca pediam um vídeo**. E o `tools/mock-r2-worker.mjs` (que o
+`npm run nuvem` usa) tem uma implementação à parte, sem o `headers.set`, por isso o
+`Testar nuvem R2` no browser também parecia são. É a mesma classe de cegueira do erro n.º 2
+deste relatório: **o mock não é o Worker**; o que a Meta lê é o Worker.
+
+**Correção (1.3.0).**
+* `const headers = new Headers(corsHeaders({ … }))`;
+* o `200`/`206` passou a ser decidido **pelo pedido** (`Range` presente?) e não por
+  `object.range`: em runtime que devolve `range: {offset: 0}` num `GET` simples, o Worker
+  respondia **206** a tudo (confirmado no `wrangler dev` local);
+* `HEAD` não leva corpo; `If-None-Match` com o ETag → **304** (o `.mp4` é imutável);
+* Range inválido (`bytes=`) serve o vídeo todo em vez de rebentar.
+
+**Testes adicionados.** secção **10** de `tools/test-r2-worker.mjs` (200 com os bytes
+intactos, `Range` 0-1 e 1000-1999, sufixo `bytes=-512`, `HEAD`, 304, `404`, `400` para
+`../`, `Cache-Control: immutable`, CORS `*`) e secção **11**, que lê o `wrangler.toml` e **falha
+se a configuração entrar em contradição com o runtime**. O bucket falso passou a honrar `range`
+e a aceitar `put(key, ReadableStream)`, como o R2 real. **40 → 72 verificações**, todas a
+falhar quando se reintroduz cada um dos bugs acima (verificado).
+
+**Config renovada** (`cloudflare/wrangler.toml`):
+* `compatibility_date` `2025-09-01` → `2026-10-01`;
+* `compatibility_flags = ["nodejs_compat"]` **removido** — desde `2026-08-04` é o default e
+  dizê-lo à mão fez workerd `1.20260804.x` chumbar o arranque (deploy impossível);
+* `workers_dev = true`, `[observability] enabled = true`;
+* ⚠️ o `workers_dev` **tinha de ficar antes** das tabelas: depois de `[[r2_buckets]]` o TOML lê-o
+  como campo do bucket (`Unexpected fields found in r2_buckets[0]: workers_dev`) e ignora-o —
+  apanhado à primeira, com `wrangler dev` real.
+
+**Ferramenta.** `npm run cloudflare:renovar` (`tools/renovar-cloudflare.mjs`) faz o deploy e
+**verifica o que ficou online** — versão online = versão do repositório, bytes no `/v/:key`,
+`Range`/`HEAD`, ciclo de claims, round-trip do cofre e GB usados no bucket (o plano grátis são
+10 GB-mês; o script avisa acima de 9 GB). Não precisa de credenciais no repositório: usa o
+`wrangler login`/`CLOUDFLARE_API_TOKEN` da máquina; `--dry` corre tudo o que é offline,
+`--so-verificar` só sonda, `--rotacionar-token` troca a chave do cofre.
+
+**Depois de aplicar:** `npm run cloudflare:renovar` na tua máquina e, no browser,
+*Nuvem → Testar nuvem R2*. Os vídeos já gravados não são tocados; os links velhos voltam a
+funcionar, porque o `/v/:key` que já está guardado na fila passa a responder como deve ser.

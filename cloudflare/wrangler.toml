@@ -1,13 +1,43 @@
+# Backend durável do CineClip (Cloudflare Worker + R2).
+# Renovado em 2026-10-04 — ver cloudflare/r2-worker.js (VERSION 1.3.0).
+#
+# ⚠️ Ordem do TOML: as chaves soltas pertencem à tabela em que caem. Tudo o que é
+#    do Worker (name/main/compatibility_date/workers_dev) tem de ficar ANTES das
+#    tabelas [[r2_buckets]] / [vars] / [observability]; com `workers_dev` depois de
+#    [[r2_buckets]] o wrangler avisava "Unexpected fields found in r2_buckets[0]"
+#    e ignorava a chave. Coberto pela secção 11 de `npm run worker:test`.
 name = "cineclip-cloud"
 main = "r2-worker.js"
-compatibility_date = "2025-09-01"
-compatibility_flags = ["nodejs_compat"]
 
+# Data de compatibilidade do runtime (workerd).
+#   • Estava em "2025-09-01". Ao renová-la, o Worker passa a correr com o
+#     comportamento atual do runtime (URL WHATWG, back-pressure spec-compliant nos
+#     streams, etc.) — verificado com `npx wrangler dev` local.
+#   • A partir de 2026-08-04 o Node.js compat (nodejs_compat / nodejs_compat_v2)
+#     passou a ser o DEFAULT e deixar a flag dita à mão fez workerd 1.20260804.x
+#     chumbar o arranque ("The compatibility flag nodejs_compat became the default
+#     as of 2026-08-04") → deploy em falha. Daí a flag ter saído daqui: o Worker só
+#     usa Web APIs + crypto.subtle, não precisa de compat Node nenhum.
+#   ⚠️ Se voltares a pôr a data para antes de 2026-08-04, volta a pôr
+#      compatibility_flags = ["nodejs_compat"], senão perdes o compat Node.
+compatibility_date = "2026-10-01"
+
+# O Worker é servido em https://cineclip-cloud.<conta>.workers.dev — é essa URL que
+# o app usa e de onde a Meta descarrega os .mp4 via /v/:key. Explícito para um
+# `wrangler deploy` futuro não desligar o subdomínio.
+workers_dev = true
+
+# Bindings
 # Cria o bucket antes do primeiro deploy:
 #   npx wrangler r2 bucket create cineclip-reels
 [[r2_buckets]]
 binding = "BUCKET"
 bucket_name = "cineclip-reels"
+
+# Registos do Worker (dashboard → Workers → cineclip-cloud → Logs). É aqui que se vê
+# se o /v/:key devolveu bytes ou um erro quando o Instagram responde 2207077.
+[observability]
+enabled = true
 
 [vars]
 # Opcional: domínio próprio para os links públicos dos vídeos.
@@ -24,3 +54,6 @@ PUBLIC_BASE = ""
 # Para presign (>100 MB), acrescenta também:
 #   npx wrangler secret put R2_ACCESS_KEY_ID
 #   npx wrangler secret put R2_SECRET_ACCESS_KEY
+#
+# Para desenvolvimento local (npx wrangler dev) o secret vive em cloudflare/.dev.vars,
+# que está no .gitignore — nunca commits.

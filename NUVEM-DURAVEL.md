@@ -83,6 +83,7 @@ Correções aplicadas ao bundle (`index.html` / `app-pronto.html`) pela camada
 | 13 | Validação de links do Drive por `?action=videohead` (o Apps Script não suporta `Range`; um GET normal descarregava o vídeo inteiro e gastava quota) | `verifyPublicUrl()`, `verificarLink()` |
 | 14 | Painel de diagnóstico no app (**Testar ligação Drive/R2**, **Copiar diagnóstico**) e no Apps Script (`testarLigacaoDrive`, `testarLigacaoR2`, `estadoDaFila`) | patches `13`, `15` |
 | 15 | 🔒 **Claims (anti-publicação duplicada)**: antes de publicar, o app/Robô reclama o item no backend e liberta-o no fim. Se o app e o Robô 24h acordarem ao mesmo tempo (ou houver 2 aparelhos com a mesma fila), só um publica. Se o backend ainda for antigo, publica-se na mesma (degradação segura) | patches `19`, `20`, `15` (Robô), `nuvem-duravel.js`, `cloudflare/r2-worker.js`, `apps-script/cineclip-cloud-drive.js` |
+| 16 | ☁️ **Renovar o Cloudflare passou a ser um comando** (`npm run cloudflare:renovar`): `wrangler deploy` + verificação do que ficou online (health, versão, bytes no `/v/:key`, `Range`/`HEAD`, ciclo de claims, GB usados). Aproveitado para corrigir o **`GET /v/:key` a rebentar com 500** no Worker 1.2.0 e para renovar `compatibility_date`/`workers_dev` no `wrangler.toml` (Worker **1.3.0**) | `tools/renovar-cloudflare.mjs`, `cloudflare/r2-worker.js`, `cloudflare/wrangler.toml`, `tools/test-r2-worker.mjs` (40 → 72) |
 
 ---
 
@@ -217,6 +218,48 @@ Testa: `curl https://<worker>/` → `{"ok":true,"service":"cineclip-cloud","buck
 Cola a **URL do Worker** e o **Token** no cartão *⚡ Alternativa — Cloudflare R2* das
 Configurações e clica em **Testar ligação R2**.
 
+### 🔁 Renovar o Cloudflare (deploy + verificação)
+
+*Mexeste em `cloudflare/r2-worker.js` ou no `wrangler.toml`?* Então o Cloudflare ainda tem o
+código **antigo** até fazeres um `wrangler deploy` — o site sozinho não atualiza o backend.
+Um comando trata disso e **prova** que ficou a funcionar:
+
+```bash
+npm run cloudflare:renovar                    # testes + deploy + verificação ponta-a-ponta
+npm run cloudflare:renovar -- --dry           # só as verificações locais (não vai à Cloudflare)
+npm run cloudflare:renovar -- --so-verificar --url=https://cineclip-cloud.<conta>.workers.dev
+                                              # não faz deploy; sonda o que está online
+CINECLIP_TOKEN=… npm run cloudflare:renovar -- --so-verificar --url=<URL>
+                                              # + round-trip autenticado (ver abaixo)
+npm run cloudflare:renovar -- --rotacionar-token --confirmo   # token NOVO na conta
+npm run cloudflare:deploy / :dev / :secret / :logs / :bucket   # os wrangler individuais
+```
+
+O que o `cloudflare:renovar` verifica depois do deploy — e que um `deploy` a verde **não**
+verifica:
+
+| Verifica | Por que é que isto vale um script |
+|---|---|
+| `wrangler.toml` coerente com o runtime | `compatibility_date` ≥ `2026-08-04` **sem** `nodejs_compat` (a flag passou a ser o default e dizer-lhe à mão fez workerd `1.20260804.x` chumbar o arranque); chaves do Worker **antes** das tabelas, senão o TOML engole-as (`Unexpected fields found in r2_buckets[0]: workers_dev`) |
+| `version` online = `version` do repositório | um deploy que não apanhou o ficheiro é o modo mais fácil de "já atualizei e continua igual" |
+| **`GET /v/:key` com os bytes todos** | é o URL que a **Meta** descarrega; na 1.2.0 rebentava com 500 + HTML (`headers.set` num objeto simples) → o Instagram respondia **2207077** |
+| `Range: bytes=0-1` → `206`, e `HEAD` → `Content-Length` | são as duas sondas que o app faz **antes** de gastar uma tentativa de publicação |
+| claim criar → recusar outro dono → **renovar** → libertar | a mesma semântica que evitava o "Outro aparelho está a publicar" preso para sempre |
+| cofre escrever/ler, e `bytes` do bucket vs os **10 GB** grátis | um R2 cheio é um upload que falha com um erro obscuro |
+
+Precisas de sessão na conta (`npx wrangler login` na **tua** máquina, ou
+`CLOUDFLARE_API_TOKEN` em CI). O script não guarda nem pede credenciais: sem sessão para-se e
+diz o comando que falta. Para o round-trip autenticado, passa o token pelo ambiente ou pelo
+stdin (`--token-stdin`) para ele não ficar no histórico da shell.
+
+> **Testar o Worker sem nada na Cloudflare:** `npx wrangler dev --config cloudflare/wrangler.toml`
+> corre o Worker no runtime real (workerd) com um R2 local. O secret local vive em
+> `cloudflare/.dev.vars` — está no `.gitignore`; nunca o commits.
+
+> **Plano grátis (confirmado em 2026-10):** 10 GB-mês, 1 M de operações de escrita, 10 M de
+> leitura e **egress 0 €**. O limite de corpo do pedido continua a ser **100 MB** — acima disso
+> é `/api/video/presign` (até 5 GB).
+
 ---
 
 ## 5. Como o app escolhe o backend
@@ -308,6 +351,8 @@ Itens que o Robô 24h apanhou com link morto ficam marcados com `needsReupload` 
 | "Token inválido" no Drive | corre `setup()` outra vez e copia o `CINECLIP_TOKEN` novo para as Configurações **e** para o Robô |
 | "excede o limite de 45 MB" | corta o clipe, baixa o bitrate, ou usa o R2 |
 | `Testar ligação R2` falha com 401 | token errado (`npx wrangler secret put CINECLIP_TOKEN`) |
+| O link do vídeo dá **500** (ou HTML em vez do `.mp4`) | Worker ≤ 1.2.0: o `GET /v/:key` chamava `headers.set(...)` sobre o objeto de headers do CORS → rebentava em **todos** os vídeos, e o `HEAD`/`Range` de verificação também. Confirma com `curl -i <link>` (tem de dar `200` + `Content-Type: video/mp4`); renova com `npm run cloudflare:renovar` |
+| `wrangler deploy` queixa-se de `nodejs_compat` | Desde `2026-08-04` o Node.js compat é o default: com `compatibility_date` nova, **tira** `compatibility_flags = ["nodejs_compat"]` do `wrangler.toml` (ou põe a data antes de 2026-08-04 e volta com a flag) |
 | "sem binding R2 (BUCKET)" | `wrangler.toml` sem `[[r2_buckets]]` ou bucket com outro nome |
 | Meta rejeita o vídeo | o link tem de ser público e devolver `video/mp4` — Drive: `?action=video&id=…`; R2: `curl -I <link>` deve dar 200/206 |
 | Robô não publica nada | no Apps Script corre `testarLigacaoDrive` (ou `testarLigacaoR2`) e `estadoDaFila`; confirma que o código foi **recopiado** depois de configurares a nuvem |
@@ -325,7 +370,9 @@ Itens que o Robô 24h apanhou com link morto ficam marcados com `needsReupload` 
 nuvem-duravel.js                  camada de nuvem no browser (window.CineCloud) — carregada antes do bundle
 apps-script/cineclip-cloud-drive.js  backend Google Drive: Web App (upload em blocos, cofre, videohead, health)
 cloudflare/r2-worker.js           Worker R2: upload/leitura de vídeos + cofre, CORS, Range/206, presign SigV4
-cloudflare/wrangler.toml          binding R2 + vars/secrets
+cloudflare/wrangler.toml          binding R2 + vars/secrets (compatibility_date 2026-10-01, workers_dev)
+tools/renovar-cloudflare.mjs      `npm run cloudflare:renovar`: deploy + verificação do backend online
+tools/test-r2-worker.mjs          72 verificações do Worker real (claims, /v/:key, coerência do wrangler.toml)
 tools/apply-cloud-patch.mjs       aplica os 18 patches ao bundle e valida sintaxe (idempotente)
 tools/extract-patch-targets.mjs   regenera tools/patches/*.find a partir do bundle original
 tools/restore-base.mjs            repõe index.html/app-pronto.html no commit base (antes do patch)
@@ -426,10 +473,11 @@ atualizares o backend, é apenas a proteção contra Reels repetidos.
 ### Testar
 
 ```bash
-npm run worker:test   # 40 verificações do Worker REAL (cloudflare/r2-worker.js) contra um
+npm run worker:test   # 72 verificações do Worker REAL (cloudflare/r2-worker.js) contra um
                       # bucket R2 falso: criação, RENOVAÇÃO do mesmo dono, takeover de claim
                       # expirada/ilegível, corrida entre dois donos, release, TTLs, limpeza
-                      # no diagnóstico e runtimes sem escrita condicional
+                      # no diagnóstico e runtimes sem escrita condicional, + o link público
+                      # /v/:key (bytes, Range 206, HEAD, 304, 404) e a coerência do wrangler.toml
 npm test              # inclui os testes das claims no cliente: R2 (mock), Drive, modo
                       # compatível, expiração/takeover, dono errado a tentar libertar,
                       # backend antigo — além do proxy NVIDIA, publicação IG e build
@@ -441,7 +489,7 @@ npm test              # inclui os testes das claims no cliente: R2 (mock), Drive
 > claim expirada falhavam sempre: o app abortava com *"Outro aparelho ou o Robô 24h está a
 > publicar este Reel agora"* sem ninguém a publicar, e aquele Reel ficava preso. Confirma o
 > deploy com `curl -s <worker> | grep claims` (tem de dizer `"claims": true` e
-> `"version": "1.2.0"`). `tools/repro-claim-wedge.mjs` reproduz o cenário (passa a dar ✔
+> `"version": "1.3.0"`). `tools/repro-claim-wedge.mjs` reproduz o cenário (passa a dar ✔
 > com o Worker corrigido).
 
 ---
