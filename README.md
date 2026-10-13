@@ -7,6 +7,7 @@ Aplicação web **100% no navegador** que limpa metadados de vídeos, corta até
 - `index.html` — aplicação React já compilada (interface, processamento com FFmpeg e identificação do filme)
 - `app-pronto.html` e `404.html` — cópias do bundle principal (o `404.html` é o fallback do GitHub Pages)
 - `nuvem-duravel.js` — camada de armazenamento durável (`window.CineCloud`), carregada antes do app
+- `lote-massa.js` — upload em massa (`window.CineLote`), código legível fora do bundle
 - `apps-script/cineclip-cloud-drive.js` e `cloudflare/r2-worker.js` — backends do Google Drive e Cloudflare R2
 - `tools/` — servidor de preview, mocks, testes e ferramentas para reaplicar os patches do bundle
 - `tools/renovar-cloudflare.mjs` — renova o backend Cloudflare (`npm run cloudflare:renovar`):deploy + verificação do link `/v/:key`, das claims e do espaço no R2
@@ -38,6 +39,24 @@ npm run preview
 > `npm run nuvem`; esse servidor não precisa de `npm install`. Vercel e Netlify têm proxy
 > NVIDIA incluído. GitHub Pages serve apenas arquivos estáticos e não executa `/api/`; a
 > identificação que depende da NVIDIA precisa de um backend em Vercel/Netlify (ou outro host).
+
+## 📦 Upload em massa
+
+No Estúdio, o botão **📦 Upload em massa** (ou escolher/arrastar vários vídeos de uma vez)
+abre um painel onde cada vídeo passa sozinho pelo fluxo todo: usa **até 90 s** do início,
+identifica o filme com a IA + TMDB, cria o **gancho** e a **legenda** com IA, processa em 9:16
+e agenda o Reel no **próximo horário livre** da conta ativa. Os vídeos são tratados um de cada
+vez; o painel pode ser fechado (fica um atalho no canto) e o botão **Parar** interrompe o lote.
+
+- Se a IA tiver menos de 65 % de certeza do filme, o vídeo **não é agendado** e fica para
+  rever (*Abrir no Estúdio*), a não ser que ligues *Agendar mesmo com pouca certeza*.
+- Vídeos em **H.265/HEVC** (comuns nos downloads do TikTok) dão erro claro: o navegador não
+  consegue ler a imagem. Converte-os para H.264 antes.
+- Precisa das chaves NVIDIA ou Gemini e TMDB nas configurações.
+
+O código está em `lote-massa.js` (legível, fora do bundle). A ligação ao bundle é o patch
+`27-lote-ponte` (expõe `window.CineClipCore` e `window.__CineClipApp`); os patches `26` e
+`28` carregam o script e mudam a área de upload. Testes: `npm run lote:test`.
 
 ## 📅 Agendador (layout)
 

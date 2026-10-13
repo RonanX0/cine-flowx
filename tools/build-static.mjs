@@ -41,9 +41,11 @@ const appPath = path.join(root, "index.html");
 /** Ficheiros HTML que recebem o carimbo de versão e o cache-busting. */
 const PAGINAS = ["index.html", "app-pronto.html", "404.html"];
 /** Ficheiros copiados tal e qual. */
-const ESTATICOS = ["nuvem-duravel.js", "_redirects", "_headers"];
+const ESTATICOS = ["nuvem-duravel.js", "lote-massa.js", "_redirects", "_headers"];
 
 const TAG_NUVEM = '<script src="nuvem-duravel.js"></script>';
+/** Upload em massa (código legível fora do bundle) — também com cache-busting. */
+const TAG_LOTE = '<script src="lote-massa.js"></script>';
 
 for (const file of [...PAGINAS, ...ESTATICOS]) {
   if (!fs.existsSync(path.join(root, file))) {
@@ -80,6 +82,7 @@ function descobrirVersao(fallback) {
 }
 
 const hashNuvem = hash(fs.readFileSync(path.join(root, "nuvem-duravel.js")));
+const hashLote = hash(fs.readFileSync(path.join(root, "lote-massa.js")));
 const hashApp = hash(html);
 const versao = descobrirVersao(hashApp);
 const data = new Date().toISOString();
@@ -113,10 +116,9 @@ const scriptCarimbo =
   `(window.CINECLIP_BUILD.ig2207077?" · correção 2207077 ativa":" · ATENÇÃO: sem a correção 2207077"))}catch(e){}</script>`;
 
 function prepararPagina(fonte) {
-  return fonte.replace(
-    TAG_NUVEM,
-    `${scriptCarimbo}\n    <script src="nuvem-duravel.js?v=${hashNuvem}"></script>`
-  );
+  return fonte
+    .replace(TAG_NUVEM, `${scriptCarimbo}\n    <script src="nuvem-duravel.js?v=${hashNuvem}"></script>`)
+    .replace(TAG_LOTE, `<script src="lote-massa.js?v=${hashLote}"></script>`);
 }
 
 fs.rmSync(dist, { recursive: true, force: true });
@@ -126,6 +128,9 @@ fs.mkdirSync(dist, { recursive: true });
 for (const file of PAGINAS) {
   const source = file === "404.html" ? appPath : path.join(root, file);
   const pagina = prepararPagina(fs.readFileSync(source, "utf8"));
+  if (pagina.includes(TAG_LOTE)) {
+    throw new Error(`${file}: a tag do upload em massa não recebeu o cache-busting (?v=).`);
+  }
   if (pagina.includes(TAG_NUVEM)) {
     throw new Error(`${file}: a tag de nuvem não recebeu o cache-busting (?v=) — o deploy serviria código em cache.`);
   }
