@@ -54,6 +54,22 @@ vez; o painel pode ser fechado (fica um atalho no canto) e o botão **Parar** in
   consegue ler a imagem. Converte-os para H.264 antes.
 - Precisa das chaves NVIDIA ou Gemini e TMDB nas configurações.
 
+### 🔗 Importar do TikTok ou do Kwai
+
+No painel do upload em massa há uma caixa para **colar links** do TikTok ou do Kwai (um por
+linha). O servidor (`api/public/importar.js` → `server/importar-video.mjs`, só na Vercel)
+descarrega cada vídeo e ele entra na lista do lote como se tivesse sido escolhido do PC.
+
+- **TikTok:** lê a página do vídeo e escolhe a versão **H.264** (abre em qualquer PC); se o
+  TikTok não devolver os dados ao servidor, usa o serviço público **tikwm.com**.
+- **Kwai:** procura o `.mp4` na página. O Kwai não tem forma oficial de fazer isto e pode
+  mudar a página a qualquer momento.
+- Segurança: só aceita links do TikTok/Kwai e só descarrega dos servidores dessas plataformas;
+  o CORS segue a regra do proxy da NVIDIA. Limite de 300 MB por vídeo.
+- Use só com vídeos que os autores autorizaram repostar.
+
+Testes: `npm run importar:test` (páginas simuladas; não vai à Internet).
+
 O código está em `lote-massa.js` (legível, fora do bundle). A ligação ao bundle é o patch
 `27-lote-ponte` (expõe `window.CineClipCore` e `window.__CineClipApp`); os patches `26` e
 `28` carregam o script e mudam a área de upload. Testes: `npm run lote:test`.

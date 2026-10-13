@@ -18,5 +18,10 @@
         }
       ]
     }
-  ]
+  ],
+  "functions": {
+    "api/public/importar.js": {
+      "maxDuration": 60
+    }
+  }
 }
