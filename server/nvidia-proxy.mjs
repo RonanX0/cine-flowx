@@ -72,9 +72,61 @@ export async function proxyNvidiaRequest({ method, authorization, body }) {
   };
 }
 
-export const nvidiaCorsHeaders = {
-  "Access-Control-Allow-Origin": "*",
+/*
+ * CORS restrito. Antes era `Access-Control-Allow-Origin: *`, o que deixava qualquer
+ * outro site usar esta função (e a cota da Vercel/Netlify) como intermediário para a
+ * NVIDIA. Agora só respondem com CORS:
+ *   • o próprio site (o Origin tem o mesmo host do pedido);
+ *   • localhost / 127.0.0.1 (desenvolvimento);
+ *   • as origens listadas na variável de ambiente ALLOWED_ORIGINS
+ *     (separadas por vírgula, ex.: "https://meu-dominio.com,https://outro.app").
+ * Pedidos sem Origin (mesma origem em GET, curl, servidores) não são afetados pelo CORS.
+ */
+const CORS_BASE = {
   "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
   "Access-Control-Allow-Headers": "Authorization,Content-Type",
   "Access-Control-Max-Age": "86400",
+  Vary: "Origin",
+};
+
+function hostOf(value) {
+  try {
+    return new URL(value).host.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function extraOrigins(env) {
+  return String(env ?? (typeof process !== "undefined" ? process.env?.ALLOWED_ORIGINS : "") ?? "")
+    .split(",")
+    .map((item) => item.trim().replace(/\/+$/, "").toLowerCase())
+    .filter(Boolean);
+}
+
+/** true quando o Origin pode usar o proxy a partir do browser. */
+export function nvidiaOriginAllowed(origin, host, allowedOrigins) {
+  const cleanOrigin = String(origin || "").trim().replace(/\/+$/, "").toLowerCase();
+  if (!cleanOrigin) return true;
+  const originHost = hostOf(cleanOrigin);
+  if (!originHost) return false;
+  if (host && originHost === String(host).trim().toLowerCase()) return true;
+  const hostname = originHost.replace(/:\d+$/, "");
+  if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]") return true;
+  return extraOrigins(allowedOrigins).includes(cleanOrigin);
+}
+
+/** Cabeçalhos CORS para um pedido (`null` quando a origem não é permitida). */
+export function nvidiaCorsHeadersFor(origin, host, allowedOrigins) {
+  if (!nvidiaOriginAllowed(origin, host, allowedOrigins)) return null;
+  const cleanOrigin = String(origin || "").trim();
+  return cleanOrigin
+    ? { ...CORS_BASE, "Access-Control-Allow-Origin": cleanOrigin }
+    : { ...CORS_BASE };
+}
+
+export const nvidiaForbiddenOrigin = {
+  status: 403,
+  headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", Vary: "Origin" },
+  body: JSON.stringify({ error: "Origin not allowed. Add it to ALLOWED_ORIGINS on the server." }),
 };

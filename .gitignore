@@ -21,3 +21,6 @@ cloudflare/.dev.vars
 
 # Sistema
 .DS_Store
+
+# Ficheiro criado pelo sudo no Linux — não pertence ao projeto
+.sudo_as_admin_successful

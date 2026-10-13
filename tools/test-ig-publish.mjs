@@ -490,12 +490,56 @@ console.log("\n13. Claim renovada antes de cada tentativa (TTL longo)");
 /* 14 — outro aparelho/Robô tomou a claim → não publica (anti-duplicado) */
 console.log("\n14. Claim tomada por outro aparelho → para antes de publicar");
 {
-  const amb = criarAmbiente({ claim: () => ({ ok: false, reason: "held" }) });
+  const amb = criarAmbiente({
+    claim: () => ({
+      ok: false, reason: "held", owner: "app:1a2b",
+      holder: { owner: "app:outro9z", expiresAt: Date.now() + 5 * 60 * 1000 },
+    }),
+  });
   const it = item();
   const out = await publicar(amb, it);
   check("não publica", !out.ok);
   check("explica que outro aparelho está a publicar", !out.ok && /Outro aparelho ou o Robô 24h/.test(out.erro.message), !out.ok ? out.erro.message : "");
+  check("diz quem tem a reserva", !out.ok && /Quem está a publicar: outro aparelho \(app:outro9z\)/.test(out.erro.message), !out.ok ? out.erro.message : "");
   check("não chegou a criar containers", !amb.chamadas.some((c) => c.tipo === "fetch"));
+}
+
+/* 14b — a claim é do Robô 24h → para e diz que é o Robô */
+console.log("\n14b. Claim tomada pelo Robô 24h → para e identifica o Robô");
+{
+  const amb = criarAmbiente({
+    claim: () => ({
+      ok: false, reason: "held", owner: "app:1a2b",
+      holder: { owner: "robo:robo_abc123", expiresAt: Date.now() + 5 * 60 * 1000 },
+    }),
+  });
+  const out = await publicar(amb, item());
+  check("não publica", !out.ok);
+  check("identifica o Robô 24h", !out.ok && /Quem está a publicar: o Robô 24h/.test(out.erro.message), !out.ok ? out.erro.message : "");
+  check("não chegou a criar containers", !amb.chamadas.some((c) => c.tipo === "fetch"));
+}
+
+/* 14c — Worker antigo: recusa a renovação SEM dizer quem tem a claim → segue
+   (era o falso "Outro aparelho ou o Robô 24h…" que travava todas as publicações) */
+console.log("\n14c. Recusa sem dono (Worker R2 antigo) → não é outro publicador, publica");
+{
+  const amb = criarAmbiente({ claim: () => ({ ok: false, reason: "held", owner: "app:1a2b", holder: null }) });
+  const out = await publicar(amb, item());
+  check("publica na mesma", out.ok && out.res.publishedId === "MEDIA_PUBLICADA", out.erro && out.erro.message);
+  check("sem a mensagem falsa de outro aparelho", out.ok || !/Outro aparelho ou o Robô 24h/.test(out.erro.message));
+}
+
+/* 14d — o backend diz que a claim é do PRÓPRIO aparelho → segue */
+console.log("\n14d. Claim do próprio aparelho → publica");
+{
+  const amb = criarAmbiente({
+    claim: () => ({
+      ok: false, reason: "held", owner: "app:1a2b",
+      holder: { owner: "app:1a2b", expiresAt: Date.now() + 5 * 60 * 1000 },
+    }),
+  });
+  const out = await publicar(amb, item());
+  check("publica", out.ok && out.res.publishedId === "MEDIA_PUBLICADA", out.erro && out.erro.message);
 }
 
 /* 15 — capa do Reel: hS eleva o pôster do CDN do Instagram para w780 */

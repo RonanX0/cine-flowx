@@ -5,13 +5,13 @@ Aplicação web **100% no navegador** que limpa metadados de vídeos, corta até
 ## Estrutura do Projeto
 
 - `index.html` — aplicação React já compilada (interface, processamento com FFmpeg e identificação do filme)
-- `app-pronto.html` — cópia de distribuição do bundle principal
+- `app-pronto.html` e `404.html` — cópias do bundle principal (o `404.html` é o fallback do GitHub Pages)
 - `nuvem-duravel.js` — camada de armazenamento durável (`window.CineCloud`), carregada antes do app
 - `apps-script/cineclip-cloud-drive.js` e `cloudflare/r2-worker.js` — backends do Google Drive e Cloudflare R2
 - `tools/` — servidor de preview, mocks, testes e ferramentas para reaplicar os patches do bundle
 - `tools/renovar-cloudflare.mjs` — renova o backend Cloudflare (`npm run cloudflare:renovar`):deploy + verificação do link `/v/:key`, das claims e do espaço no R2
 - `vite.config.ts` — servidor de desenvolvimento e proxy local para NVIDIA
-- `api/public/nvidia.js` e `netlify/functions/nvidia.mjs` — proxy NVIDIA para deploys Vercel e Netlify
+- `api/public/nvidia.js` e `netlify/functions/nvidia.mjs` — proxy NVIDIA para deploys Vercel e Netlify (CORS só para o próprio domínio e localhost; para outros domínios define `ALLOWED_ORIGINS` no painel da Vercel/Netlify)
 - `_headers` (Netlify / Cloudflare Pages), `netlify.toml` e `vercel.json` — revalidação do HTML, para um deploy novo não ficar preso na cache do browser
 
 ## Como executar localmente

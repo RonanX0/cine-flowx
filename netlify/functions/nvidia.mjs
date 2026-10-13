@@ -1,8 +1,22 @@
-import { nvidiaCorsHeaders, proxyNvidiaRequest } from "../../server/nvidia-proxy.mjs";
+import { nvidiaCorsHeadersFor, nvidiaForbiddenOrigin, proxyNvidiaRequest } from "../../server/nvidia-proxy.mjs";
 
 export async function handler(event) {
+  const headers = event.headers || {};
+  const cors = nvidiaCorsHeadersFor(
+    headers.origin || headers.Origin,
+    headers.host || headers.Host || headers["x-forwarded-host"]
+  );
+
+  if (!cors) {
+    return {
+      statusCode: nvidiaForbiddenOrigin.status,
+      headers: nvidiaForbiddenOrigin.headers,
+      body: nvidiaForbiddenOrigin.body,
+    };
+  }
+
   if (event.httpMethod === "OPTIONS") {
-    return { statusCode: 204, headers: nvidiaCorsHeaders, body: "" };
+    return { statusCode: 204, headers: cors, body: "" };
   }
 
   let body = event.body || "";
@@ -10,13 +24,13 @@ export async function handler(event) {
 
   const result = await proxyNvidiaRequest({
     method: event.httpMethod,
-    authorization: event.headers?.authorization || event.headers?.Authorization,
+    authorization: headers.authorization || headers.Authorization,
     body,
   });
 
   return {
     statusCode: result.status,
-    headers: { ...nvidiaCorsHeaders, ...result.headers },
+    headers: { ...cors, ...result.headers },
     body: result.body,
   };
 }

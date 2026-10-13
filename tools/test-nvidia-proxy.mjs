@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import vercelHandler from "../api/public/nvidia.js";
 import { handler as netlifyHandler } from "../netlify/functions/nvidia.mjs";
-import { proxyNvidiaRequest } from "../server/nvidia-proxy.mjs";
+import { nvidiaOriginAllowed, proxyNvidiaRequest } from "../server/nvidia-proxy.mjs";
 
 const originalFetch = globalThis.fetch;
 let calls = [];
@@ -83,10 +83,13 @@ try {
       setHeader(name, value) { this.headers.set(name.toLowerCase(), value); },
       end(body) { this.body = body; },
     };
-    await vercelHandler({ method: "GET", headers: { authorization: "Bearer nvapi-test" } }, response);
+    await vercelHandler({
+      method: "GET",
+      headers: { authorization: "Bearer nvapi-test", host: "cine-flowx.vercel.app", origin: "https://cine-flowx.vercel.app" },
+    }, response);
     assert.equal(response.statusCode, 200);
     assert.equal(response.body, '{"ok":true}');
-    assert.equal(response.headers.get("access-control-allow-origin"), "*");
+    assert.equal(response.headers.get("access-control-allow-origin"), "https://cine-flowx.vercel.app");
     assert.equal(calls.length, 1);
   });
 
@@ -107,17 +110,55 @@ try {
     calls = [];
     const response = await netlifyHandler({
       httpMethod: "POST",
-      headers: { authorization: "Bearer nvapi-test" },
+      headers: { authorization: "Bearer nvapi-test", host: "cineclip.netlify.app", origin: "https://cineclip.netlify.app" },
       body: JSON.stringify({ model: "test-model", messages: [] }),
     });
     assert.equal(response.statusCode, 200);
     assert.equal(response.body, '{"ok":true}');
-    assert.equal(response.headers["Access-Control-Allow-Origin"], "*");
+    assert.equal(response.headers["Access-Control-Allow-Origin"], "https://cineclip.netlify.app");
     assert.equal(calls.length, 1);
     assert.equal(calls[0].url, "https://integrate.api.nvidia.com/v1/chat/completions");
   });
 
-  console.log("\n✅ 9 testes do proxy NVIDIA passaram");
+  await check("CORS: recusa outro site sem chamar a NVIDIA (Vercel)", async () => {
+    calls = [];
+    const response = {
+      headers: new Map(),
+      setHeader(name, value) { this.headers.set(name.toLowerCase(), value); },
+      end(body) { this.body = body; },
+    };
+    await vercelHandler({
+      method: "POST",
+      headers: { authorization: "Bearer nvapi-test", host: "cine-flowx.vercel.app", origin: "https://site-alheio.example" },
+      body: "{}",
+    }, response);
+    assert.equal(response.statusCode, 403);
+    assert.equal(response.headers.has("access-control-allow-origin"), false);
+    assert.equal(calls.length, 0);
+  });
+
+  await check("CORS: recusa outro site no preflight (Netlify)", async () => {
+    calls = [];
+    const response = await netlifyHandler({
+      httpMethod: "OPTIONS",
+      headers: { host: "cineclip.netlify.app", origin: "https://site-alheio.example" },
+    });
+    assert.equal(response.statusCode, 403);
+    assert.equal("Access-Control-Allow-Origin" in response.headers, false);
+    assert.equal(calls.length, 0);
+  });
+
+  await check("CORS: aceita localhost, ALLOWED_ORIGINS e pedidos sem Origin", async () => {
+    assert.equal(nvidiaOriginAllowed("http://localhost:5173", "cine-flowx.vercel.app", ""), true);
+    assert.equal(nvidiaOriginAllowed("http://127.0.0.1:4174", "cine-flowx.vercel.app", ""), true);
+    assert.equal(nvidiaOriginAllowed("https://meu-dominio.com", "cine-flowx.vercel.app", "https://meu-dominio.com/, https://x.app"), true);
+    assert.equal(nvidiaOriginAllowed("https://meu-dominio.com.evil.example", "cine-flowx.vercel.app", "https://meu-dominio.com"), false);
+    assert.equal(nvidiaOriginAllowed("https://cine-flowx.vercel.app.evil.example", "cine-flowx.vercel.app", ""), false);
+    assert.equal(nvidiaOriginAllowed("null", "cine-flowx.vercel.app", ""), false);
+    assert.equal(nvidiaOriginAllowed("", "cine-flowx.vercel.app", ""), true);
+  });
+
+  console.log("\n✅ 12 testes do proxy NVIDIA passaram");
 } finally {
   globalThis.fetch = originalFetch;
 }

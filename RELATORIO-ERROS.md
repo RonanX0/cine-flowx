@@ -190,3 +190,38 @@ falhar quando se reintroduz cada um dos bugs acima (verificado).
 **Depois de aplicar:** `npm run cloudflare:renovar` na tua máquina e, no browser,
 *Nuvem → Testar nuvem R2*. Os vídeos já gravados não são tocados; os links velhos voltam a
 funcionar, porque o `/v/:key` que já está guardado na fila passa a responder como deve ser.
+
+---
+
+## 7. 🔴 Falso "Outro aparelho ou o Robô 24h está a publicar" ainda a aparecer (2026-10-13)
+
+**Sintoma.** Ao publicar, o Reel parava logo com *"Outro aparelho ou o Robô 24h está a
+publicar este Reel agora (proteção anti-duplicado)"*, sem nenhum outro aparelho a publicar.
+
+**Causa.** A mensagem vinha da **renovação** da claim (`renovarClaim`, dentro do bloco de
+publicação), não da aquisição inicial — a claim tinha sido obtida segundos antes por este
+mesmo aparelho. Qualquer resposta `acquired:false` fazia o app desistir, mesmo **sem dono**
+(`holder: null`). É exatamente o que um Worker R2 anterior à 1.2.0 responde a uma renovação
+(erro n.º 1 deste relatório): enquanto o Worker publicado na Cloudflare não for atualizado,
+**todas** as publicações paravam aqui. O cliente já tolerava `holder.owner === owner`, mas
+não `holder: null`.
+
+**Correção (bundle, patches 19 e 24).**
+* A renovação só desiste quando o backend diz **quem** tem a claim e esse dono é outro.
+  Recusa sem dono → segue (a claim é deste aparelho) e deixa um aviso na consola a pedir
+  `npm run cloudflare:renovar`.
+* A mensagem diz agora quem tem a reserva (o Robô 24h ou o ID do outro aparelho) e até que horas.
+* A claim inicial passa a ser pedida com TTL de 30 min (era 10 min), igual à renovação: um
+  upload longo antes da primeira tentativa já não deixa a reserva caducar a meio.
+
+**Testes.** `tools/test-ig-publish.mjs` secções 14 a 14d (outro aparelho, Robô 24h, recusa sem
+dono do Worker antigo, claim do próprio aparelho) — 80/80.
+
+**Ainda assim:** atualiza o Worker (`npm run cloudflare:renovar`) para a versão 1.3.0; sem isso
+as claims expiradas continuam a não poder ser tomadas pelo Robô 24h.
+
+### Também nesta branch
+* Proxy NVIDIA (`server/nvidia-proxy.mjs`): CORS deixa de ser `*`. Aceita o próprio site,
+  localhost e as origens em `ALLOWED_ORIGINS`; outro site recebe 403 sem chegar à NVIDIA.
+* Removidos `.sudo_as_admin_successful`, dois prints `.png` e o `recriar-botao-migrar.sh`
+  (obsoleto, ver ponto 3).

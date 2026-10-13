@@ -420,18 +420,35 @@ async function gS(r,o,a,claim){
   /* As tentativas podem demorar (envio + processamento): renova a claim antes de cada
      uma para o TTL de 10 min não expirar a meio e outro aparelho/Robô publicar o mesmo
      Reel em paralelo. Devolve false se a claim já for de outro dono. */
+  /* Só desiste quando o backend diz QUEM tem a claim e esse dono é outro. Uma recusa
+     sem dono não é outro publicador: os Workers R2 anteriores à 1.2.0 não sabiam
+     renovar a claim do próprio aparelho e respondiam acquired:false sem holder, o que
+     fazia TODAS as publicações pararem aqui com um falso "Outro aparelho...". A claim
+     foi obtida por este aparelho no início da publicação, por isso é seguro seguir. */
+  let claimOcupada=null;
   const renovarClaim=async function(){
     try{
       if(!window.CineCloud||typeof window.CineCloud.claimPublish!=="function")return true;
       const c=await window.CineCloud.claimPublish(r,{ttlMs:30*60*1000,owner:claim&&claim.owner});
-      return !(c&&c.ok===!1);
+      if(!(c&&c.ok===!1))return true;
+      const dono=c.holder&&c.holder.owner?String(c.holder.owner):"";
+      const meu=String(c.owner||(claim&&claim.owner)||"");
+      if(dono){if(dono!==meu){claimOcupada=c.holder;return false}return true}
+      try{console.warn("[CineClip] O backend recusou renovar a claim sem dizer quem a tem — a seguir com a publicação (a claim é deste aparelho). Atualiza o Worker R2: npm run cloudflare:renovar.")}catch(e){}
+      return true;
     }catch(e){return true}
   };
   let ultimoErro=null,tentativasFeitas=0;
   for(let t=0;t<plano.length;t++){
     const modo=plano[t];
     if(!(await renovarClaim())){
-      const erroClaim=new Error("Outro aparelho ou o Robô 24h está a publicar este Reel agora (proteção anti-duplicado). Tenta novamente dentro de alguns minutos.");
+      let quemTem="",ateQuando="";
+      try{
+        quemTem=/^robo:/.test(String(claimOcupada&&claimOcupada.owner||""))?"o Robô 24h":"outro aparelho ("+String(claimOcupada&&claimOcupada.owner||"?")+")";
+        const fim=new Date(Number(claimOcupada&&claimOcupada.expiresAt));
+        if(!isNaN(fim.getTime()))ateQuando=fim.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
+      }catch(e){}
+      const erroClaim=new Error("Outro aparelho ou o Robô 24h está a publicar este Reel agora (proteção anti-duplicado). Tenta novamente dentro de alguns minutos."+(quemTem?(" · Quem está a publicar: "+quemTem+(ateQuando?(", reserva válida até "+ateQuando):"")+"."):""));
       erroClaim.igPermanente=!0;ultimoErro=erroClaim;break;
     }
     tentativasFeitas++;
