@@ -47,6 +47,7 @@
     conta: null,
     opcoes: lerOpcoes(),
     aberto: false,
+    links: { texto: "", aImportar: false, estado: "" },
   };
 
   var proximoId = 1;
@@ -81,6 +82,7 @@
       return window.__CineClipApp || null;
     },
     lerVideo: lerVideoNoNavegador,
+    baixarLink: baixarLinkDoServidor,
     agora: function () {
       return Date.now();
     },
@@ -121,6 +123,127 @@
       };
       video.src = url;
     });
+  }
+
+  /**
+   * Pede ao servidor (/api/public/importar) o vídeo de um link do TikTok/Kwai.
+   * Devolve um File pronto a entrar no lote.
+   */
+  async function baixarLinkDoServidor(link, aoProgresso) {
+    var r;
+    try {
+      r = await fetch("/api/public/importar?url=" + encodeURIComponent(link));
+    } catch (e) {
+      throw new Error("Sem ligação ao servidor do CineClip.");
+    }
+    if (!r.ok) {
+      var msg = "";
+      try {
+        msg = (await r.json()).error || "";
+      } catch (e) {}
+      if (r.status === 404 && !msg) msg = "A importação por link só funciona no site publicado na Vercel.";
+      throw new Error(msg || "O servidor recusou o link (HTTP " + r.status + ").");
+    }
+    var total = Number(r.headers.get("content-length")) || 0;
+    var partes = [];
+    var recebidos = 0;
+    if (r.body && r.body.getReader) {
+      var leitor = r.body.getReader();
+      for (;;) {
+        var passo = await leitor.read();
+        if (passo.done) break;
+        partes.push(passo.value);
+        recebidos += passo.value.length;
+        if (aoProgresso) aoProgresso(recebidos, total);
+      }
+    } else {
+      partes.push(new Uint8Array(await r.arrayBuffer()));
+    }
+    if (!recebidos && !partes.reduce(function (s, p) { return s + (p.length || p.byteLength || 0); }, 0)) {
+      throw new Error("O vídeo veio vazio.");
+    }
+    var ler = function (n) {
+      try {
+        return decodeURIComponent(r.headers.get(n) || "");
+      } catch (e) {
+        return r.headers.get(n) || "";
+      }
+    };
+    var nome = ler("X-Cineclip-Nome") || "video_importado.mp4";
+    return new File(partes, nome, { type: "video/mp4" });
+  }
+
+  /** Links do TikTok/Kwai num texto colado (um por linha, sem repetidos). */
+  function extrairLinks(texto) {
+    var vistos = {};
+    return (String(texto || "").match(/https?:\/\/[^\s"'<>]+/gi) || [])
+      .map(function (u) {
+        return u.replace(/[).,;]+$/, "");
+      })
+      .filter(function (u) {
+        var host = "";
+        try {
+          host = new URL(u).hostname.toLowerCase();
+        } catch (e) {
+          return false;
+        }
+        var ok = /(^|\.)(tiktok\.com|kwai\.com|kw\.ai|kwai\.net|kwai-pro\.com)$/.test(host);
+        if (!ok || vistos[u]) return false;
+        vistos[u] = true;
+        return true;
+      });
+  }
+
+  async function importarLinks() {
+    if (estado.links.aImportar) return;
+    var links = extrairLinks(estado.links.texto);
+    if (!links.length) {
+      estado.links.estado = "Cola pelo menos um link do TikTok ou do Kwai.";
+      desenhar();
+      return;
+    }
+    estado.links.aImportar = true;
+    var ok = 0;
+    for (var i = 0; i < links.length; i++) {
+      var link = links[i];
+      estado.links.estado = "A importar " + (i + 1) + "/" + links.length + "…";
+      desenhar();
+      try {
+        var ficheiro = await ambiente.baixarLink(link, function (recebidos, total) {
+          estado.links.estado =
+            "A importar " + (i + 1) + "/" + links.length + "… " +
+            (total ? Math.round((recebidos / total) * 100) + "%" : tamanho(recebidos));
+          desenharEstadoLinks();
+        });
+        adicionarFicheiros([ficheiro]);
+        var novo = estado.itens[estado.itens.length - 1];
+        if (novo) novo.origem = link;
+        ok++;
+      } catch (e) {
+        estado.itens.push({
+          id: proximoId++,
+          ficheiro: null,
+          nome: link,
+          bytes: 0,
+          estado: "erro",
+          invalido: true,
+          passo: "",
+          progresso: 0,
+          erro: "Não importei este link: " + mensagemDeErro(e, "falha desconhecida."),
+          resultado: null,
+          origem: link,
+        });
+      }
+    }
+    estado.links.aImportar = false;
+    estado.links.texto = ok === links.length ? "" : estado.links.texto;
+    estado.links.estado = ok + " de " + links.length + " vídeo" + (links.length > 1 ? "s" : "") + " importado" + (ok === 1 ? "" : "s") + ".";
+    desenhar();
+  }
+
+  function desenharEstadoLinks() {
+    var alvo = raiz && raiz.querySelector(".cl-links-estado");
+    if (alvo) alvo.textContent = estado.links.estado;
   }
 
   /* ------------------------------------------------------------ utilitários */
@@ -540,6 +663,10 @@
     ".cl-sec{background:transparent;color:inherit;border-color:var(--border,rgba(255,255,255,.15))}",
     ".cl-sec:hover:not([disabled]){background:var(--muted,#2a2a31)}",
     ".cl-mini{padding:4px 10px;font-size:12px;font-weight:500}",
+    ".cl-links{display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--border,rgba(255,255,255,.09));border-radius:12px}",
+    ".cl-links strong{font-size:14px}",
+    ".cl-texto{width:100%;box-sizing:border-box;resize:vertical;min-height:72px;border-radius:8px;border:1px solid var(--border,rgba(255,255,255,.15));background:var(--background,#141418);color:inherit;padding:8px 10px;font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace}",
+    ".cl-texto:focus{outline:2px solid var(--primary,#e5484d);outline-offset:1px}",
     ".cl-opcao{display:flex;align-items:flex-start;gap:8px;font-size:13px;color:var(--muted-foreground,#a3a3ad);cursor:pointer}",
     ".cl-opcao input{margin-top:2px;accent-color:var(--primary,#e5484d)}",
     ".cl-aviso{font-size:13px;line-height:1.45;padding:10px 12px;border-radius:10px;border:1px solid var(--border,rgba(255,255,255,.1))}",
@@ -700,6 +827,35 @@
     if (aviso.texto) corpo.push(el("div", { className: "cl-aviso " + aviso.tipo, role: "status", text: aviso.texto }));
     corpo.push(zona);
 
+    var areaLinks = el("textarea", {
+      className: "cl-texto",
+      rows: "3",
+      placeholder: "https://www.tiktok.com/@perfil/video/…\nhttps://www.kwai.com/@perfil/video/…",
+      "aria-label": "Links do TikTok ou do Kwai, um por linha",
+      disabled: estado.links.aImportar || null,
+    });
+    areaLinks.value = estado.links.texto;
+    areaLinks.addEventListener("input", function () {
+      estado.links.texto = areaLinks.value;
+    });
+    corpo.push(el("div", { className: "cl-links" }, [
+      el("strong", { text: "🔗 Importar do TikTok ou do Kwai" }),
+      el("span", { className: "cl-sub", text: "Cola um link por linha. Os vídeos entram na lista acima. Só vídeos que os autores autorizaram repostar." }),
+      areaLinks,
+      el("div", { className: "cl-linha" }, [
+        el("button", {
+          type: "button",
+          className: "cl-btn cl-sec",
+          disabled: estado.links.aImportar || null,
+          onClick: function () {
+            estado.links.texto = areaLinks.value;
+            importarLinks();
+          },
+        }, [estado.links.aImportar ? "A importar…" : "Importar links"]),
+        el("span", { className: "cl-peso cl-links-estado", role: "status", text: estado.links.estado }),
+      ]),
+    ]));
+
     var caixa = el("input", { type: "checkbox", checked: estado.opcoes.agendarComPoucaCerteza || null });
     caixa.addEventListener("change", function () {
       estado.opcoes.agendarComPoucaCerteza = caixa.checked;
@@ -736,7 +892,7 @@
       botoes.push(el("button", {
         type: "button",
         className: "cl-btn cl-prim",
-        disabled: !nPend || !!falta || null,
+        disabled: !nPend || !!falta || estado.links.aImportar || null,
         onClick: iniciar,
       }, [nPend ? "Começar (" + nPend + " vídeo" + (nPend > 1 ? "s" : "") + ")" : "Começar"]));
     }
@@ -819,6 +975,8 @@
       ambiente: ambiente,
       estado: estado,
       adicionarFicheiros: adicionarFicheiros,
+      importarLinks: importarLinks,
+      extrairLinks: extrairLinks,
       iniciar: iniciar,
       parar: parar,
       processarItem: processarItem,
