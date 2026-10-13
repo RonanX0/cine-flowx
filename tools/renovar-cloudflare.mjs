@@ -55,8 +55,19 @@ const fail = (m, detalhe = "") => { failCount++; falhas.push(m); console.log(`  
 const nota = (m) => console.log(`  · ${m}`);
 const titulo = (m) => console.log(`\n${m}`);
 
+/** Aspas para o cmd.exe em argumentos com espaços ou caracteres especiais. */
+const aspasWindows = (valor) => {
+  const s = String(valor);
+  return /[\s"&|<>^()]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
+
 const run = (cmd, args, { cwd = RAIZ, input, captura = true } = {}) => {
-  const r = spawnSync(cmd, args, { cwd, encoding: "utf8", input, shell: process.platform === "win32" });
+  // No Windows o `npx` só corre através do cmd.exe (shell: true), mas aí cada caminho
+  // com espaços tem de ir entre aspas: sem isso "C:\Program Files\nodejs\node.exe"
+  // partia-se em 'C:\Program' ("não é reconhecido como um comando interno").
+  const r = process.platform === "win32"
+    ? spawnSync([cmd, ...args].map(aspasWindows).join(" "), { cwd, encoding: "utf8", input, shell: true })
+    : spawnSync(cmd, args, { cwd, encoding: "utf8", input });
   const saida = `${r.stdout || ""}${r.stderr || ""}`;
   return { code: r.status ?? 1, out: saida, erro: r.error ? String(r.error.message || r.error) : null };
 };
