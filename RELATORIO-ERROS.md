@@ -225,3 +225,25 @@ as claims expiradas continuam a não poder ser tomadas pelo Robô 24h.
   localhost e as origens em `ALLOWED_ORIGINS`; outro site recebe 403 sem chegar à NVIDIA.
 * Removidos `.sudo_as_admin_successful`, dois prints `.png` e o `recriar-botao-migrar.sh`
   (obsoleto, ver ponto 3).
+
+---
+
+## 8. 🟠 Vídeos muito cortados na formatação 9:16 (2026-10-13)
+
+**Sintoma.** Em alguns vídeos o 9:16 final perdia uma boa parte da imagem do filme.
+
+**Causa.** Antes de montar o 9:16 o app recorta as faixas pretas (letterbox). A deteção
+(`bi`/`_w` no bundle) vê, em 8 quadros, a maior faixa de linhas claras e ficava com a
+**mediana**. Numa cena com o topo escuro (céu à noite, sombras, interiores) a maior parte
+dos quadros via esse topo como "faixa preta", e a mediana cortava-o. Num vídeo de teste
+1080×1920 o app deitava fora 31 % da imagem do filme.
+
+**Correção (patch `29-barras-cenas-escuras`).** As faixas do letterbox são pretas em
+**todos** os quadros; uma cena escura só encolhe a área clara de **alguns**. A imagem passa a
+ir do topo mais alto ao fundo mais baixo vistos em qualquer quadro (12 amostras em vez de 8).
+Texto do autor dentro da faixa preta continua de fora. Vale para o Estúdio e para o upload
+em massa. Teste: `npm run barras:test` (corre o código real do bundle).
+
+**Também.** O patch `26-lote-script-tag` não era idempotente: correr `npm run patch:nuvem`
+outra vez duplicava a linha da camada de nuvem. A tag do upload em massa passou para antes
+da `nuvem-duravel.js`, e o teste verifica que todos os patches são reconhecidos como aplicados.
