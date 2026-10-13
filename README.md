@@ -70,6 +70,22 @@ descarrega cada vídeo e ele entra na lista do lote como se tivesse sido escolhi
 
 Testes: `npm run importar:test` (páginas simuladas; não vai à Internet).
 
+### 📱 Compartilhar do celular (Android)
+
+O site é instalável como aplicativo (`manifest.webmanifest` + `sw.js`). Depois de instalado
+(Chrome → menu ⋮ → **Instalar app**), o **CineClip** aparece no menu **Partilhar** do TikTok e
+do Kwai. Ao partilhar, o app pergunta:
+
+- **▶ Processar agora aqui** — importa, processa e agenda no próprio celular. O ecrã fica
+  ligado enquanto processa (um site não consegue trabalhar em segundo plano no Android); se a
+  página recarregar a meio, o link continua quando voltar. No fim, vibra e mostra uma notificação.
+- **☁️ Mandar para o PC** — o link vai para o cofre da nuvem (campo `linksCelular`, patch
+  `31-links-cofre`) e o celular pode fechar. Qualquer aparelho com *processar os links do
+  celular* ligado (por defeito, os PCs) importa e processa sozinho quando o CineClip estiver aberto.
+
+A escolha pode ficar lembrada; muda-se no painel do upload em massa → *📱 Compartilhar do
+celular*. Testes: `npm run compartilhar:test`.
+
 O código está em `lote-massa.js` (legível, fora do bundle). A ligação ao bundle é o patch
 `27-lote-ponte` (expõe `window.CineClipCore` e `window.__CineClipApp`); os patches `26` e
 `28` carregam o script e mudam a área de upload. Testes: `npm run lote:test`.

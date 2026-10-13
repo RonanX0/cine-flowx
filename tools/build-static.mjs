@@ -41,7 +41,11 @@ const appPath = path.join(root, "index.html");
 /** Ficheiros HTML que recebem o carimbo de versão e o cache-busting. */
 const PAGINAS = ["index.html", "app-pronto.html", "404.html"];
 /** Ficheiros copiados tal e qual. */
-const ESTATICOS = ["nuvem-duravel.js", "lote-massa.js", "_redirects", "_headers"];
+const ESTATICOS = [
+  "nuvem-duravel.js", "lote-massa.js", "_redirects", "_headers",
+  // App instalável no Android (menu Compartilhar do TikTok/Kwai)
+  "manifest.webmanifest", "sw.js", "icone-192.png", "icone-512.png", "icone-maskable-512.png",
+];
 
 const TAG_NUVEM = '<script src="nuvem-duravel.js"></script>';
 /** Upload em massa (código legível fora do bundle) — também com cache-busting. */

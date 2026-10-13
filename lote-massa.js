@@ -56,9 +56,13 @@
     try {
       var bruto = window.localStorage.getItem(CHAVE_OPCOES);
       var o = bruto ? JSON.parse(bruto) : {};
-      return { agendarComPoucaCerteza: !!o.agendarComPoucaCerteza };
+      return {
+        agendarComPoucaCerteza: !!o.agendarComPoucaCerteza,
+        aoPartilhar: o.aoPartilhar === "aqui" || o.aoPartilhar === "pc" ? o.aoPartilhar : "perguntar",
+        processarLinksDoCelular: typeof o.processarLinksDoCelular === "boolean" ? o.processarLinksDoCelular : !eCelular(),
+      };
     } catch (e) {
-      return { agendarComPoucaCerteza: false };
+      return { agendarComPoucaCerteza: false, aoPartilhar: "perguntar", processarLinksDoCelular: !eCelular() };
     }
   }
 
@@ -559,6 +563,8 @@
     estado.pararPedido = false;
     avisar("");
     desenhar();
+    manterEcraLigado(true);
+    var agendadosAntes = contar("agendado");
     try {
       var item;
       while (!estado.pararPedido && (item = pendentes()[0])) {
@@ -571,6 +577,7 @@
           item.estado = "agendado";
           item.passo = "";
           item.progresso = 1;
+          if (item.caixaId) marcarEntrada(item.caixaId, "feito", { reelId: item.resultado && item.resultado.reelId });
           pedirSincronizacao();
         } catch (e) {
           if (estado.pararPedido && e && e.tipo !== "codec") {
@@ -581,6 +588,10 @@
             item.estado = e && e.tipo === "revisar" ? "revisar" : "erro";
             item.erro = mensagemDeErro(e, "Falha ao processar este vídeo.");
             item.passo = "";
+            if (item.caixaId) {
+              marcarEntrada(item.caixaId, "erro", { erro: item.erro });
+              pedirSincronizacao();
+            }
           }
         }
         estado.itemAtual = null;
@@ -595,7 +606,9 @@
       if (estado.pararPedido) avisar("Lote parado. Os vídeos que faltam ficaram na lista.", "info");
       else if (feitos) avisar("Lote concluído. Os Reels estão no Agendador e vão para a nuvem durável.", "ok");
       estado.pararPedido = false;
+      manterEcraLigado(false);
       desenhar();
+      avisarFimDoLote(feitos - agendadosAntes);
     }
     await sincronizacao;
   }
@@ -612,6 +625,389 @@
       } catch (e) {}
     }
     desenhar();
+  }
+
+  /* ----------------------------------------- 📱 compartilhar do celular */
+  /*
+   * Caixa de entrada de links. Cada link que chega pelo menu "Compartilhar" do
+   * Android (ou que o celular manda para o PC) fica aqui até virar um Reel:
+   *   { id, url, destino: "aqui" | "pc", aparelho, estado: "pendente" | "feito" | "erro",
+   *     criadoEm, atualizadoEm, erro?, reelId? }
+   * A caixa vive no localStorage e viaja no cofre da nuvem (campo `linksCelular`,
+   * patch 31-links-cofre), por isso um link mandado do celular aparece no PC.
+   *   • destino "aqui": só o aparelho que o recebeu o processa;
+   *   • destino "pc":   qualquer aparelho com "processar links do celular" ligado.
+   */
+
+  var CHAVE_CAIXA = "cineclip.links.caixa";
+  var CHAVE_APARELHO = "cineclip.links.aparelho";
+  var ORDEM_ESTADO = { pendente: 0, erro: 1, feito: 2 };
+  var GUARDAR_DIAS = 14;
+
+  function lerJson(chave, alternativa) {
+    try {
+      var bruto = window.localStorage.getItem(chave);
+      return bruto ? JSON.parse(bruto) : alternativa;
+    } catch (e) {
+      return alternativa;
+    }
+  }
+
+  function gravarJson(chave, valor) {
+    try {
+      window.localStorage.setItem(chave, JSON.stringify(valor));
+    } catch (e) {}
+  }
+
+  function meuAparelho() {
+    var id = "";
+    try {
+      id = window.localStorage.getItem(CHAVE_APARELHO) || "";
+      if (!id) {
+        id = "ap_" + Math.random().toString(36).slice(2, 10);
+        window.localStorage.setItem(CHAVE_APARELHO, id);
+      }
+    } catch (e) {
+      id = id || "ap_sem_armazenamento";
+    }
+    return id;
+  }
+
+  function eCelular() {
+    return /Android|iPhone|iPad|iPod|Mobile/i.test((navigator && navigator.userAgent) || "");
+  }
+
+  function lerCaixa() {
+    var lista = lerJson(CHAVE_CAIXA, []);
+    return Array.isArray(lista) ? lista.filter(function (e) { return e && e.id && e.url; }) : [];
+  }
+
+  function gravarCaixa(lista) {
+    gravarJson(CHAVE_CAIXA, lista);
+  }
+
+  /** Id estável de um link (o mesmo link partilhado duas vezes não entra duas vezes). */
+  function idDoLink(url) {
+    var s = String(url || "").trim().replace(/[?#].*$/, "").replace(/\/+$/, "").toLowerCase();
+    var h = 0;
+    for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+    return "lk_" + (h >>> 0).toString(36) + "_" + s.length;
+  }
+
+  function adicionarACaixa(urls, destino) {
+    var lista = lerCaixa();
+    var agora = ambiente.agora();
+    var novos = [];
+    urls.forEach(function (url) {
+      var id = idDoLink(url);
+      var existente = lista.find(function (e) { return e.id === id; });
+      if (existente && existente.estado === "pendente") {
+        existente.destino = destino;
+        existente.aparelho = meuAparelho();
+        existente.atualizadoEm = agora;
+        novos.push(existente);
+        return;
+      }
+      if (existente) lista = lista.filter(function (e) { return e.id !== id; });
+      var entrada = { id: id, url: url, destino: destino, aparelho: meuAparelho(), estado: "pendente", criadoEm: agora, atualizadoEm: agora };
+      lista.push(entrada);
+      novos.push(entrada);
+    });
+    gravarCaixa(lista);
+    return novos;
+  }
+
+  function marcarEntrada(id, novoEstado, extra) {
+    var lista = lerCaixa();
+    lista.forEach(function (e) {
+      if (e.id !== id) return;
+      e.estado = novoEstado;
+      e.atualizadoEm = ambiente.agora();
+      Object.keys(extra || {}).forEach(function (k) {
+        if (extra[k] != null) e[k] = extra[k];
+      });
+    });
+    gravarCaixa(lista);
+  }
+
+  /**
+   * Junta a caixa deste aparelho com a que veio do cofre da nuvem. Chamado pela
+   * sincronização do app (patch 31) — devolve a lista que vai para o cofre.
+   * Um link feito/com erro ganha a um pendente; entre iguais ganha o mais recente.
+   */
+  function mesclarLinks(remotas) {
+    var mapa = {};
+    var limite = ambiente.agora() - GUARDAR_DIAS * 86400000;
+    lerCaixa().concat(Array.isArray(remotas) ? remotas : []).forEach(function (e) {
+      if (!e || !e.id || !e.url) return;
+      var atual = mapa[e.id];
+      if (!atual) {
+        mapa[e.id] = e;
+        return;
+      }
+      var a = ORDEM_ESTADO[atual.estado] || 0;
+      var b = ORDEM_ESTADO[e.estado] || 0;
+      if (b > a || (b === a && (e.atualizadoEm || 0) > (atual.atualizadoEm || 0))) mapa[e.id] = e;
+    });
+    var lista = Object.keys(mapa).map(function (k) { return mapa[k]; }).filter(function (e) {
+      return e.estado === "pendente" || (e.atualizadoEm || e.criadoEm || 0) >= limite;
+    });
+    gravarCaixa(lista);
+    setTimeout(verificarCaixa, 0);
+    return lista;
+  }
+
+  /** Links que ESTE aparelho deve processar agora. */
+  function entradasParaMim() {
+    var eu = meuAparelho();
+    var processoPC = estado.opcoes.processarLinksDoCelular;
+    var noLote = {};
+    estado.itens.forEach(function (it) {
+      if (it.caixaId) noLote[it.caixaId] = true;
+    });
+    return lerCaixa().filter(function (e) {
+      if (e.estado !== "pendente" || noLote[e.id]) return false;
+      if (e.destino === "aqui") return e.aparelho === eu;
+      return e.destino === "pc" && processoPC;
+    });
+  }
+
+  var caixaOcupada = false;
+
+  /** Importa os links pendentes deste aparelho para o lote e começa sozinho. */
+  async function verificarCaixa() {
+    if (caixaOcupada || estado.links.aImportar) return;
+    if (!ambiente.core() || !ambiente.app() || faltaConfigurar()) return;
+    var entradas = entradasParaMim();
+    if (!entradas.length) {
+      if (!estado.aCorrer && pendentes().some(function (it) { return it.caixaId; })) iniciar();
+      return;
+    }
+    caixaOcupada = true;
+    try {
+      for (var i = 0; i < entradas.length; i++) {
+        var e = entradas[i];
+        estado.links.estado = "📥 A importar link " + (i + 1) + "/" + entradas.length + " do celular…";
+        desenhar();
+        try {
+          var ficheiro = await ambiente.baixarLink(e.url, function (recebidos, total) {
+            estado.links.estado = "📥 A importar link " + (i + 1) + "/" + entradas.length + "… " +
+              (total ? Math.round((recebidos / total) * 100) + "%" : tamanho(recebidos));
+            desenharEstadoLinks();
+          });
+          adicionarFicheiros([ficheiro]);
+          var novo = estado.itens[estado.itens.length - 1];
+          if (novo) {
+            novo.origem = e.url;
+            novo.caixaId = e.id;
+          }
+        } catch (erro) {
+          var msg = "Não importei este link: " + mensagemDeErro(erro, "falha desconhecida.");
+          marcarEntrada(e.id, "erro", { erro: msg });
+          estado.itens.push({
+            id: proximoId++, ficheiro: null, nome: e.url, bytes: 0, estado: "erro", invalido: true,
+            passo: "", progresso: 0, erro: msg, resultado: null, origem: e.url, caixaId: e.id,
+          });
+        }
+      }
+      estado.links.estado = "";
+    } finally {
+      caixaOcupada = false;
+      desenhar();
+    }
+    if (!estado.aCorrer && pendentes().length) iniciar();
+  }
+
+  /* -- ecrã ligado e aviso no fim -- */
+
+  var bloqueioEcra = null;
+
+  async function manterEcraLigado(ligar) {
+    try {
+      if (ligar) {
+        if (!bloqueioEcra && navigator.wakeLock && document.visibilityState === "visible") {
+          bloqueioEcra = await navigator.wakeLock.request("screen");
+          bloqueioEcra.addEventListener("release", function () {
+            bloqueioEcra = null;
+          });
+        }
+      } else if (bloqueioEcra) {
+        var b = bloqueioEcra;
+        bloqueioEcra = null;
+        await b.release();
+      }
+    } catch (e) {
+      bloqueioEcra = null;
+    }
+  }
+
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "visible" && estado.aCorrer) manterEcraLigado(true);
+  });
+
+  async function avisarFimDoLote(novos) {
+    if (!(novos > 0)) return;
+    try {
+      if (navigator.vibrate) navigator.vibrate([120, 80, 120]);
+    } catch (e) {}
+    try {
+      if (!("Notification" in window) || Notification.permission !== "granted") return;
+      var texto = novos === 1 ? "1 Reel agendado." : novos + " Reels agendados.";
+      var reg = navigator.serviceWorker && (await navigator.serviceWorker.getRegistration());
+      if (reg && reg.showNotification) await reg.showNotification("CineClip", { body: texto, icon: "icone-192.png", tag: "cineclip-lote" });
+      else new Notification("CineClip", { body: texto, icon: "icone-192.png" });
+    } catch (e) {}
+  }
+
+  function pedirPermissaoDeAviso() {
+    try {
+      if ("Notification" in window && Notification.permission === "default") Notification.requestPermission();
+    } catch (e) {}
+  }
+
+  /* -- receber o que foi partilhado -- */
+
+  var partilhasVistas = {};
+
+  /** Links do TikTok/Kwai num URL de partilha (/compartilhar?title=&text=&url=). */
+  function linksDaPartilha(href) {
+    var u;
+    try {
+      u = new URL(href, window.location.href);
+    } catch (e) {
+      return null;
+    }
+    var p = u.searchParams;
+    var ePartilha = /\/compartilhar\/?$/.test(u.pathname) || p.has("text") || p.has("url");
+    if (!ePartilha) return null;
+    return extrairLinks([p.get("title"), p.get("text"), p.get("url")].filter(Boolean).join("\n"));
+  }
+
+  function limparEnderecoDaPartilha() {
+    try {
+      var caminho = window.location.pathname.replace(/compartilhar\/?$/, "");
+      window.history.replaceState(null, "", caminho + window.location.hash);
+    } catch (e) {}
+  }
+
+  async function aguardarApp(maxMs) {
+    var t0 = ambiente.agora();
+    while (!(ambiente.core() && ambiente.app())) {
+      if (ambiente.agora() - t0 > maxMs) return false;
+      await new Promise(function (r) { setTimeout(r, 300); });
+    }
+    return true;
+  }
+
+  function receberPartilha(href) {
+    var links = linksDaPartilha(href);
+    if (links === null) return;
+    var chave = String(href);
+    if (partilhasVistas[chave]) return;
+    partilhasVistas[chave] = true;
+    limparEnderecoDaPartilha();
+    if (!links.length) {
+      mostrarRecebidos([], "Não encontrei nenhum link do TikTok ou do Kwai no que foi partilhado.");
+      return;
+    }
+    var escolha = estado.opcoes.aoPartilhar;
+    if (escolha === "aqui" || escolha === "pc") enviarPara(links, escolha);
+    else mostrarRecebidos(links, "");
+  }
+
+  async function enviarPara(links, destino) {
+    adicionarACaixa(links, destino);
+    if (destino === "aqui") {
+      fecharRecebidos();
+      abrir();
+      avisar("📱 " + links.length + " link" + (links.length > 1 ? "s" : "") + " recebido" + (links.length > 1 ? "s" : "") + ". Deixa o ecrã ligado até terminar.", "info");
+      desenhar();
+      if (await aguardarApp(120000)) verificarCaixa();
+      return;
+    }
+    mostrarRecebidos(links, "", "A enviar para o PC…");
+    var pronto = await aguardarApp(120000);
+    var app = ambiente.app();
+    if (!pronto || !app || typeof app.sincronizar !== "function") {
+      mostrarRecebidos(links, "Entra na tua conta do CineClip neste celular para enviar ao PC. O link fica guardado e segue na próxima sincronização.");
+      return;
+    }
+    try {
+      await app.sincronizar();
+      mostrarRecebidos(links, "", "✅ Enviado. O PC processa quando o CineClip estiver aberto nele. Já podes fechar.", true);
+    } catch (e) {
+      mostrarRecebidos(links, "Não consegui sincronizar agora (" + mensagemDeErro(e, "sem ligação") + "). O link fica guardado e segue na próxima sincronização.");
+    }
+  }
+
+  var folhaRecebidos = null;
+
+  function fecharRecebidos() {
+    if (folhaRecebidos) folhaRecebidos.remove();
+    folhaRecebidos = null;
+  }
+
+  /** Folha que aparece ao partilhar: "Processar agora aqui" ou "Mandar para o PC". */
+  function mostrarRecebidos(links, erro, estadoTexto, concluido) {
+    garantirEstilo();
+    fecharRecebidos();
+    var lembrar = el("input", { type: "checkbox" });
+    var filhos = [
+      el("h2", { text: links.length ? "📥 " + links.length + " vídeo" + (links.length > 1 ? "s" : "") + " recebido" + (links.length > 1 ? "s" : "") : "📥 Partilha recebida" }),
+    ];
+    if (links.length) {
+      filhos.push(el("ul", { className: "cl-recebidos" }, links.map(function (l) {
+        return el("li", { text: l });
+      })));
+    }
+    if (erro) filhos.push(el("div", { className: "cl-aviso erro", text: erro }));
+    if (estadoTexto) filhos.push(el("div", { className: "cl-aviso" + (concluido ? " ok" : ""), role: "status", text: estadoTexto }));
+    if (links.length && !estadoTexto) {
+      filhos.push(el("div", { className: "cl-botoes cl-escolha" }, [
+        el("button", { type: "button", className: "cl-btn cl-prim", onClick: function () {
+          if (lembrar.checked) guardarEscolha("aqui");
+          pedirPermissaoDeAviso();
+          enviarPara(links, "aqui");
+        } }, ["▶ Processar agora aqui"]),
+        el("button", { type: "button", className: "cl-btn cl-sec", onClick: function () {
+          if (lembrar.checked) guardarEscolha("pc");
+          enviarPara(links, "pc");
+        } }, ["☁️ Mandar para o PC"]),
+      ]));
+      filhos.push(el("label", { className: "cl-opcao" }, [lembrar, el("span", { text: "Lembrar a minha escolha (dá para mudar no upload em massa)" })]));
+    }
+    if (!links.length || erro || concluido) {
+      filhos.push(el("div", { className: "cl-botoes" }, [el("button", { type: "button", className: "cl-btn cl-sec", onClick: fecharRecebidos }, ["Fechar"])]));
+    }
+    folhaRecebidos = el("div", { className: "cl-overlay cl-folha" }, [el("div", { className: "cl-painel cl-corpo", role: "dialog", "aria-modal": "true" }, filhos)]);
+    document.body.appendChild(folhaRecebidos);
+  }
+
+  function guardarEscolha(valor) {
+    estado.opcoes.aoPartilhar = valor;
+    gravarOpcoes();
+  }
+
+  /** Arranque: service worker, partilha no endereço e partilhas com o app já aberto. */
+  function iniciarCompartilhar() {
+    try {
+      var local = /^(localhost|127\.0\.0\.1)$/.test(window.location.hostname);
+      if ("serviceWorker" in navigator && (window.location.protocol === "https:" || local)) {
+        navigator.serviceWorker.register("sw.js").catch(function () {});
+      }
+    } catch (e) {}
+    try {
+      if ("launchQueue" in window && window.launchQueue && window.launchQueue.setConsumer) {
+        window.launchQueue.setConsumer(function (params) {
+          if (params && params.targetURL) receberPartilha(params.targetURL);
+        });
+      }
+    } catch (e) {}
+    receberPartilha(window.location.href);
+    // Links "aqui" que ficaram a meio (a página recarregou) e links mandados para o PC.
+    aguardarApp(10 * 60 * 1000).then(function (ok) {
+      if (ok) verificarCaixa();
+    });
   }
 
   /* ------------------------------------------------------------------ UI */
@@ -667,6 +1063,14 @@
     ".cl-links strong{font-size:14px}",
     ".cl-texto{width:100%;box-sizing:border-box;resize:vertical;min-height:72px;border-radius:8px;border:1px solid var(--border,rgba(255,255,255,.15));background:var(--background,#141418);color:inherit;padding:8px 10px;font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace}",
     ".cl-texto:focus{outline:2px solid var(--primary,#e5484d);outline-offset:1px}",
+    ".cl-links summary{cursor:pointer;font-size:14px;font-weight:700}",
+    ".cl-links[open] summary{margin-bottom:6px}",
+    ".cl-select{margin-left:6px;border-radius:8px;border:1px solid var(--border,rgba(255,255,255,.15));background:var(--background,#141418);color:inherit;padding:4px 8px;font:inherit}",
+    ".cl-folha{align-items:flex-end;padding:0}",
+    ".cl-folha .cl-painel{max-width:560px;border-radius:16px 16px 0 0;padding:20px;gap:12px;display:flex;flex-direction:column}",
+    ".cl-folha h2{margin:0;font-size:18px}",
+    ".cl-recebidos{margin:0;padding:0 0 0 18px;font-size:12px;color:var(--muted-foreground,#a3a3ad);word-break:break-all}",
+    ".cl-escolha .cl-btn{flex:1;min-height:48px}",
     ".cl-opcao{display:flex;align-items:flex-start;gap:8px;font-size:13px;color:var(--muted-foreground,#a3a3ad);cursor:pointer}",
     ".cl-opcao input{margin-top:2px;accent-color:var(--primary,#e5484d)}",
     ".cl-aviso{font-size:13px;line-height:1.45;padding:10px 12px;border-radius:10px;border:1px solid var(--border,rgba(255,255,255,.1))}",
@@ -772,6 +1176,31 @@
     return el("li", { className: "cl-item", "data-estado": it.estado }, partes);
   }
 
+  function desenharSecaoCelular() {
+    var seletor = el("select", { className: "cl-select", "aria-label": "Ao partilhar do celular" }, [
+      el("option", { value: "perguntar", text: "Perguntar sempre" }),
+      el("option", { value: "aqui", text: "Processar logo no celular" }),
+      el("option", { value: "pc", text: "Mandar para o PC" }),
+    ]);
+    seletor.value = estado.opcoes.aoPartilhar;
+    seletor.addEventListener("change", function () {
+      guardarEscolha(seletor.value);
+    });
+    var caixaPC = el("input", { type: "checkbox", checked: estado.opcoes.processarLinksDoCelular || null });
+    caixaPC.addEventListener("change", function () {
+      estado.opcoes.processarLinksDoCelular = caixaPC.checked;
+      gravarOpcoes();
+      if (caixaPC.checked) verificarCaixa();
+    });
+    var aEsperar = lerCaixa().filter(function (e) { return e.estado === "pendente" && e.destino === "pc"; }).length;
+    return el("details", { className: "cl-links" }, [
+      el("summary", { text: "📱 Compartilhar do celular" + (aEsperar ? " · " + aEsperar + " link" + (aEsperar > 1 ? "s" : "") + " à espera do PC" : "") }),
+      el("span", { className: "cl-sub", text: "No Android: abre o site no Chrome → menu ⋮ → «Instalar app». Depois, no TikTok ou no Kwai, toca em Partilhar → CineClip." }),
+      el("label", { className: "cl-opcao" }, [el("span", { text: "Quando partilho um vídeo:" }), seletor]),
+      el("label", { className: "cl-opcao" }, [caixaPC, el("span", { text: "Este aparelho processa sozinho os links mandados do celular para o PC (deixa-o com o CineClip aberto)." })]),
+    ]);
+  }
+
   function desenhar() {
     desenharPilula();
     if (!raiz || !estado.aberto) return;
@@ -865,6 +1294,8 @@
       caixa,
       el("span", { text: "Agendar mesmo quando a IA tem pouca certeza do filme (abaixo de " + CONFIANCA_MINIMA + "%). Desligado, esses vídeos ficam para rever." }),
     ]));
+
+    corpo.push(desenharSecaoCelular());
 
     if (estado.itens.length) {
       corpo.push(el("ul", { className: "cl-lista" }, estado.itens.map(desenharItem)));
@@ -970,6 +1401,8 @@
   window.CineLote = {
     abrir: abrir,
     fechar: fechar,
+    /** Chamado pela sincronização do app (patch 31-links-cofre). */
+    mesclarLinks: mesclarLinks,
     /** Só para os testes (tools/test-lote-massa.mjs). */
     _interno: {
       ambiente: ambiente,
@@ -977,6 +1410,15 @@
       adicionarFicheiros: adicionarFicheiros,
       importarLinks: importarLinks,
       extrairLinks: extrairLinks,
+      lerCaixa: lerCaixa,
+      adicionarACaixa: adicionarACaixa,
+      marcarEntrada: marcarEntrada,
+      mesclarLinks: mesclarLinks,
+      verificarCaixa: verificarCaixa,
+      receberPartilha: receberPartilha,
+      linksDaPartilha: linksDaPartilha,
+      enviarPara: enviarPara,
+      meuAparelho: meuAparelho,
       iniciar: iniciar,
       parar: parar,
       processarItem: processarItem,
@@ -986,4 +1428,7 @@
       CONFIANCA_MINIMA: CONFIANCA_MINIMA,
     },
   };
+
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", iniciarCompartilhar);
+  else iniciarCompartilhar();
 })();
