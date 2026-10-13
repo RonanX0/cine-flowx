@@ -1,0 +1,1 @@
+for(const j of[.1,.22,.34,.46,.58,.7,.82,.94]){c.currentTime=o+(w-o)*j,await new Promise(te=>{c.onseeked=()=>te(),setTimeout(te,1500)});const V=_w(c,h,g,v);V&&(_.push(V.t),k.push(V.b))}if(!_.length)return null;const C=j=>[...j].sort((V,te)=>V-te)[Math.floor(j.length/2)],S=C(_),T=C(k);
