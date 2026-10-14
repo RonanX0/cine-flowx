@@ -83,12 +83,26 @@ do Kwai. Ao partilhar, o app pergunta:
   `31-links-cofre`) e o celular pode fechar. Qualquer aparelho com *processar os links do
   celular* ligado (por defeito, os PCs) importa e processa sozinho quando o CineClip estiver aberto.
 
+**📋 Botão «Colar link».** Um botão flutuante no canto do CineClip lê o link copiado
+(TikTok → Partilhar → Copiar link) e segue o mesmo caminho da partilha. Se o Chrome não deixar
+ler a área de transferência, abre uma caixa para colar à mão. Com a permissão já dada, ao
+voltar ao app com um link novo copiado o CineClip pergunta se o quer processar (nunca pede
+permissão sem um toque). Um site não pode pôr um botão por cima do TikTok/Kwai — isso exige um
+app nativo. Testes: `npm run colar:test`.
+
 A escolha pode ficar lembrada; muda-se no painel do upload em massa → *📱 Compartilhar do
 celular*. Testes: `npm run compartilhar:test`.
 
 O código está em `lote-massa.js` (legível, fora do bundle). A ligação ao bundle é o patch
 `27-lote-ponte` (expõe `window.CineClipCore` e `window.__CineClipApp`); os patches `26` e
 `28` carregam o script e mudam a área de upload. Testes: `npm run lote:test`.
+
+## ☁️ Processar na nuvem (servidor)
+
+Um servidor próprio (grátis na Oracle Cloud ou ~€6/mês na Hetzner) processa sozinho os links que o celular manda
+com **☁️ Processar na nuvem** — celular e PC podem ficar desligados. Usa o mesmo código do site
+(IA, TMDB, upload em massa) com o FFmpeg nativo. Instalação num comando e guia passo a passo
+em [`servidor/README.md`](servidor/README.md).
 
 ## 📅 Agendador (layout)
 

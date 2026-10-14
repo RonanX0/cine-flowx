@@ -58,11 +58,13 @@
       var o = bruto ? JSON.parse(bruto) : {};
       return {
         agendarComPoucaCerteza: !!o.agendarComPoucaCerteza,
-        aoPartilhar: o.aoPartilhar === "aqui" || o.aoPartilhar === "pc" ? o.aoPartilhar : "perguntar",
+        aoPartilhar: o.aoPartilhar === "aqui" || o.aoPartilhar === "pc" || o.aoPartilhar === "nuvem" ? o.aoPartilhar : "perguntar",
         processarLinksDoCelular: typeof o.processarLinksDoCelular === "boolean" ? o.processarLinksDoCelular : !eCelular(),
+        botaoColar: o.botaoColar !== false,
+        avisarLinkCopiado: o.avisarLinkCopiado !== false,
       };
     } catch (e) {
-      return { agendarComPoucaCerteza: false, aoPartilhar: "perguntar", processarLinksDoCelular: !eCelular() };
+      return { agendarComPoucaCerteza: false, aoPartilhar: "perguntar", processarLinksDoCelular: !eCelular(), botaoColar: true, avisarLinkCopiado: true };
     }
   }
 
@@ -641,7 +643,7 @@
 
   var CHAVE_CAIXA = "cineclip.links.caixa";
   var CHAVE_APARELHO = "cineclip.links.aparelho";
-  var ORDEM_ESTADO = { pendente: 0, erro: 1, feito: 2 };
+  var ORDEM_ESTADO = { pendente: 0, erro: 1, revisar: 1, feito: 2 };
   var GUARDAR_DIAS = 14;
 
   function lerJson(chave, alternativa) {
@@ -698,23 +700,46 @@
     var lista = lerCaixa();
     var agora = ambiente.agora();
     var novos = [];
+    var app = ambiente.app();
+    var contaId = app && app.account && app.account.id ? app.account.id : undefined;
     urls.forEach(function (url) {
       var id = idDoLink(url);
       var existente = lista.find(function (e) { return e.id === id; });
       if (existente && existente.estado === "pendente") {
         existente.destino = destino;
+        existente.contaId = contaId;
         existente.aparelho = meuAparelho();
         existente.atualizadoEm = agora;
         novos.push(existente);
         return;
       }
       if (existente) lista = lista.filter(function (e) { return e.id !== id; });
-      var entrada = { id: id, url: url, destino: destino, aparelho: meuAparelho(), estado: "pendente", criadoEm: agora, atualizadoEm: agora };
+      var entrada = { id: id, url: url, destino: destino, contaId: contaId, aparelho: meuAparelho(), estado: "pendente", criadoEm: agora, atualizadoEm: agora };
+      // Partilhar outra vez um link já tratado é uma nova tentativa: ganha à antiga ao juntar com a nuvem.
+      if (existente) entrada.tentativa = (existente.tentativa || 0) + 1;
       lista.push(entrada);
       novos.push(entrada);
     });
     gravarCaixa(lista);
     return novos;
+  }
+
+  /** Nova tentativa de uma entrada que deu erro/ficou para rever (mesmo id). */
+  function reabrirEntrada(id, destino, extra) {
+    var lista = lerCaixa();
+    var app = ambiente.app();
+    lista.forEach(function (e) {
+      if (e.id !== id) return;
+      e.destino = destino;
+      e.estado = "pendente";
+      e.erro = "";
+      e.tentativa = (e.tentativa || 0) + 1;
+      e.forcar = !!(extra && extra.forcar);
+      e.aparelho = meuAparelho();
+      if (app && app.account && app.account.id) e.contaId = app.account.id;
+      e.atualizadoEm = ambiente.agora();
+    });
+    gravarCaixa(lista);
   }
 
   function marcarEntrada(id, novoEstado, extra) {
@@ -743,6 +768,15 @@
       var atual = mapa[e.id];
       if (!atual) {
         mapa[e.id] = e;
+        return;
+      }
+      // Uma tentativa mais nova ("Tentar de novo", partilhar outra vez) ganha sempre;
+      // na mesma tentativa, feito/erro ganham a pendente (um aparelho atrasado não
+      // ressuscita um link já tratado) e, entre iguais, ganha o mais recente.
+      var ta = atual.tentativa || 0;
+      var tb = e.tentativa || 0;
+      if (tb !== ta) {
+        if (tb > ta) mapa[e.id] = e;
         return;
       }
       var a = ORDEM_ESTADO[atual.estado] || 0;
@@ -865,6 +899,51 @@
     } catch (e) {}
   }
 
+  /* -- ☁️ servidor na nuvem (servidor/ — Hetzner) -- */
+  /*
+   * O servidor mantém uma claim com dono "servidor:…" no Worker R2, renovada a
+   * cada minuto. O app lista as claims ativas para saber se ele está ligado e só
+   * então oferece "☁️ Processar na nuvem" (ou se o utilizador já o escolheu).
+   */
+  var CHAVE_SERVIDOR = "cineclip.servidor.visto";
+  var LIGADO_MS = 15 * 60 * 1000;
+  var verificandoServidor = null;
+
+  function servidorVistoEm() {
+    return Number(lerJson(CHAVE_SERVIDOR, 0)) || 0;
+  }
+
+  function servidorLigado() {
+    return ambiente.agora() - servidorVistoEm() < LIGADO_MS;
+  }
+
+  function mostrarBotaoNuvem() {
+    return servidorLigado() || estado.opcoes.aoPartilhar === "nuvem" || lerCaixa().some(function (e) { return e.destino === "nuvem"; });
+  }
+
+  function verificarServidor() {
+    if (verificandoServidor) return verificandoServidor;
+    verificandoServidor = (async function () {
+      try {
+        var cc = window.CineCloud;
+        if (!cc || typeof cc.activeClaims !== "function") return servidorLigado();
+        var lista = await cc.activeClaims();
+        var vivo = (Array.isArray(lista) ? lista : []).some(function (c) {
+          return c && /^servidor:/.test(String(c.owner || "")) && (!c.expiresAt || Number(c.expiresAt) > ambiente.agora());
+        });
+        if (vivo) gravarJson(CHAVE_SERVIDOR, ambiente.agora());
+        return vivo;
+      } catch (e) {
+        return servidorLigado();
+      } finally {
+        setTimeout(function () {
+          verificandoServidor = null;
+        }, 0);
+      }
+    })();
+    return verificandoServidor;
+  }
+
   /* -- receber o que foi partilhado -- */
 
   var partilhasVistas = {};
@@ -911,7 +990,7 @@
       return;
     }
     var escolha = estado.opcoes.aoPartilhar;
-    if (escolha === "aqui" || escolha === "pc") enviarPara(links, escolha);
+    if (escolha === "aqui" || escolha === "pc" || escolha === "nuvem") enviarPara(links, escolha);
     else mostrarRecebidos(links, "");
   }
 
@@ -925,16 +1004,20 @@
       if (await aguardarApp(120000)) verificarCaixa();
       return;
     }
-    mostrarRecebidos(links, "", "A enviar para o PC…");
+    var nuvem = destino === "nuvem";
+    mostrarRecebidos(links, "", nuvem ? "A enviar para a nuvem…" : "A enviar para o PC…");
     var pronto = await aguardarApp(120000);
     var app = ambiente.app();
     if (!pronto || !app || typeof app.sincronizar !== "function") {
-      mostrarRecebidos(links, "Entra na tua conta do CineClip neste celular para enviar ao PC. O link fica guardado e segue na próxima sincronização.");
+      mostrarRecebidos(links, "Entra na tua conta do CineClip neste celular para enviar " + (nuvem ? "para a nuvem" : "ao PC") + ". O link fica guardado e segue na próxima sincronização.");
       return;
     }
     try {
       await app.sincronizar();
-      mostrarRecebidos(links, "", "✅ Enviado. O PC processa quando o CineClip estiver aberto nele. Já podes fechar.", true);
+      mostrarRecebidos(links, "", nuvem
+        ? "✅ Enviado para a nuvem. O servidor processa e agenda sozinho em poucos minutos. Já podes fechar." +
+          (servidorLigado() ? "" : " (O servidor não deu sinal de vida há algum tempo — confere se está ligado.)")
+        : "✅ Enviado. O PC processa quando o CineClip estiver aberto nele. Já podes fechar.", true);
     } catch (e) {
       mostrarRecebidos(links, "Não consegui sincronizar agora (" + mensagemDeErro(e, "sem ligação") + "). O link fica guardado e segue na próxima sincronização.");
     }
@@ -969,10 +1052,14 @@
           pedirPermissaoDeAviso();
           enviarPara(links, "aqui");
         } }, ["▶ Processar agora aqui"]),
+        mostrarBotaoNuvem() ? el("button", { type: "button", className: "cl-btn cl-sec", onClick: function () {
+          if (lembrar.checked) guardarEscolha("nuvem");
+          enviarPara(links, "nuvem");
+        } }, ["☁️ Processar na nuvem"]) : null,
         el("button", { type: "button", className: "cl-btn cl-sec", onClick: function () {
           if (lembrar.checked) guardarEscolha("pc");
           enviarPara(links, "pc");
-        } }, ["☁️ Mandar para o PC"]),
+        } }, ["💻 Mandar para o PC"]),
       ]));
       filhos.push(el("label", { className: "cl-opcao" }, [lembrar, el("span", { text: "Lembrar a minha escolha (dá para mudar no upload em massa)" })]));
     }
@@ -981,6 +1068,13 @@
     }
     folhaRecebidos = el("div", { className: "cl-overlay cl-folha" }, [el("div", { className: "cl-painel cl-corpo", role: "dialog", "aria-modal": "true" }, filhos)]);
     document.body.appendChild(folhaRecebidos);
+    // Se o servidor estiver ligado e o botão ainda não apareceu, volta a desenhar.
+    if (links.length && !estadoTexto && !mostrarBotaoNuvem()) {
+      var esta = folhaRecebidos;
+      verificarServidor().then(function (vivo) {
+        if (vivo && folhaRecebidos === esta) mostrarRecebidos(links, erro, estadoTexto, concluido);
+      });
+    }
   }
 
   function guardarEscolha(valor) {
@@ -1004,9 +1098,187 @@
       }
     } catch (e) {}
     receberPartilha(window.location.href);
+    iniciarBotaoColar();
     // Links "aqui" que ficaram a meio (a página recarregou) e links mandados para o PC.
     aguardarApp(10 * 60 * 1000).then(function (ok) {
-      if (ok) verificarCaixa();
+      if (ok) {
+        verificarCaixa();
+        verificarServidor();
+      }
+    });
+  }
+
+  /* ------------------------------------------ 📋 botão "Colar e processar" */
+  /*
+   * Um site não pode desenhar por cima do TikTok/Kwai (isso exige app nativo). O
+   * mais perto disso: um botão flutuante no CineClip. No TikTok → "Copiar link",
+   * volta ao CineClip, toca no botão → o link segue o mesmo caminho da partilha
+   * (pergunta "aqui ou PC", ou usa a escolha lembrada).
+   * Além disso, ao voltar ao app com um link novo copiado, o CineClip oferece
+   * processá-lo — só quando o Chrome já deu permissão para ler a área de
+   * transferência (nunca pede permissão sem um toque).
+   */
+
+  var CHAVE_OFERTADOS = "cineclip.links.ofertados";
+  var botaoColar = null;
+  var avisoCopiado = null;
+
+  function appLogado() {
+    var app = ambiente.app();
+    return !!(app && ambiente.core() && app.logado !== false);
+  }
+
+  async function lerAreaDeTransferencia() {
+    if (!navigator.clipboard || typeof navigator.clipboard.readText !== "function") {
+      throw new Error("sem-acesso");
+    }
+    return String((await navigator.clipboard.readText()) || "");
+  }
+
+  async function permissaoDeLeitura() {
+    try {
+      if (!navigator.permissions || !navigator.permissions.query) return "desconhecida";
+      var p = await navigator.permissions.query({ name: "clipboard-read" });
+      return p.state;
+    } catch (e) {
+      return "desconhecida";
+    }
+  }
+
+  function lembrarOfertado(link) {
+    var lista = lerJson(CHAVE_OFERTADOS, []);
+    if (!Array.isArray(lista)) lista = [];
+    lista = lista.filter(function (l) { return l !== link; });
+    lista.push(link);
+    gravarJson(CHAVE_OFERTADOS, lista.slice(-50));
+  }
+
+  function jaConhecido(link) {
+    var id = idDoLink(link);
+    var ofertados = lerJson(CHAVE_OFERTADOS, []);
+    return (Array.isArray(ofertados) && ofertados.indexOf(link) !== -1) ||
+      lerCaixa().some(function (e) { return e.id === id; });
+  }
+
+  /** Os links copiados seguem o mesmo caminho de uma partilha do Android. */
+  function tratarLinksColados(links) {
+    links.forEach(lembrarOfertado);
+    fecharAvisoCopiado();
+    var escolha = estado.opcoes.aoPartilhar;
+    if (escolha === "aqui" || escolha === "pc" || escolha === "nuvem") enviarPara(links, escolha);
+    else mostrarRecebidos(links, "");
+  }
+
+  async function aoTocarColar() {
+    var texto = null;
+    try {
+      texto = await lerAreaDeTransferencia();
+    } catch (e) {
+      texto = null;
+    }
+    if (texto === null) {
+      mostrarColarAMao("O navegador não deixou ler o link copiado. Cola-o aqui:");
+      return;
+    }
+    var links = extrairLinks(texto);
+    if (!links.length) {
+      mostrarColarAMao("Não há link do TikTok ou do Kwai copiado. No vídeo, toca em Partilhar → Copiar link e volta aqui — ou cola-o abaixo:");
+      return;
+    }
+    tratarLinksColados(links);
+  }
+
+  /** Folha com uma caixa para colar à mão (quando ler a área de transferência falha). */
+  function mostrarColarAMao(mensagem) {
+    garantirEstilo();
+    fecharRecebidos();
+    var area = el("textarea", { className: "cl-texto", rows: "3", placeholder: "https://vm.tiktok.com/…", "aria-label": "Link do vídeo" });
+    var aviso = el("div", { className: "cl-sub", role: "status" });
+    folhaRecebidos = el("div", { className: "cl-overlay cl-folha" }, [
+      el("div", { className: "cl-painel cl-corpo", role: "dialog", "aria-modal": "true" }, [
+        el("h2", { text: "📋 Colar link" }),
+        el("p", { className: "cl-sub", text: mensagem }),
+        area,
+        aviso,
+        el("div", { className: "cl-botoes cl-escolha" }, [
+          el("button", { type: "button", className: "cl-btn cl-prim", onClick: function () {
+            var links = extrairLinks(area.value);
+            if (!links.length) {
+              aviso.textContent = "Isto não parece um link do TikTok ou do Kwai.";
+              return;
+            }
+            tratarLinksColados(links);
+          } }, ["Continuar"]),
+          el("button", { type: "button", className: "cl-btn cl-sec", onClick: fecharRecebidos }, ["Cancelar"]),
+        ]),
+      ]),
+    ]);
+    document.body.appendChild(folhaRecebidos);
+    try {
+      area.focus();
+    } catch (e) {}
+  }
+
+  function fecharAvisoCopiado() {
+    if (avisoCopiado) avisoCopiado.remove();
+    avisoCopiado = null;
+  }
+
+  /** Ao voltar ao app: há um link novo copiado? Oferece processá-lo. */
+  async function verificarLinkCopiado() {
+    if (!estado.opcoes.avisarLinkCopiado || !appLogado() || folhaRecebidos || avisoCopiado) return;
+    if (document.visibilityState !== "visible") return;
+    if ((await permissaoDeLeitura()) !== "granted") return;
+    var texto;
+    try {
+      texto = await lerAreaDeTransferencia();
+    } catch (e) {
+      return;
+    }
+    var links = extrairLinks(texto).filter(function (l) { return !jaConhecido(l); });
+    if (!links.length) return;
+    garantirEstilo();
+    avisoCopiado = el("div", { className: "cl-copiado", role: "alert" }, [
+      el("span", { text: "🔗 Link copiado: " + (links.length > 1 ? links.length + " vídeos" : links[0].replace(/^https?:\/\/(www\.)?/, "").slice(0, 40)) }),
+      el("div", { className: "cl-botoes" }, [
+        el("button", { type: "button", className: "cl-btn cl-prim cl-mini", onClick: function () { tratarLinksColados(links); } }, ["Processar"]),
+        el("button", { type: "button", className: "cl-btn cl-sec cl-mini", onClick: function () {
+          links.forEach(lembrarOfertado);
+          fecharAvisoCopiado();
+        } }, ["Ignorar"]),
+      ]),
+    ]);
+    document.body.appendChild(avisoCopiado);
+  }
+
+  /** Mostra/esconde o botão flutuante conforme o login e a opção. */
+  function atualizarBotaoColar() {
+    var mostrar = estado.opcoes.botaoColar && appLogado() && !estado.aberto;
+    if (!mostrar) {
+      if (botaoColar) botaoColar.remove();
+      botaoColar = null;
+      return;
+    }
+    if (botaoColar && botaoColar.isConnected) return;
+    garantirEstilo();
+    botaoColar = el("button", {
+      type: "button",
+      className: "cl-fab",
+      title: "Colar o link copiado e processar",
+      "aria-label": "Colar o link copiado do TikTok ou do Kwai e processar",
+      onClick: aoTocarColar,
+    }, [el("span", { className: "cl-fab-icone", "aria-hidden": "true", text: "📋" }), el("span", { className: "cl-fab-texto", text: "Colar link" })]);
+    document.body.appendChild(botaoColar);
+  }
+
+  function iniciarBotaoColar() {
+    atualizarBotaoColar();
+    setInterval(atualizarBotaoColar, 1500);
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "visible") setTimeout(verificarLinkCopiado, 400);
+    });
+    window.addEventListener("focus", function () {
+      setTimeout(verificarLinkCopiado, 400);
     });
   }
 
@@ -1066,6 +1338,11 @@
     ".cl-links summary{cursor:pointer;font-size:14px;font-weight:700}",
     ".cl-links[open] summary{margin-bottom:6px}",
     ".cl-select{margin-left:6px;border-radius:8px;border:1px solid var(--border,rgba(255,255,255,.15));background:var(--background,#141418);color:inherit;padding:4px 8px;font:inherit}",
+    ".cl-fab{position:fixed;right:16px;bottom:16px;z-index:9988;display:inline-flex;align-items:center;gap:8px;height:56px;padding:0 20px 0 16px;border-radius:28px;border:0;background:var(--primary,#e5484d);color:#fff;font:600 15px/1 inherit;font-family:inherit;box-shadow:0 10px 28px rgba(0,0,0,.45);cursor:pointer}",
+    ".cl-fab:active{transform:scale(.96)}",
+    ".cl-fab-icone{font-size:20px}",
+    ".cl-copiado{position:fixed;left:12px;right:12px;bottom:84px;z-index:9989;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;padding:12px 14px;border-radius:14px;background:var(--card,#1c1c22);color:var(--foreground,#f4f4f6);border:1px solid var(--primary,#e5484d);box-shadow:0 12px 32px rgba(0,0,0,.5);font-size:14px;font-family:inherit;max-width:560px;margin:0 auto}",
+    "@media (min-width:768px){.cl-fab{height:48px;font-size:14px}.cl-fab-texto{display:inline}}",
     ".cl-folha{align-items:flex-end;padding:0}",
     ".cl-folha .cl-painel{max-width:560px;border-radius:16px 16px 0 0;padding:20px;gap:12px;display:flex;flex-direction:column}",
     ".cl-folha h2{margin:0;font-size:18px}",
@@ -1095,7 +1372,7 @@
     ".cl-rodape{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;padding:14px 20px;border-top:1px solid var(--border,rgba(255,255,255,.09))}",
     ".cl-resumo{font-size:13px;color:var(--muted-foreground,#a3a3ad)}",
     ".cl-botoes{display:flex;flex-wrap:wrap;gap:8px}",
-    ".cl-pilula{position:fixed;right:16px;bottom:16px;z-index:9989;background:var(--card,#1c1c22);color:var(--foreground,#f4f4f6);border:1px solid var(--primary,#e5484d);border-radius:999px;padding:10px 16px;font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.4);font-family:inherit}",
+    ".cl-pilula{position:fixed;right:16px;bottom:84px;z-index:9989;background:var(--card,#1c1c22);color:var(--foreground,#f4f4f6);border:1px solid var(--primary,#e5484d);border-radius:999px;padding:10px 16px;font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.4);font-family:inherit}",
     "@media (max-width:560px){.cl-overlay{padding:0}.cl-painel{border-radius:0;min-height:100%}.cl-rodape{flex-direction:column;align-items:stretch}.cl-botoes .cl-btn{flex:1}}",
   ].join("\n");
 
@@ -1180,6 +1457,7 @@
     var seletor = el("select", { className: "cl-select", "aria-label": "Ao partilhar do celular" }, [
       el("option", { value: "perguntar", text: "Perguntar sempre" }),
       el("option", { value: "aqui", text: "Processar logo no celular" }),
+      el("option", { value: "nuvem", text: "Processar na nuvem (servidor)" }),
       el("option", { value: "pc", text: "Mandar para o PC" }),
     ]);
     seletor.value = estado.opcoes.aoPartilhar;
@@ -1198,7 +1476,122 @@
       el("span", { className: "cl-sub", text: "No Android: abre o site no Chrome → menu ⋮ → «Instalar app». Depois, no TikTok ou no Kwai, toca em Partilhar → CineClip." }),
       el("label", { className: "cl-opcao" }, [el("span", { text: "Quando partilho um vídeo:" }), seletor]),
       el("label", { className: "cl-opcao" }, [caixaPC, el("span", { text: "Este aparelho processa sozinho os links mandados do celular para o PC (deixa-o com o CineClip aberto)." })]),
+      opcaoSimples("botaoColar", "Mostrar o botão flutuante 📋 «Colar link»", atualizarBotaoColar),
+      opcaoSimples("avisarLinkCopiado", "Ao voltar ao app com um link copiado, perguntar se quero processá-lo", null),
+      desenharEstadoNuvem(),
     ]);
+  }
+
+  /**
+   * Chave curta para instalar o servidor (servidor/README.md): o cofre, a chave de
+   * cifra e a nuvem durável — o mesmo que vai no código do Robô 24h, em ~300
+   * caracteres para colar no terminal. Dá acesso total ao cofre: não partilhar.
+   */
+  function chaveDoServidor() {
+    var sessao = lerJson("cineclip.auth.session", null);
+    var app = ambiente.app();
+    var s = (app && app.settings) || {};
+    if (!sessao || !sessao.vaultHash || !sessao.encryptionKeyB64) throw new Error("Entra na tua conta primeiro.");
+    var cfg = {
+      CONTA: sessao.username || "",
+      VAULT_HASH: sessao.vaultHash,
+      ENCRYPTION_KEY_B64: sessao.encryptionKeyB64,
+      R2_WORKER_URL: String(s.r2WorkerUrl || "").trim().replace(/\/+$/, ""),
+      R2_TOKEN: String(s.r2Token || "").trim(),
+      DRIVE_SCRIPT_URL: String(s.driveScriptUrl || "").trim(),
+      DRIVE_TOKEN: String(s.driveToken || "").trim(),
+    };
+    if (!cfg.R2_WORKER_URL || !cfg.R2_TOKEN) throw new Error("O servidor precisa do Cloudflare R2: configura-o nas definições primeiro.");
+    var json = JSON.stringify(cfg);
+    var b64 = btoa(unescape(encodeURIComponent(json)));
+    return "CINECLIP1:" + b64;
+  }
+
+  async function copiarChaveDoServidor(alvo) {
+    var chave;
+    try {
+      chave = chaveDoServidor();
+    } catch (e) {
+      alvo.textContent = mensagemDeErro(e);
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(chave);
+      alvo.textContent = "Copiada. Cola-a no servidor (sudo cineclip configurar). Não a partilhes: dá acesso ao teu cofre.";
+    } catch (e) {
+      var area = el("textarea", { className: "cl-texto", rows: "3", readonly: true });
+      area.value = chave;
+      alvo.textContent = "";
+      alvo.appendChild(area);
+      try {
+        area.select();
+      } catch (e2) {}
+    }
+  }
+
+  var NOMES_NUVEM = { pendente: "Na fila da nuvem", feito: "Agendado", revisar: "Rever", erro: "Erro" };
+
+  /** Estado do servidor e dos últimos links mandados para a nuvem. */
+  function desenharEstadoNuvem() {
+    var visto = servidorVistoEm();
+    var minutos = visto ? Math.max(0, Math.round((ambiente.agora() - visto) / 60000)) : null;
+    var linha = servidorLigado()
+      ? "☁️ Servidor na nuvem: ligado" + (minutos ? " (visto há " + minutos + " min)" : "")
+      : visto
+        ? "☁️ Servidor na nuvem: sem sinal há " + (minutos >= 120 ? Math.round(minutos / 60) + " h" : minutos + " min")
+        : "☁️ Servidor na nuvem: ainda não deu sinal (ver servidor/README.md para o instalar)";
+    var nuvem = lerCaixa()
+      .filter(function (e) { return e.destino === "nuvem"; })
+      .sort(function (a, b) { return (b.atualizadoEm || 0) - (a.atualizadoEm || 0); })
+      .slice(0, 8);
+    var filhos = [el("div", { className: "cl-sub", text: linha })];
+    var estadoChave = el("span", { className: "cl-peso", role: "status" });
+    filhos.push(el("div", { className: "cl-linha" }, [
+      el("button", { type: "button", className: "cl-btn cl-sec cl-mini", onClick: function () {
+        copiarChaveDoServidor(estadoChave);
+      } }, ["🔑 Copiar chave do servidor"]),
+      estadoChave,
+    ]));
+    if (nuvem.length) {
+      filhos.push(el("ul", { className: "cl-lista" }, nuvem.map(function (e) {
+        var acoes = [];
+        if (e.estado === "erro" || e.estado === "revisar") {
+          var rever = e.estado === "revisar";
+          acoes.push(el("button", { type: "button", className: "cl-btn cl-sec cl-mini", onClick: function () {
+            // "Rever" = a IA teve pouca certeza; repetir daria o mesmo. Quem viu e
+            // concorda manda agendar assim mesmo.
+            reabrirEntrada(e.id, "nuvem", { forcar: rever });
+            pedirSincronizacao();
+            desenhar();
+          } }, [rever ? "Agendar mesmo assim (nuvem)" : "Tentar de novo na nuvem"]));
+          acoes.push(el("button", { type: "button", className: "cl-btn cl-sec cl-mini", onClick: function () {
+            reabrirEntrada(e.id, "aqui");
+            pedirSincronizacao();
+            verificarCaixa();
+            desenhar();
+          } }, ["Fazer aqui"]));
+        }
+        return el("li", { className: "cl-item", "data-estado": e.estado }, [
+          el("div", { className: "cl-linha" }, [
+            el("span", { className: "cl-nome", title: e.url, text: e.url.replace(/^https?:\/\/(www\.)?/, "") }),
+            el("span", { className: "cl-selo " + (e.estado === "feito" ? "agendado" : e.estado), text: NOMES_NUVEM[e.estado] || e.estado }),
+          ]),
+          e.erro ? el("div", { className: "cl-det " + e.estado, text: e.erro }) : null,
+          acoes.length ? el("div", { className: "cl-acoes" }, acoes) : null,
+        ]);
+      })));
+    }
+    return el("div", { className: "cl-nuvem" }, filhos);
+  }
+
+  function opcaoSimples(chave, texto, depois) {
+    var caixa = el("input", { type: "checkbox", checked: estado.opcoes[chave] || null });
+    caixa.addEventListener("change", function () {
+      estado.opcoes[chave] = caixa.checked;
+      gravarOpcoes();
+      if (depois) depois();
+    });
+    return el("label", { className: "cl-opcao" }, [caixa, el("span", { text: texto })]);
   }
 
   function desenhar() {
@@ -1379,6 +1772,10 @@
     }
     if (!raiz.isConnected) document.body.appendChild(raiz);
     estado.aberto = true;
+    atualizarBotaoColar();
+    verificarServidor().then(function () {
+      if (estado.aberto) desenhar();
+    });
     document.addEventListener("keydown", aoTeclar);
     if (ficheiros && ficheiros.length) adicionarFicheiros(ficheiros);
     else desenhar();
@@ -1386,6 +1783,7 @@
 
   function fechar() {
     estado.aberto = false;
+    setTimeout(atualizarBotaoColar, 0);
     document.removeEventListener("keydown", aoTeclar);
     if (raiz && raiz.isConnected) raiz.remove();
     desenhar();
@@ -1419,6 +1817,12 @@
       linksDaPartilha: linksDaPartilha,
       enviarPara: enviarPara,
       meuAparelho: meuAparelho,
+      aoTocarColar: aoTocarColar,
+      verificarServidor: verificarServidor,
+      chaveDoServidor: chaveDoServidor,
+      servidorLigado: servidorLigado,
+      verificarLinkCopiado: verificarLinkCopiado,
+      atualizarBotaoColar: atualizarBotaoColar,
       iniciar: iniciar,
       parar: parar,
       processarItem: processarItem,

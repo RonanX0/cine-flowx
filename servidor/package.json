@@ -1,0 +1,17 @@
+{
+  "name": "cineclip-servidor",
+  "private": true,
+  "version": "1.0.0",
+  "description": "CineClip na nuvem: processa os links mandados do celular com o código do próprio app e FFmpeg nativo.",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node index.mjs",
+    "testar": "node index.mjs testar"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "^0.1.80",
+    "fake-indexeddb": "^6.2.2",
+    "jsdom": "^26.1.0"
+  }
+}
