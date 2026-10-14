@@ -53,17 +53,36 @@ Os passos 3 a 5 (instalar, ligar à conta e usar) são iguais nas duas.
    Guarde o arquivo baixado na pasta **Downloads** e renomeie para `cineclip.key`.
 6. Clique em **Create**. Quando ficar verde (**Running**), copie o **Public IP address**.
 
-> **"Out of capacity"?** A máquina grátis às vezes esgota. Troque o *Availability domain* (se
-> houver outro) ou tente de novo mais tarde — costuma liberar em algumas horas.
+> **"Out of capacity"?** A máquina grátis esgota com frequência (São Paulo só tem um
+> *availability domain*). Em vez de clicar em Create várias vezes, deixe a Oracle insistir por
+> você: veja [A2b](#a2b-out-of-capacity-criar-pelo-cloud-shell-insistindo-sozinho).
 
-#### A3. Evitar que a Oracle recolha a máquina
+#### A2b. "Out of capacity": criar pelo Cloud Shell, insistindo sozinho
 
-A Oracle pode recolher máquinas grátis que passem 7 dias quase paradas, e o servidor fica
-parado a maior parte do tempo, esperando links. Para evitar isso, converta a conta para
-**Pay As You Go**: menu **☰ → Billing & Cost Management → Upgrade and Manage Payment →
-Upgrade to Pay As You Go**. Os recursos *Always Free* continuam grátis. Por segurança, crie
-também um alerta de gastos: **Billing → Budgets → Create Budget** com valor de US$ 1, para ser
-avisado por e-mail se algo começar a cobrar.
+1. Crie a rede uma vez: **☰ → Networking → Virtual cloud networks → Start VCN Wizard →
+   Create VCN with Internet Connectivity**, nome `cineclip`, **Next → Create**.
+2. Abra o **Cloud Shell** (ícone **`>_`** no topo do painel) e cole:
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/RonanX0/cine-flowx/main/servidor/oracle-criar.sh | bash
+   ```
+
+   Ele tenta criar a máquina (1 OCPU, 6 GB) a cada minuto até a Oracle aceitar, e no fim
+   mostra o comando `ssh` para entrar nela **pelo próprio Cloud Shell** — não precisa baixar
+   chave nem usar o PowerShell (pule o A4). Deixe a aba aberta; se ela fechar, rode de novo.
+   Para pedir a máquina maior: `curl … | OCPUS=2 MEMORIA_GB=12 bash`.
+
+#### A3. Pay As You Go (opcional)
+
+Não é obrigatório e **não tem custo**, mas a Oracle faz uma pré-autorização no cartão (que
+depois é estornada) — se o cartão não tiver limite, pule este passo. Vantagens: contas Pay As
+You Go conseguem vaga com mais facilidade e a Oracle não recolhe a máquina por ficar parada.
+Menu **☰ → Billing & Cost Management → Upgrade and Manage Payment → Upgrade to Pay As You Go**,
+e crie um alerta de gastos em **Billing → Budgets → Create Budget** (US$ 1).
+
+Sem Pay As You Go, se a máquina passar 7 dias quase parada a Oracle pode desligá-la (avisa por
+e-mail antes). Basta ligá-la de novo em **Instances → cineclip → Start**: o CineClip arranca
+sozinho.
 
 #### A4. Entrar no servidor pelo Windows
 
