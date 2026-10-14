@@ -247,3 +247,51 @@ em massa. Teste: `npm run barras:test` (corre o código real do bundle).
 **Também.** O patch `26-lote-script-tag` não era idempotente: correr `npm run patch:nuvem`
 outra vez duplicava a linha da camada de nuvem. A tag do upload em massa passou para antes
 da `nuvem-duravel.js`, e o teste verifica que todos os patches são reconhecidos como aplicados.
+
+---
+
+## 9. 🔴 Identificador de filme fraco / confunde com outros títulos (2026-10-14)
+
+**Sintoma.** O identificador de filme errava frequentemente o título do filme, confundia a
+cena com outro filme famoso do mesmo ator ou alucinava obras incorretas.
+
+**Causas identificadas.**
+1. **Pontuação no TMDB invertida:** A função de pontuação de candidatos (`w` em `nS`)
+   concedia +55 pontos a qualquer filme estrelado pelo mesmo ator reconhecido e até +28 pontos
+   por popularidade geral no TMDB. Com isso, um filme pop não relacionado do mesmo ator
+   (ex.: *Batman* de 1989 com Jack Nicholson) superava o filme real correto (*O Iluminado* de 1980),
+   porque a popularidade e a presença do ator atropelavam a correspondência de título.
+2. **Consultas TMDB rejeitadas:** A busca no TMDB (`Ru`) passava a string bruta da IA; quando
+   vinha com ano em parênteses (ex.: `Interestelar (2014)`) ou subtítulo com pontuação, a API
+   `/search/movie` do TMDB devolvia 0 resultados.
+3. **Limpeza de atores incompleta:** `mg` só removia `como ...`, deixando qualificadores comuns
+   em inglês como `as Tommy Shelby` ou `- John Wick`, fazendo a busca da pessoa falhar no TMDB.
+4. **Falta de raciocínio dedutivo no prompt:** O modelo recebia instrução direta para emitir
+   o título sem ser forçado a registrar a dedução antes, favorecendo o chute automático do
+   título mais estereotipado do ator.
+5. **NVIDIA Vision cega (1 miniatura):** `dg` enviava apenas `a[0]` (a folha de contato 2×3
+   com quadros minúsculos de 560×180 px), onde rostos e textos ficavam ilegíveis.
+6. **Modelos inválidos e filtros agressivos:** Lista Gemini continha `gemini-2.5-flash`
+   (inexistente) e filtrava os modelos `gemini-1.5` que servem de fallback confiável.
+
+**Correções aplicadas.**
+* **Algoritmo de pontuação TMDB reestruturado (`nS`):** Título original e título nacional
+  são soberanos (+85 / +80 pts). Sem correspondência de título, um filme do mesmo ator
+  recebe no máximo +10 pts, impedindo que blockbusters alheios vençam a obra identificada.
+  Bónus duplo (+55 pts) para múltiplos atores em cena e penalização (-25 pts) para remakes
+  com grande discrepância de ano.
+* **Consultas inteligentes no TMDB (`Ru`):** Limpeza automática de anos entre parênteses,
+  geração de variantes (título completo e base sem subtítulo) e busca cruzada em `pt-BR` e `en-US`.
+  Normalização de sequências em algarismos romanos (`II` → `2`, `III` → `3`) em `fi`.
+* **Prompt investigativo reforçado (`Zb`):** Regra anti-chute de filmes famosos de atores,
+  transcrição literal de citações do áudio como impressão digital, instrução explícita de
+  busca Google entre aspas e campo `"analise_deducao"` gerado antes do título.
+* **Múltiplos quadros HD na NVIDIA (`dg`):** Envio dos quadros nítidos individuais
+  (`a.slice(1, 5)`) com fallback gracioso para a folha de contato.
+* **Modelos atualizados:** Gemini com `gemini-2.0-flash`, `gemini-2.0-flash-lite`,
+  `gemini-1.5-flash` e ferramenta `googleSearch` padronizada.
+
+**Testes.** Criado `tools/test-identificador.mjs` (25 verificações cobrindo normalização,
+limpeza de consultas, filtros de atores, pontuação com vitória do filme correto sobre
+filme alheio do mesmo ator e integridade do bundle). Integrado ao `npm test`.
+
