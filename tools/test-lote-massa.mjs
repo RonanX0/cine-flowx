@@ -220,6 +220,44 @@ console.log("\nA3. Opção «Agendar mesmo com pouca certeza»");
   dom.window.close();
 }
 
+console.log("\nA3b. Vídeo H.265/MKV sem imagem no <video>, mas com dimensões no MediaInfo → processa até ao fim");
+{
+  const dom = novoDom();
+  const c = cenario(dom.window);
+  const origCore = c.lote.ambiente.core();
+  c.lote.ambiente.core = () => Object.assign({}, origCore, {
+    lerMetadados: async (f) => ({ duration: 60, width: 1080, height: 1920, fields: [] }),
+  });
+  c.lote.adicionarFicheiros([ficheiro(dom.window, "hevc.mp4")]);
+  await c.lote.iniciar();
+  check("recupera dimensões pelo MediaInfo e agenda o vídeo", c.fila.length === 1 && c.lote.estado.itens[0].estado === "agendado");
+  dom.window.close();
+}
+
+console.log("\nA3c. Chaves no localStorage antes do estado React hidratar → não trava no arranque");
+{
+  const dom = novoDom();
+  dom.window.localStorage.setItem("cineclip.settings", JSON.stringify({ nvidiaKey: "nvapi-ok", tmdbKey: "tmdb-ok" }));
+  const c = cenario(dom.window, { settings: { nvidiaKey: "", geminiKey: "", tmdbKey: "" } });
+  check("faltaConfigurar lê as chaves guardadas no localStorage", c.lote.faltaConfigurar() === null);
+  c.lote.adicionarFicheiros([ficheiro(dom.window, "curto.mp4")]);
+  await c.lote.iniciar();
+  check("processa e agenda sem ficar preso", c.fila.length === 1 && c.lote.estado.itens[0].estado === "agendado");
+  dom.window.close();
+}
+
+console.log("\nA3d. Anti-duplicação no lote e nos links");
+{
+  const dom = novoDom();
+  const c = cenario(dom.window);
+  const f = ficheiro(dom.window, "curto.mp4");
+  const n = c.lote.adicionarFicheiros([f, f]);
+  check("adicionar o mesmo File duas vezes só entra uma vez no lote", n === 1 && c.lote.estado.itens.length === 1, `n=${n}`);
+  const links = c.lote.extrairLinks("https://vm.tiktok.com/ZMdup1/?_t=1\nhttps://vm.tiktok.com/ZMdup1/?_t=2");
+  check("extrairLinks ignora o mesmo link com query params diferentes", links.length === 1, JSON.stringify(links));
+  dom.window.close();
+}
+
 console.log("\nA4. Chaves em falta");
 {
   const dom = novoDom();

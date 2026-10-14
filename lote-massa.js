@@ -104,6 +104,25 @@
     },
   };
 
+  function comLimite(promessa, ms, msg) {
+    return new Promise(function (resolve, reject) {
+      var t = setTimeout(function () {
+        reject(new Error(msg || "A operação demorou demasiado tempo."));
+      }, ms);
+      if (t && typeof t.unref === "function") t.unref();
+      Promise.resolve(promessa).then(
+        function (v) {
+          clearTimeout(t);
+          resolve(v);
+        },
+        function (e) {
+          clearTimeout(t);
+          reject(e);
+        }
+      );
+    });
+  }
+
   /** Dimensões e duração do vídeo, lidas por um <video> escondido. */
   function lerVideoNoNavegador(ficheiro) {
     return new Promise(function (resolve, reject) {
@@ -115,6 +134,7 @@
         terminado = true;
         clearTimeout(limite);
         try {
+          if (video.pause) video.pause();
           video.removeAttribute("src");
           video.load();
         } catch (e) {}
@@ -124,20 +144,25 @@
       }
       var limite = setTimeout(function () {
         fim(new Error("O navegador demorou demasiado a abrir o vídeo."));
-      }, 20000);
+      }, 10000);
+      if (limite && typeof limite.unref === "function") limite.unref();
       video.preload = "metadata";
       video.muted = true;
+      video.playsInline = true;
       video.onloadedmetadata = function () {
         fim(null, {
           largura: video.videoWidth || 0,
           altura: video.videoHeight || 0,
-          duracao: Number.isFinite(video.duration) ? video.duration : 0,
+          duracao: Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0,
         });
       };
       video.onerror = function () {
         fim(new Error("O navegador não consegue abrir este vídeo."));
       };
       video.src = url;
+      try {
+        if (video.load) video.load();
+      } catch (e) {}
     });
   }
 
@@ -146,11 +171,17 @@
    * Devolve um File pronto a entrar no lote.
    */
   async function baixarLinkDoServidor(link, aoProgresso) {
+    var ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
     var r;
     try {
-      r = await fetch("/api/public/importar?url=" + encodeURIComponent(link));
+      r = await comLimite(
+        fetch("/api/public/importar?url=" + encodeURIComponent(link), ctl ? { signal: ctl.signal } : undefined),
+        60000,
+        "O servidor demorou demasiado a responder ao link."
+      );
     } catch (e) {
-      throw new Error("Sem ligação ao servidor do CineClip.");
+      try { if (ctl) ctl.abort(); } catch (err) {}
+      throw new Error(e && /demasiado/.test(e.message) ? e.message : "Sem ligação ao servidor do CineClip.");
     }
     if (!r.ok) {
       var msg = "";
@@ -163,17 +194,22 @@
     var total = Number(r.headers.get("content-length")) || 0;
     var partes = [];
     var recebidos = 0;
-    if (r.body && r.body.getReader) {
-      var leitor = r.body.getReader();
-      for (;;) {
-        var passo = await leitor.read();
-        if (passo.done) break;
-        partes.push(passo.value);
-        recebidos += passo.value.length;
-        if (aoProgresso) aoProgresso(recebidos, total);
+    try {
+      if (r.body && r.body.getReader) {
+        var leitor = r.body.getReader();
+        for (;;) {
+          var passo = await comLimite(leitor.read(), 30000, "A transferência do vídeo parou de responder.");
+          if (passo.done) break;
+          partes.push(passo.value);
+          recebidos += passo.value.length;
+          if (aoProgresso) aoProgresso(recebidos, total);
+        }
+      } else {
+        partes.push(new Uint8Array(await comLimite(r.arrayBuffer(), 60000, "A transferência do vídeo demorou demasiado.")));
       }
-    } else {
-      partes.push(new Uint8Array(await r.arrayBuffer()));
+    } catch (e) {
+      try { if (ctl) ctl.abort(); } catch (err) {}
+      throw e;
     }
     if (!recebidos && !partes.reduce(function (s, p) { return s + (p.length || p.byteLength || 0); }, 0)) {
       throw new Error("O vídeo veio vazio.");
@@ -204,8 +240,10 @@
           return false;
         }
         var ok = /(^|\.)(tiktok\.com|kwai\.com|kw\.ai|kwai\.net|kwai-pro\.com)$/.test(host);
-        if (!ok || vistos[u]) return false;
+        var chave = idDoLink(u);
+        if (!ok || vistos[u] || vistos[chave]) return false;
         vistos[u] = true;
+        vistos[chave] = true;
         return true;
       });
   }
@@ -222,6 +260,11 @@
     var ok = 0;
     for (var i = 0; i < links.length; i++) {
       var link = links[i];
+      var chaveLink = idDoLink(link);
+      if (estado.itens.some(function (it) { return it.origem && idDoLink(it.origem) === chaveLink && it.estado !== "erro"; })) {
+        ok++;
+        continue;
+      }
       estado.links.estado = "A importar " + (i + 1) + "/" + links.length + "…";
       desenhar();
       try {
@@ -304,11 +347,22 @@
     var entraram = 0;
     ficheiros.forEach(function (f) {
       if (!f) return;
+      var nomeF = f.name || "video.mp4";
+      var bytesF = f.size || 0;
+      var jaExiste = estado.itens.some(function (it) {
+        if (!it || !it.ficheiro) return false;
+        if (it.ficheiro === f) return true;
+        if (!it.origem && bytesF > 64 && it.nome === nomeF && it.bytes === bytesF && f.lastModified && it.ficheiro.lastModified === f.lastModified && (it.estado === "pendente" || it.estado === "a_processar")) {
+          return true;
+        }
+        return false;
+      });
+      if (jaExiste) return;
       var item = {
         id: proximoId++,
         ficheiro: f,
-        nome: f.name || "video.mp4",
-        bytes: f.size || 0,
+        nome: nomeF,
+        bytes: bytesF,
         estado: "pendente",
         passo: "",
         progresso: 0,
@@ -366,12 +420,23 @@
     });
   }
 
+  function lerDefinicoesApp() {
+    var app = ambiente.app();
+    var s = (app && app.settings) || {};
+    if (s.nvidiaKey || s.geminiKey || s.tmdbKey) return s;
+    var guardadas = lerJson("cineclip.settings", null);
+    if (guardadas && (guardadas.nvidiaKey || guardadas.geminiKey || guardadas.tmdbKey)) {
+      return Object.assign({}, s, guardadas);
+    }
+    return s;
+  }
+
   /** O que falta configurar para o modo automático (null quando está tudo). */
   function faltaConfigurar() {
     var core = ambiente.core();
     var app = ambiente.app();
     if (!core || !app) return "O app ainda está a carregar. Tenta de novo dentro de alguns segundos.";
-    var s = app.settings || {};
+    var s = lerDefinicoesApp();
     var temIA = !!String(s.nvidiaKey || "").trim() || !!String(s.geminiKey || "").trim();
     if (!temIA) return "Adiciona a tua chave NVIDIA ou Google Gemini nas configurações — a IA identifica o filme e cria o gancho e a legenda.";
     if (!String(s.tmdbKey || "").trim()) return "Adiciona a tua chave TMDB nas configurações — é ela que confirma o filme e traz o pôster e a sinopse.";
@@ -393,29 +458,38 @@
    */
   async function processarItem(item, conta) {
     var core = ambiente.core();
-    var app = ambiente.app();
-    var s = app.settings || {};
+    var s = lerDefinicoesApp();
     var ficheiro = item.ficheiro;
 
     /* 1. Ler o vídeo ------------------------------------------------------ */
     definirPasso(item, "A ler o vídeo…", 0.02);
-    var info = await ambiente.lerVideo(ficheiro);
-    if (!info.largura || !info.altura) {
-      throw erroComTipo(
-        "O navegador abre o som mas não a imagem deste vídeo (codec H.265/HEVC, comum em vídeos baixados do TikTok). Converte-o para H.264 e volta a enviar.",
-        "codec"
-      );
+    var info = { largura: 0, altura: 0, duracao: 0 };
+    var erroVideo = null;
+    try {
+      info = (await comLimite(ambiente.lerVideo(ficheiro), 20000, "O navegador demorou demasiado a abrir o vídeo.")) || info;
+    } catch (e) {
+      erroVideo = e;
     }
     var duracao = 0;
     var tituloMetadados = "";
     try {
-      var meta = await core.lerMetadados(ficheiro);
+      var meta = await comLimite(core.lerMetadados(ficheiro), 15000);
       duracao = Number(meta && meta.duration) || 0;
+      if ((!info.largura || !info.altura) && meta && meta.width > 0 && meta.height > 0) {
+        info = { largura: meta.width, altura: meta.height, duracao: info.duracao || duracao };
+      }
       var campo = ((meta && meta.fields) || []).find(function (f) {
         return f && f.label === "Título";
       });
       tituloMetadados = campo ? campo.value : "";
     } catch (e) {}
+    if (!info.largura || !info.altura) {
+      if (erroVideo) throw erroVideo;
+      throw erroComTipo(
+        "O navegador abre o som mas não a imagem deste vídeo (codec H.265/HEVC, comum em vídeos baixados do TikTok). Converte-o para H.264 e volta a enviar.",
+        "codec"
+      );
+    }
     if (!duracao) duracao = Number(info.duracao) || 0;
     if (!duracao) throw erroComTipo("Não consegui ler a duração do vídeo.", "leitura");
     var fim = Math.min(MAX_SEGUNDOS, duracao);
@@ -423,7 +497,7 @@
 
     var corte = { top: 0, bottom: 0, vw: info.largura, vh: info.altura };
     try {
-      var barras = await core.detetarBarras(ficheiro, 0, fim);
+      var barras = await comLimite(core.detetarBarras(ficheiro, 0, fim), 25000);
       if (barras && barras.vh) {
         corte = {
           top: barras.y,
@@ -437,26 +511,30 @@
     /* 2. Identificar o filme --------------------------------------------- */
     definirPasso(item, "A identificar o filme…", 0.1);
     var temGemini = !!String(s.geminiKey || "").trim();
-    var quadros = await core.quadros(ficheiro, 0, fim, corte);
+    var quadros = await comLimite(core.quadros(ficheiro, 0, fim, corte), 90000, "A extração de quadros do vídeo demorou demasiado.");
     var audio = null;
     if (temGemini) {
       try {
-        audio = await core.audio(ficheiro, 0, fim);
+        audio = await comLimite(core.audio(ficheiro, 0, fim), 15000);
       } catch (e) {
         audio = null;
       }
     }
-    var ia = await core.identificar(s.nvidiaKey, quadros, s.lang, {
-      fileName: ficheiro.name,
-      metaTitle: tituloMetadados,
-      userHint: "",
-      geminiKey: s.geminiKey,
-      audioClip: audio,
-    });
+    var ia = await comLimite(
+      core.identificar(s.nvidiaKey, quadros, s.lang, {
+        fileName: ficheiro.name,
+        metaTitle: tituloMetadados,
+        userHint: "",
+        geminiKey: s.geminiKey,
+        audioClip: audio,
+      }),
+      120000,
+      "A identificação do filme pela IA demorou demasiado."
+    );
     if (!ia || (!ia.titulo && !(ia.atores && ia.atores.length))) {
       throw erroComTipo("A IA não conseguiu identificar o filme deste clipe.", "identificacao");
     }
-    var filme = await core.procurarTmdb(s.tmdbKey, ia);
+    var filme = await comLimite(core.procurarTmdb(s.tmdbKey, ia), 30000, "A pesquisa no TMDB demorou demasiado.");
     if (!filme) {
       throw erroComTipo(
         'Não encontrei "' + (ia.titulo || ia.titulo_original || "o filme") + '" no TMDB.',
@@ -481,7 +559,7 @@
     });
     if (!gancho) {
       try {
-        var g = await core.gerarGancho(s.nvidiaKey, quadros, s.lang, filme.title, s.geminiKey, audio);
+        var g = await comLimite(core.gerarGancho(s.nvidiaKey, quadros, s.lang, filme.title, s.geminiKey, audio), 60000);
         gancho = ((g && g.ganchos) || []).find(function (x) {
           return x && String(x).trim();
         });
@@ -493,19 +571,35 @@
 
     /* 4. Processar o vídeo -------------------------------------------------- */
     definirPasso(item, "A processar o vídeo… 0%", 0.25);
-    var blob = await core.processar(ficheiro, 0, fim, s.resolution, gancho, function (fracao) {
-      var pct = Math.max(0, Math.min(1, Number(fracao) || 0));
-      definirPasso(item, "A processar o vídeo… " + Math.round(pct * 100) + "%", 0.25 + pct * 0.6);
-    }, corte);
+    var blob;
+    try {
+      blob = await comLimite(
+        core.processar(ficheiro, 0, fim, s.resolution, gancho, function (fracao) {
+          var pct = Math.max(0, Math.min(1, Number(fracao) || 0));
+          definirPasso(item, "A processar o vídeo… " + Math.round(pct * 100) + "%", 0.25 + pct * 0.6);
+        }, corte),
+        240000,
+        "O processamento do vídeo (FFmpeg) demorou demasiado."
+      );
+    } catch (e) {
+      if (!estado.pararPedido && e && /demorou demasiado/.test(e.message) && core && typeof core.cancelarProcessamento === "function") {
+        try { core.cancelarProcessamento(); } catch (err) {}
+      }
+      throw e;
+    }
     if (!blob || !blob.size) throw erroComTipo("O FFmpeg não devolveu o vídeo processado.", "processamento");
 
     /* 5. Legenda ------------------------------------------------------------- */
     definirPasso(item, "A escrever a legenda…", 0.88);
-    var legenda = await core.gerarLegenda(s.nvidiaKey, filme, s.lang, {
-      cena: cena,
-      hookText: gancho,
-      geminiKey: s.geminiKey,
-    });
+    var legenda = await comLimite(
+      core.gerarLegenda(s.nvidiaKey, filme, s.lang, {
+        cena: cena,
+        hookText: gancho,
+        geminiKey: s.geminiKey,
+      }),
+      90000,
+      "A criação da legenda pela IA demorou demasiado."
+    );
     if (!legenda || !String(legenda).trim()) throw erroComTipo("A IA devolveu uma legenda vazia.", "legenda");
     try {
       core.guardarHistorico({ title: filme.title, year: filme.year, caption: legenda, date: ambiente.agora() });
@@ -514,15 +608,25 @@
     /* 6. Agendar ------------------------------------------------------------- */
     definirPasso(item, "A agendar…", 0.95);
     var fila = await core.lerFila();
-    var horario = core.proximoHorario(fila, conta.dailySlots || [], conta.id);
+    var chaveOrig = item.caixaId || (item.origem ? idDoLink(item.origem) : "");
+    var tentItem = item.caixaTentativa || 0;
+    var jaAgendado = chaveOrig
+      ? (fila || []).find(function (r) {
+          if (!r || r.status === "deleted" || (r.accountId || "acc_default") !== conta.id) return false;
+          var chR = r.caixaId || (r.linkOrigem ? idDoLink(r.linkOrigem) : "");
+          return chR === chaveOrig && (r.caixaTentativa || 0) === tentItem;
+        })
+      : null;
+    var horario = jaAgendado && jaAgendado.scheduledAt ? jaAgendado.scheduledAt : core.proximoHorario(fila, conta.dailySlots || [], conta.id);
     var base = semExtensao(ficheiro.name);
     var agora = ambiente.agora();
     var reel = {
-      id: "reel_" + agora + "_" + Math.random().toString(36).slice(2, 6),
+      id: jaAgendado ? jaAgendado.id : "reel_" + agora + "_" + Math.random().toString(36).slice(2, 6),
       accountId: conta.id,
-      createdAt: agora,
+      createdAt: jaAgendado ? jaAgendado.createdAt || agora : agora,
+      updatedAt: agora,
       scheduledAt: horario,
-      status: "scheduled",
+      status: jaAgendado && jaAgendado.status === "published" ? "published" : "scheduled",
       title: filme.title || base,
       originalTitle: filme.original,
       year: filme.year,
@@ -534,7 +638,12 @@
       videoSize: blob.size || 0,
       platforms: ["instagram"],
     };
-    await core.guardarNaFila(reel);
+    if (item.origem) reel.linkOrigem = item.origem;
+    if (item.caixaId) {
+      reel.caixaId = item.caixaId;
+      reel.caixaTentativa = tentItem;
+    }
+    if (!jaAgendado) await core.guardarNaFila(reel);
     item.resultado.horario = horario;
     item.resultado.reelId = reel.id;
     return reel;
@@ -720,6 +829,7 @@
         existente.contaId = contaId;
         existente.aparelho = meuAparelho();
         existente.atualizadoEm = agora;
+        delete caixaProcessados[id + ":" + (existente.tentativa || 0)];
         novos.push(existente);
         return;
       }
@@ -727,6 +837,7 @@
       var entrada = { id: id, url: url, destino: destino, contaId: contaId, aparelho: meuAparelho(), estado: "pendente", criadoEm: agora, atualizadoEm: agora };
       // Partilhar outra vez um link já tratado é uma nova tentativa: ganha à antiga ao juntar com a nuvem.
       if (existente) entrada.tentativa = (existente.tentativa || 0) + 1;
+      delete caixaProcessados[id + ":" + (entrada.tentativa || 0)];
       lista.push(entrada);
       novos.push(entrada);
     });
@@ -744,6 +855,7 @@
       e.estado = "pendente";
       e.erro = "";
       e.tentativa = (e.tentativa || 0) + 1;
+      delete caixaProcessados[id + ":" + (e.tentativa || 0)];
       e.forcar = !!(extra && extra.forcar);
       e.aparelho = meuAparelho();
       if (app && app.account && app.account.id) e.contaId = app.account.id;
@@ -797,9 +909,14 @@
       return e.estado === "pendente" || (e.atualizadoEm || e.criadoEm || 0) >= limite;
     });
     gravarCaixa(lista);
-    setTimeout(verificarCaixa, 0);
+    setTimeout(function () {
+      verificarCaixa();
+      acordarNuvem(false);
+    }, 0);
     return lista;
   }
+
+  var caixaProcessados = {};
 
   /** Links que ESTE aparelho deve processar agora. */
   function entradasParaMim() {
@@ -810,7 +927,8 @@
       if (it.caixaId) noLote[it.caixaId] = true;
     });
     return lerCaixa().filter(function (e) {
-      if (e.estado !== "pendente" || noLote[e.id]) return false;
+      var chaveTent = e.id + ":" + (e.tentativa || 0);
+      if (e.estado !== "pendente" || noLote[e.id] || caixaProcessados[chaveTent]) return false;
       if (e.destino === "aqui") return e.aparelho === eu;
       return e.destino === "pc" && processoPC;
     });
@@ -831,6 +949,9 @@
     try {
       for (var i = 0; i < entradas.length; i++) {
         var e = entradas[i];
+        var chaveTent = e.id + ":" + (e.tentativa || 0);
+        if (caixaProcessados[chaveTent] || estado.itens.some(function (it) { return it.caixaId === e.id; })) continue;
+        caixaProcessados[chaveTent] = true;
         estado.links.estado = "📥 A importar link " + (i + 1) + "/" + entradas.length + " do celular…";
         desenhar();
         try {
@@ -839,18 +960,20 @@
               (total ? Math.round((recebidos / total) * 100) + "%" : tamanho(recebidos));
             desenharEstadoLinks();
           });
+          var antesLen = estado.itens.length;
           adicionarFicheiros([ficheiro]);
-          var novo = estado.itens[estado.itens.length - 1];
+          var novo = estado.itens.length > antesLen ? estado.itens[estado.itens.length - 1] : null;
           if (novo) {
             novo.origem = e.url;
             novo.caixaId = e.id;
+            novo.caixaTentativa = e.tentativa || 0;
           }
         } catch (erro) {
           var msg = "Não importei este link: " + mensagemDeErro(erro, "falha desconhecida.");
           marcarEntrada(e.id, "erro", { erro: msg });
           estado.itens.push({
             id: proximoId++, ficheiro: null, nome: e.url, bytes: 0, estado: "erro", invalido: true,
-            passo: "", progresso: 0, erro: msg, resultado: null, origem: e.url, caixaId: e.id,
+            passo: "", progresso: 0, erro: msg, resultado: null, origem: e.url, caixaId: e.id, caixaTentativa: e.tentativa || 0,
           });
         }
       }

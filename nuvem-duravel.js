@@ -891,6 +891,8 @@
 
   /* ------------------------------------------------------- API de upload */
 
+  var inflightBlobUploads = typeof WeakMap !== "undefined" ? new WeakMap() : null;
+
   /**
    * Envia o vídeo para armazenamento durável e devolve o link público.
    * @param {Blob|File} blobOrFile
@@ -899,6 +901,19 @@
    * @returns {Promise<string>} URL pública do .mp4
    */
   async function uploadVideo(blobOrFile, fileName, opts) {
+    if (inflightBlobUploads && blobOrFile && typeof blobOrFile === "object") {
+      var inflight = inflightBlobUploads.get(blobOrFile);
+      if (inflight) return await inflight;
+      var runPromise = uploadVideoImpl_(blobOrFile, fileName, opts).finally(function () {
+        try { inflightBlobUploads.delete(blobOrFile); } catch (e) {}
+      });
+      inflightBlobUploads.set(blobOrFile, runPromise);
+      return await runPromise;
+    }
+    return await uploadVideoImpl_(blobOrFile, fileName, opts);
+  }
+
+  async function uploadVideoImpl_(blobOrFile, fileName, opts) {
     opts = opts || {};
     var cfg = config();
     var name = String(fileName || "reel_cineclip.mp4").replace(/[^a-zA-Z0-9._-]/g, "_");
@@ -1405,8 +1420,11 @@
    */
 
   var CLAIM_TTL_MS = 10 * 60 * 1000;
+  var TAB_CLAIM_SUFFIX = Math.random().toString(36).slice(2, 7);
 
-  /** Identificador estável deste aparelho — diz quem tem a claim. */
+  /** Identificador estável desta aba/aparelho — duas abas abertas no mesmo browser
+   *  partilham o localStorage, por isso levam um sufixo por aba para não publicarem o
+   *  mesmo Reel em paralelo. */
   function claimOwner(scope) {
     var st = loadState();
     var id = String(st.claimOwnerId || "");
@@ -1414,7 +1432,7 @@
       id = Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6);
       saveState({ claimOwnerId: id });
     }
-    return (scope ? scope + ":" : "") + id;
+    return (scope ? scope + ":" : "") + id + "_" + TAB_CLAIM_SUFFIX;
   }
 
   /** Chave da claim: por Reel e, quando conhecido, por cofre (multi-conta). */
