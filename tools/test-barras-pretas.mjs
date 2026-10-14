@@ -153,6 +153,18 @@ console.log("\n5. Cena muito escura (quadros sem área clara suficiente)");
   check("usa os quadros claros e mantém o filme todo", JSON.stringify(r) === JSON.stringify(esperado), JSON.stringify(r));
 }
 
+console.log("\n5b. Duração Infinity (WebM/MKV) não trava nem lança TypeError");
+{
+  const ctx = ambiente({
+    largura: LARGURA, altura: ALTURA, duracao: Infinity,
+    linhaClara: (t, y) => Number.isFinite(t) && y >= TOPO && y <= FUNDO,
+  });
+  const rSemFim = await ctx.bi("blob:x", 0);
+  const rComFim = await ctx.bi("blob:x", 0, 60);
+  check("com duration=Infinity e sem fim explícito, não falha e deteta as barras", JSON.stringify(rSemFim) === JSON.stringify(esperado), JSON.stringify(rSemFim));
+  check("com duration=Infinity e fim=60, usa o fim finito", JSON.stringify(rComFim) === JSON.stringify(esperado), JSON.stringify(rComFim));
+}
+
 console.log("\n6. Os patches podem correr outra vez sem duplicar nada");
 {
   const dir = path.join(root, "tools", "patches");

@@ -88,6 +88,19 @@ function ativarRobo24h() {
 }
 
 function verificarEPostarReels() {
+  let scriptLock = null;
+  try {
+    if (typeof LockService !== "undefined" && LockService && LockService.getScriptLock) {
+      scriptLock = LockService.getScriptLock();
+      if (!scriptLock.tryLock(5000)) {
+        Logger.log("⏳ Outra execução do Robô 24h já está em curso — ignorado.");
+        return;
+      }
+    }
+  } catch (e) {
+    scriptLock = null;
+  }
+  try {
   const vault = lerCofreNuvem();
   if (!vault || !Array.isArray(vault.queue)) {
     Logger.log("Nenhum cofre encontrado na nuvem. Abre o CineClip, faz login e clica no ícone da nuvem no topo para sincronizar.");
@@ -108,6 +121,7 @@ function verificarEPostarReels() {
     // gravava nos agendados. Só aparece em filas sincronizadas nesse modo: aceita-se
     // como agendado normal, senão esses Reels ficavam invisíveis e nunca saíam.
     if (item.status !== "scheduled" && item.status !== "device_scheduled") continue;
+    if (item.publishedId) continue;
 
     const acc = accounts.find(function (a) { return a.id === (item.accountId || "acc_default"); }) || accounts[0];
     if (!acc || acc.autoPilot === false || acc.mode === "browser_bot") continue;
@@ -199,7 +213,9 @@ function verificarEPostarReels() {
       item.errorMsg = "";
       item.needsReupload = false;
       item.cloudError = "";
-      alterou = true;
+      vault.updatedAt = Date.now();
+      salvarCofreNuvem(vault);
+      alterou = false;
       publicados++;
       Logger.log("✅ Publicado com sucesso: " + item.title);
     } catch (err) {
@@ -214,9 +230,9 @@ function verificarEPostarReels() {
       alterou = true;
       Logger.log("❌ Erro ao publicar '" + item.title + "': " + msg);
     } finally {
-      // Liberta a claim em qualquer caso (sucesso ou erro) para o app poder
-      // publicar os próximos itens sem esperar pelo TTL.
-      libertarReclamacao(claim);
+      // Se falhou, liberta a claim para permitir nova tentativa; se publicou,
+      // mantém a claim ativa até expirar para nenhum outro aparelho publicar 2x.
+      if (item.status !== "published") libertarReclamacao(claim);
     }
   }
 
@@ -225,6 +241,9 @@ function verificarEPostarReels() {
     salvarCofreNuvem(vault);
   }
   Logger.log("Resumo: " + publicados + " publicado(s), " + pendentes.length + " pendente(s)" + (pendentes.length ? " → " + pendentes.join(" | ") : ""));
+  } finally {
+    try { if (scriptLock) scriptLock.releaseLock(); } catch (e) {}
+  }
 }
 
 // Devolve null se o link está vivo, ou uma descrição do problema.
@@ -393,16 +412,23 @@ function publicarMetaGraphApi(acc, item, coverUrl) {
     }
   }
 
-  const pubRes = UrlFetchApp.fetch(GRAPH_BASE + "/" + igId + "/media_publish", {
-    method: "post",
-    payload: { creation_id: containerId, access_token: token },
-    muteHttpExceptions: true
-  });
-  const pubJson = JSON.parse(pubRes.getContentText());
-  if (!pubJson || pubJson.error || !pubJson.id) {
-    throw new Error((pubJson && pubJson.error && pubJson.error.message) || "Erro no media_publish");
+  let pubJson = null;
+  for (let pTent = 1; pTent <= 6; pTent++) {
+    const pubRes = UrlFetchApp.fetch(GRAPH_BASE + "/" + igId + "/media_publish", {
+      method: "post",
+      payload: { creation_id: containerId, access_token: token },
+      muteHttpExceptions: true
+    });
+    pubJson = JSON.parse(pubRes.getContentText());
+    if (pubJson && !pubJson.error && pubJson.id) return String(pubJson.id);
+    const msg = String((pubJson && pubJson.error && pubJson.error.message) || "");
+    if (pTent < 6 && /(process|not ready|still|aguard|indispon)/i.test(msg)) {
+      Utilities.sleep(5000 * pTent);
+      continue;
+    }
+    break;
   }
-  return String(pubJson.id);
+  throw new Error((pubJson && pubJson.error && pubJson.error.message) || "Erro no media_publish");
 }
 
 // --------------------------------------------------------------- criptografia
