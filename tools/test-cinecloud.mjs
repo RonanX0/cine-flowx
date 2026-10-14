@@ -123,6 +123,9 @@ function makeStorage() {
 }
 
 class XMLHttpRequestStub {
+  static travarProximos = 0;
+  static travados = 0;
+  static urls = [];
   constructor() {
     this.upload = {};
     this.status = 0;
@@ -132,6 +135,7 @@ class XMLHttpRequestStub {
   open(method, url) {
     this._method = method;
     this._url = url;
+    XMLHttpRequestStub.urls.push(method + " " + url);
     this._headers = {};
   }
   setRequestHeader(k, v) {
@@ -139,6 +143,13 @@ class XMLHttpRequestStub {
   }
   send(body) {
     const total = body ? body.byteLength || body.length || 0 : 0;
+    if (XMLHttpRequestStub.travarProximos > 0) {
+      // Simula uma ligação presa: sai 1% e depois nada, até alguém chamar abort().
+      XMLHttpRequestStub.travarProximos--;
+      XMLHttpRequestStub.travados++;
+      if (this.upload.onprogress) this.upload.onprogress({ lengthComputable: true, loaded: Math.floor(total / 100), total });
+      return;
+    }
     (async () => {
       try {
         if (this.upload.onprogress) this.upload.onprogress({ lengthComputable: true, loaded: Math.floor(total / 2), total });
@@ -375,6 +386,22 @@ check("isDurable('r2') === true", CC.isDurable(smallUrl) === true);
 check("classifyUrl de host antigo → 'temp'", CC.classifyUrl("https://kappa.lol/abc.mp4") === "temp");
 check("isDurable de host antigo === false", CC.isDurable("https://uguu.se/x.mp4") === false);
 
+/* 5b — envio preso em 1% → aborta e tenta de novo, sem esperar os 5 minutos */
+setSettings(sb, { r2WorkerUrl: "/cloud-api", r2Token: TOKEN, r2MaxMb: 95, cloudStallMs: 150 });
+XMLHttpRequestStub.travarProximos = 1;
+XMLHttpRequestStub.travados = 0;
+const t0 = Date.now();
+let urlDepoisDeParar = "";
+let erroParado = null;
+try {
+  urlDepoisDeParar = await CC.uploadVideo(new Blob([randomBytes(64 * 1024)], { type: "video/mp4" }), "preso.mp4", {});
+} catch (e) {
+  erroParado = e;
+}
+check("envio preso: deteta que parou e tenta de novo", XMLHttpRequestStub.travados === 1 && /\/cloud-api\/v\//.test(urlDepoisDeParar), erroParado ? erroParado.message : urlDepoisDeParar);
+check("envio preso: não espera o tempo-limite de 5 min", Date.now() - t0 < 15000, `${Date.now() - t0} ms`);
+setSettings(sb, { r2WorkerUrl: "/cloud-api", r2Token: TOKEN, r2MaxMb: 95 });
+
 const full = await fetch(smallUrl);
 const back = Buffer.from(await full.arrayBuffer());
 check("o vídeo volta byte-a-byte (" + back.length + " bytes)", back.length === smallBytes.length && back.equals(Buffer.from(smallBytes)));
@@ -396,6 +423,29 @@ const bigRanged = await fetch(bigUrl, { headers: { Range: "bytes=0-0" } });
 check("vídeo grande fica legível (206)", bigRanged.status === 206, "HTTP " + bigRanged.status);
 await bigRanged.body?.cancel?.();
 check("diagnóstico regista o provider presigned", /presign/i.test(CC.report()), "");
+
+/* 6b — acima do limite configurado: nunca manda o vídeo ao Worker (a Cloudflare corta
+   a ligação acima de 100 MB e o envio ficava preso em 1%) */
+console.log("\nVídeo acima do limite → direto para a URL pré-assinada");
+setSettings(sb, { r2WorkerUrl: "/cloud-api", r2Token: TOKEN, r2MaxMb: 1 });
+XMLHttpRequestStub.urls = [];
+const acimaUrl = await CC.uploadVideo(new Blob([randomBytes(2 * 1024 * 1024)], { type: "video/mp4" }), "acima.mp4");
+check("vai direto pela URL pré-assinada", /\/cloud-api\/v\//.test(acimaUrl) && XMLHttpRequestStub.urls.some((u) => /^PUT .*\/s3\//.test(u)), XMLHttpRequestStub.urls.join(", "));
+check("não envia o vídeo ao Worker (/api/video)", !XMLHttpRequestStub.urls.some((u) => /\/api\/video$/.test(u)), XMLHttpRequestStub.urls.join(", "));
+
+setSettings(sb, { r2WorkerUrl: "/cloud-api", r2Token: TOKEN, r2MaxMb: 1, r2Presign: false });
+XMLHttpRequestStub.urls = [];
+let erroGrande = null;
+const tGrande = Date.now();
+try {
+  await CC.uploadVideo(new Blob([randomBytes(2 * 1024 * 1024)], { type: "video/mp4" }), "enorme.mp4");
+} catch (e) {
+  erroGrande = e;
+}
+check("sem presign: falha logo com code too_large", !!erroGrande && erroGrande.code === "too_large" && Date.now() - tGrande < 5000, erroGrande ? erroGrande.code + " · " + erroGrande.message : "não falhou");
+check("a mensagem diz o tamanho e como resolver (Upload em massa / Estúdio)", !!erroGrande && /2\.0 MB|MB/.test(erroGrande.message) && /Upload em massa/.test(erroGrande.message), erroGrande && erroGrande.message);
+check("não tenta enviar a lado nenhum (nem host temporário)", XMLHttpRequestStub.urls.length === 0, XMLHttpRequestStub.urls.join(", "));
+setSettings(sb, { r2WorkerUrl: "/cloud-api", r2Token: TOKEN, r2MaxMb: 95 });
 
 /* 7 — ficheiro ilegível (File movido/apagado) */
 console.log("\nFicheiro ilegível");
