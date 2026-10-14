@@ -242,6 +242,30 @@ console.log("\n7. Primeiro comentário em cada Reel (Robô 24h)");
   check("o webhook (Make/n8n) recebe o firstComment", /firstComment: textoPrimeiroComentario\(modeloPrimeiroComentario\(vault\), item\)/.test(gas));
 }
 
+/* ------------------------------------------------ 8. acorda a nuvem (Vercel) */
+console.log("\n8. O Robô acorda a nuvem da Vercel quando há links à espera");
+{
+  check("o endereço da nuvem vem do site (padrão cine-flowx.vercel.app)", gas.includes('const NUVEM_URL = "https://cine-flowx.vercel.app/api/nuvem";'));
+  check("acorda antes de publicar (não espera pelos Reels)", /acordarNuvem\(vault\);\s*\n\s*const now = Date\.now\(\);/.test(gas));
+  const chamadas = [];
+  const logs = [];
+  let codigo = 202;
+  const ctx = vm.createContext({
+    Logger: { log: (m) => logs.push(String(m)) },
+    Utilities: { sleep: () => {} },
+    UrlFetchApp: { fetch: (url, opts) => { chamadas.push({ url, opts }); return { getResponseCode: () => codigo, getContentText: () => "{}" }; } },
+  });
+  vm.runInContext(gas + ";this.api={acordarNuvem};", ctx);
+  ctx.api.acordarNuvem({ linksCelular: [{ destino: "nuvem", estado: "feito" }, { destino: "pc", estado: "pendente" }] });
+  check("sem links à espera da nuvem, não chama", chamadas.length === 0);
+  ctx.api.acordarNuvem({ linksCelular: [{ destino: "nuvem", estado: "pendente" }, { destino: "nuvem", estado: "pendente" }] });
+  check("com links à espera, faz POST /api/nuvem", chamadas.length === 1 && chamadas[0].url === "https://cine-flowx.vercel.app/api/nuvem" && chamadas[0].opts.method === "post");
+  check("regista quantos links acordou", logs.some((l) => /2 link\(s\) à espera da nuvem — nuvem acordada/.test(l)), logs.join(" | "));
+  codigo = 503;
+  ctx.api.acordarNuvem({ linksCelular: [{ destino: "nuvem", estado: "pendente" }] });
+  check("se a Vercel não tiver a chave, explica o que falta", logs.some((l) => /CINECLIP_CHAVE_SERVIDOR/.test(l)));
+}
+
 /* -------------------------------------------------------------------- fim */
 if (failures.length) {
   console.log("\nFalhas:");

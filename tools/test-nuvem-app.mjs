@@ -45,7 +45,7 @@ async function esperar(desc, fn, ms = 5000) {
   }
 }
 
-function celular({ url = "https://cine-flowx.vercel.app/", servidor = true, opcoes = null, caixa = null } = {}) {
+function celular({ url = "https://cine-flowx.vercel.app/", servidor = true, opcoes = null, caixa = null, vercel = false } = {}) {
   const dom = new JSDOM("<!doctype html><html><head></head><body></body></html>", {
     url, runScripts: "outside-only", pretendToBeVisual: true,
     resources: new ResourceLoader({ userAgent: "Mozilla/5.0 (Linux; Android 12; SM-G970F) AppleWebKit/537.36 Chrome/141.0 Mobile Safari/537.36" }),
@@ -55,7 +55,7 @@ function celular({ url = "https://cine-flowx.vercel.app/", servidor = true, opco
   if (caixa) window.localStorage.setItem("cineclip.links.caixa", JSON.stringify(caixa));
   window.URL.createObjectURL = () => "blob:x";
   window.URL.revokeObjectURL = () => {};
-  const reg = { sincronizacoes: 0, baixados: [], pedidosClaims: 0 };
+  const reg = { sincronizacoes: 0, baixados: [], pedidosClaims: 0, acordados: 0, ordem: [] };
   window.CineCloud = {
     activeClaims: async () => {
       reg.pedidosClaims++;
@@ -70,7 +70,7 @@ function celular({ url = "https://cine-flowx.vercel.app/", servidor = true, opco
     settings: { nvidiaKey: "nv", tmdbKey: "tm" },
     account: { id: "acc_cena", name: "@cena.oculta", dailySlots: ["12:00"] },
     atualizarFila() {},
-    sincronizar: async () => { reg.sincronizacoes++; },
+    sincronizar: async () => { reg.sincronizacoes++; reg.ordem.push("sincronizar"); },
     abrirConfiguracoes() {}, abrirAgendador() {}, abrirNoEstudio() {},
   });
   lote.ambiente.core = () => ({
@@ -80,6 +80,9 @@ function celular({ url = "https://cine-flowx.vercel.app/", servidor = true, opco
     limparLegenda: (s) => s, proximoHorario: () => "2026-10-14T12:00", guardarNaFila: async (r) => { fila.push(r); }, lerFila: async () => fila.slice(), guardarHistorico() {},
   });
   lote.ambiente.lerVideo = async () => ({ largura: 1080, altura: 1920, duracao: 30 });
+  // Nuvem na Vercel (api/nuvem.js): GET diz se está configurada, POST acorda-a.
+  lote.ambiente.consultarNuvem = async () => ({ ok: true, configurado: !!vercel, tipo: "vercel" });
+  lote.ambiente.acordarNuvem = async () => { reg.acordados++; reg.ordem.push("acordar"); return { ok: true, status: 202 }; };
   lote.ambiente.baixarLink = async (link) => { reg.baixados.push(link); return new window.File([new Uint8Array(4)], "v.mp4", { type: "video/mp4" }); };
   return { dom, window, lote, reg, fila };
 }
@@ -174,6 +177,39 @@ console.log("\n3. Estado no painel e «Tentar de novo»");
   check("«Fazer aqui» processa o link no próprio aparelho", c.reg.baixados[0] === "https://vm.tiktok.com/err/");
   const e = c.lote.lerCaixa().find((x) => x.id === "lk_err");
   check("e o link passa a «aqui», feito", e.destino === "aqui" && e.estado === "feito" && e.tentativa === 1);
+  c.dom.window.close();
+}
+
+console.log("\n3b. Nuvem na Vercel (sem servidor ligado)");
+{
+  const c = celular({ servidor: false, vercel: true });
+  c.lote.receberPartilha(partilha(LINK));
+  await esperar("botão nuvem", () => botoesDaFolha(c.window).find((b) => /Processar na nuvem/.test(b.textContent)));
+  check("com a Vercel configurada, a folha oferece «☁️ Processar na nuvem»", true);
+  botoesDaFolha(c.window).find((b) => /Processar na nuvem/.test(b.textContent)).click();
+  await esperar("enviado", () => /Enviado para a nuvem/.test(c.window.document.querySelector(".cl-folha")?.textContent || ""));
+  check("acorda a nuvem uma vez, depois de o link chegar ao cofre", c.reg.acordados === 1 && c.reg.ordem.indexOf("sincronizar") >= 0 && c.reg.ordem.indexOf("sincronizar") < c.reg.ordem.indexOf("acordar"), JSON.stringify(c.reg.ordem));
+  check("o celular não processa nada", c.reg.baixados.length === 0 && c.fila.length === 0);
+  c.dom.window.close();
+}
+{
+  const c = celular({ servidor: false, vercel: false });
+  c.lote.receberPartilha(partilha(LINK));
+  await sleep(400);
+  check("sem a Vercel configurada (nem servidor), não oferece a nuvem", !botoesDaFolha(c.window).some((b) => /Processar na nuvem/.test(b.textContent)) && c.reg.acordados === 0);
+  c.dom.window.close();
+}
+{
+  const agora = Date.now();
+  const c = celular({ servidor: false, vercel: true, caixa: [
+    { id: "lk_espera", url: "https://vm.tiktok.com/espera/", destino: "nuvem", estado: "pendente", criadoEm: agora, atualizadoEm: agora },
+  ] });
+  await esperar("acordada ao abrir", () => c.reg.acordados === 1, 4000).catch(() => {});
+  check("ao abrir o app com links à espera da nuvem, acorda-a", c.reg.acordados === 1, String(c.reg.acordados));
+  check("não acorda outra vez logo a seguir (no máximo 1x a cada 2 min)", c.lote.acordarNuvem(false) === false && c.reg.acordados === 1);
+  c.window.CineLote.abrir();
+  await esperar("estado", () => /Nuvem \(Vercel\): pronta/.test(c.window.document.querySelector(".cl-painel")?.textContent || ""));
+  check("o painel mostra «☁️ Nuvem (Vercel): pronta»", true);
   c.dom.window.close();
 }
 

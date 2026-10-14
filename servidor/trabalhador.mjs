@@ -21,26 +21,48 @@ import { resolverVideo, abrirVideo, nomeDoFicheiro } from "../server/importar-vi
 
 const POR_CICLO = 3;
 const CONFERIR_DURANTE_MS = 30 * 60 * 1000;
+/** Tentativas por link antes de desistir (na Vercel, um vídeo que passe dos 5 min é
+ *  cortado a meio: sem este limite, o mesmo link voltava a ser tentado para sempre). */
+const MAX_TENTATIVAS = 3;
+const GUARDAR_REGISTO_MS = 7 * 24 * 60 * 60 * 1000;
 
 const agora = () => Date.now();
 const carimbo = () => new Date().toISOString().replace("T", " ").slice(0, 19);
 
-export function criarTrabalhador({ cfg, app, pastaDados, fetchFn = fetch, log = (...a) => console.log(carimbo(), ...a) }) {
-  const ficheiroRegisto = path.join(pastaDados, "registo.json");
+/** Registo num ficheiro (servidor com disco próprio: Oracle, Hetzner…). */
+export function registoEmFicheiro(pastaDados) {
+  const ficheiro = path.join(pastaDados, "registo.json");
+  return {
+    async ler() {
+      try {
+        return JSON.parse(fs.readFileSync(ficheiro, "utf8"));
+      } catch {
+        return { links: {}, reels: {}, tentativas: {} };
+      }
+    },
+    async gravar(r) {
+      fs.mkdirSync(pastaDados, { recursive: true });
+      const tmp = ficheiro + ".tmp";
+      fs.writeFileSync(tmp, JSON.stringify(r, null, 1));
+      fs.renameSync(tmp, ficheiro);
+    },
+  };
+}
+
+export function criarTrabalhador({ cfg, app, pastaDados, registo: guardaRegisto, fetchFn = fetch, log = (...a) => console.log(carimbo(), ...a) }) {
+  const guarda = guardaRegisto || registoEmFicheiro(pastaDados);
   const dono = "servidor:" + (cfg.NOME_SERVIDOR || "nuvem");
 
-  function lerRegisto() {
-    try {
-      return JSON.parse(fs.readFileSync(ficheiroRegisto, "utf8"));
-    } catch {
-      return { links: {}, reels: {} };
-    }
+  async function lerRegisto() {
+    const r = (await guarda.ler()) || {};
+    return { links: r.links || {}, reels: r.reels || {}, tentativas: r.tentativas || {} };
   }
-  function gravarRegisto(r) {
-    fs.mkdirSync(pastaDados, { recursive: true });
-    const tmp = ficheiroRegisto + ".tmp";
-    fs.writeFileSync(tmp, JSON.stringify(r, null, 1));
-    fs.renameSync(tmp, ficheiroRegisto);
+  async function gravarRegisto(r) {
+    // Não deixa o registo crescer para sempre (o da Vercel vai cifrado no R2).
+    const limite = agora() - GUARDAR_REGISTO_MS;
+    for (const [id, l] of Object.entries(r.links)) if ((l.quando || 0) < limite) delete r.links[id];
+    for (const [id, reel] of Object.entries(r.reels)) if ((reel.updatedAt || 0) < limite) delete r.reels[id];
+    await guarda.gravar(r);
   }
 
   /** Descarrega o vídeo do link para um ficheiro. */
@@ -125,7 +147,7 @@ export function criarTrabalhador({ cfg, app, pastaDados, fetchFn = fetch, log = 
   }
 
   async function processarLink(entrada) {
-    const registo = lerRegisto();
+    const registo = await lerRegisto();
     const feito = registo.links[entrada.id];
     if (feito && feito.reelId && registo.reels[feito.reelId]) {
       // Já processado (o cofre perdeu a marca): só repõe o Reel e a marca.
@@ -138,7 +160,21 @@ export function criarTrabalhador({ cfg, app, pastaDados, fetchFn = fetch, log = 
       return;
     }
 
-    log(`▶ ${entrada.url}`);
+    // Conta a tentativa ANTES de começar: se o processo for cortado a meio (limite de
+    // tempo da Vercel), a próxima chamada já sabe que esta falhou.
+    const n = (registo.tentativas[entrada.id] || 0) + 1;
+    if (n > MAX_TENTATIVAS) {
+      const msg = "A nuvem tentou " + MAX_TENTATIVAS + " vezes e não conseguiu terminar este vídeo (pode ser longo demais para o limite de tempo). Toque em «Fazer aqui».";
+      log(`  ❌ ${entrada.url}: ${msg}`);
+      await alterarCofre((c) => marcarLink(c, entrada.id, "erro", { erro: msg }));
+      delete registo.tentativas[entrada.id];
+      await gravarRegisto(registo);
+      return;
+    }
+    registo.tentativas[entrada.id] = n;
+    await gravarRegisto(registo);
+
+    log(`▶ ${entrada.url}${n > 1 ? ` (tentativa ${n}/${MAX_TENTATIVAS})` : ""}`);
     const pasta = await video.pastaTemporaria();
     try {
       const cofre = await lerCofre(cfg, { fetchFn });
@@ -162,13 +198,16 @@ export function criarTrabalhador({ cfg, app, pastaDados, fetchFn = fetch, log = 
       });
       registo.links[entrada.id] = { reelId: pronto.id, quando: agora() };
       registo.reels[pronto.id] = pronto;
-      gravarRegisto(registo);
+      delete registo.tentativas[entrada.id];
+      await gravarRegisto(registo);
       log(`  ✅ agendado: "${pronto.title}" para ${String(pronto.scheduledAt).replace("T", " às ")}`);
     } catch (e) {
       const revisar = e && e.tipo === "revisar";
       const msg = (e && e.message) || String(e);
       log(`  ${revisar ? "🟡 para rever" : "❌ erro"}: ${msg}`);
       await alterarCofre((c) => marcarLink(c, entrada.id, revisar ? "revisar" : "erro", { erro: msg })).catch((e2) => log("  (não consegui marcar o erro no cofre: " + e2.message + ")"));
+      delete registo.tentativas[entrada.id];
+      await gravarRegisto(registo).catch(() => {});
     } finally {
       fs.promises.rm(pasta, { recursive: true, force: true }).catch(() => {});
     }
@@ -176,7 +215,7 @@ export function criarTrabalhador({ cfg, app, pastaDados, fetchFn = fetch, log = 
 
   /** Repõe Reels que uma sincronização do app tenha atropelado. */
   async function conferirRecentes(cofre) {
-    const registo = lerRegisto();
+    const registo = await lerRegisto();
     const recentes = Object.values(registo.reels).filter((r) => agora() - (r.updatedAt || 0) < CONFERIR_DURANTE_MS);
     const faltam = recentes.filter((r) => !(cofre.queue || []).some((q) => q.id === r.id) && !(cofre.deletedReelIds || []).includes(r.id));
     if (!faltam.length) return;
@@ -184,20 +223,25 @@ export function criarTrabalhador({ cfg, app, pastaDados, fetchFn = fetch, log = 
     await alterarCofre((c) => faltam.map((r) => juntarReel(c, r)).some(Boolean));
   }
 
-  async function ciclo() {
+  /**
+   * Um ciclo: trata até `maxLinks` links pendentes. `restantes` diz quantos ficaram
+   * por tratar (a Vercel usa-o para se chamar outra vez).
+   */
+  async function ciclo({ maxLinks = POR_CICLO } = {}) {
     await sinalDeVida(cfg, dono, { fetchFn });
     const cofre = await lerCofre(cfg, { fetchFn });
     if (!cofre) {
       log("Cofre ainda vazio: abre o CineClip, faz login e sincroniza uma vez.");
-      return { processados: 0 };
+      return { processados: 0, restantes: 0 };
     }
     await conferirRecentes(cofre).catch((e) => log("conferir: " + e.message));
-    const pendentes = (cofre.linksCelular || []).filter((e) => e && e.destino === "nuvem" && e.estado === "pendente").slice(0, POR_CICLO);
+    const todos = (cofre.linksCelular || []).filter((e) => e && e.destino === "nuvem" && e.estado === "pendente");
+    const pendentes = todos.slice(0, maxLinks);
     for (const entrada of pendentes) {
       await processarLink(entrada);
       await sinalDeVida(cfg, dono, { fetchFn });
     }
-    return { processados: pendentes.length };
+    return { processados: pendentes.length, restantes: todos.length - pendentes.length };
   }
 
   return { ciclo, processarLink, lerRegisto };

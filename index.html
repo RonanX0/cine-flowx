@@ -1030,7 +1030,7 @@ ie&&je.dismiss(ie);
 // 2) SÓ DEPOIS grava o cofre — já com os links da nuvem dentro.
 D.queue=T,D.updatedAt=Date.now();
 await Km(r,D);
-return D})().finally(()=>{Oa=null})),Oa}function Tg(){try{const r=localStorage.getItem(Jc);if(!r)return null;const o=JSON.parse(r);return o!=null&&o.username&&(o!=null&&o.vaultHash)&&(o!=null&&o.encryptionKeyB64)?o:null}catch{return null}}function Zc(r){r?localStorage.setItem(Jc,JSON.stringify(r)):localStorage.removeItem(Jc)}function kS(r){const cc=Eg(),cw=String(cc.r2WorkerUrl||"").trim().replace(/\/+$/,""),ct=String(cc.r2Token||"").trim(),du=String(cc.driveScriptUrl||"").trim().replace(/\/+$/,""),dt=String(cc.driveToken||"").trim(),cn=cw&&ct?"Cloudflare R2 ✔ ("+cw+")":du&&dt?"Google Drive ✔ ("+du+")":"⚠️ SEM NUVEM DURÁVEL — vai usar bytebin/kappa.lol, que EXPIRAM. No CineClip: Configurações → Nuvem durável (o Google Drive é grátis), e volta a copiar este código.";return`// ============================================================================
+return D})().finally(()=>{Oa=null})),Oa}function Tg(){try{const r=localStorage.getItem(Jc);if(!r)return null;const o=JSON.parse(r);return o!=null&&o.username&&(o!=null&&o.vaultHash)&&(o!=null&&o.encryptionKeyB64)?o:null}catch{return null}}function Zc(r){r?localStorage.setItem(Jc,JSON.stringify(r)):localStorage.removeItem(Jc)}function kS(r){const cc=Eg(),nu=(function(){try{return(/\.vercel\.app$/i.test(location.hostname)?location.origin:"https://cine-flowx.vercel.app")+"/api/nuvem"}catch(e){return"https://cine-flowx.vercel.app/api/nuvem"}})(),cw=String(cc.r2WorkerUrl||"").trim().replace(/\/+$/,""),ct=String(cc.r2Token||"").trim(),du=String(cc.driveScriptUrl||"").trim().replace(/\/+$/,""),dt=String(cc.driveToken||"").trim(),cn=cw&&ct?"Cloudflare R2 ✔ ("+cw+")":du&&dt?"Google Drive ✔ ("+du+")":"⚠️ SEM NUVEM DURÁVEL — vai usar bytebin/kappa.lol, que EXPIRAM. No CineClip: Configurações → Nuvem durável (o Google Drive é grátis), e volta a copiar este código.";return`// ============================================================================
 // ROBÔ 24H NA NUVEM — CINECLIP STUDIO · versão NUVEM DURÁVEL (Google Drive / Cloudflare R2)
 // Conta vinculada: ${r.username}
 // Armazenamento: ${cn}
@@ -1051,6 +1051,8 @@ const R2_WORKER_URL = "${cw}";
 const R2_TOKEN = "${ct}";
 const DRIVE_SCRIPT_URL = "${du}";
 const DRIVE_TOKEN = "${dt}";
+// ☁️ Nuvem na Vercel: o Robô acorda-a quando há links do celular à espera.
+const NUVEM_URL = "${nu}";
 const KV_BASE = "https://keyvalue.immanuel.co/api/KeyVal";
 const KV_APP = "1729nxi0";
 const GRAPH_BASE = "https://graph.facebook.com/v22.0";
@@ -1123,6 +1125,8 @@ function verificarEPostarReels() {
     Logger.log("Nenhum cofre encontrado na nuvem. Abre o CineClip, faz login e clica no ícone da nuvem no topo para sincronizar.");
     return;
   }
+
+  acordarNuvem(vault);
 
   const now = Date.now();
   const accounts = Array.isArray(vault.accounts) ? vault.accounts : [];
@@ -1357,6 +1361,27 @@ function publicarPrimeiroComentario(acc, mediaId, item, modelo) {
   }
   Logger.log("⚠️ Primeiro comentário falhou: " + erro);
   return { id: "", erro: erro };
+}
+
+// ------------------------------------------------------------ nuvem (Vercel)
+// Links mandados do celular para "☁️ Processar na nuvem" ficam no cofre como
+// pendentes. A nuvem da Vercel só trabalha quando alguém a chama: o Robô chama-a a
+// cada 5 min enquanto houver links à espera (ela responde logo e trabalha sozinha).
+function acordarNuvem(vault) {
+  if (!NUVEM_URL) return;
+  const espera = (Array.isArray(vault.linksCelular) ? vault.linksCelular : []).filter(function (e) {
+    return e && e.destino === "nuvem" && e.estado === "pendente";
+  }).length;
+  if (!espera) return;
+  try {
+    const r = UrlFetchApp.fetch(NUVEM_URL, { method: "post", muteHttpExceptions: true });
+    const codigo = r.getResponseCode();
+    if (codigo === 202) Logger.log("☁️ " + espera + " link(s) à espera da nuvem — nuvem acordada.");
+    else if (codigo === 503) Logger.log("⚠️ " + espera + " link(s) à espera da nuvem, mas a nuvem da Vercel não está configurada (falta CINECLIP_CHAVE_SERVIDOR).");
+    else Logger.log("⚠️ A nuvem respondeu HTTP " + codigo + " (" + espera + " link(s) à espera).");
+  } catch (e) {
+    Logger.log("⚠️ Não consegui acordar a nuvem: " + (e && e.message ? e.message : e));
+  }
 }
 
 function publicarMetaGraphApi(acc, item, coverUrl) {
