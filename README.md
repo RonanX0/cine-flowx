@@ -99,7 +99,7 @@ O código está em `lote-massa.js` (legível, fora do bundle). A ligação ao bu
 
 ## ☁️ Processar na nuvem (servidor)
 
-Um servidor próprio (ex.: Hetzner CX23, ~€6/mês) processa sozinho os links que o celular manda
+Um servidor próprio (grátis na Oracle Cloud ou ~€6/mês na Hetzner) processa sozinho os links que o celular manda
 com **☁️ Processar na nuvem** — celular e PC podem ficar desligados. Usa o mesmo código do site
 (IA, TMDB, upload em massa) com o FFmpeg nativo. Instalação num comando e guia passo a passo
 em [`servidor/README.md`](servidor/README.md).

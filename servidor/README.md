@@ -6,6 +6,8 @@ identifica o filme, cria o gancho e a legenda, formata em 9:16, guarda no seu Cl
 e agenda o Reel. O **Robô 24h** publica no Instagram, como sempre. Celular e PC podem ficar
 desligados.
 
+Pode rodar de graça na **Oracle Cloud** ou por cerca de €6/mês na **Hetzner**.
+
 O servidor usa **o mesmo código do site** (IA, TMDB, regras do upload em massa). Só a parte
 de vídeo troca o FFmpeg do navegador pelo FFmpeg do servidor — por isso vídeos em H.265 deixam
 de dar problema e o processamento é bem mais rápido.
@@ -17,9 +19,70 @@ de dar problema e o processamento é bem mais rápido.
 - **Robô 24h ativo** (Agendador → Robô 24h). É ele que publica.
 - Chaves de IA (NVIDIA ou Gemini) e TMDB nas configurações do app — o servidor usa as mesmas.
 
-## Instalação (uns 15 minutos)
+## Instalação
 
-### 1. Criar o servidor na Hetzner
+Escolha onde o servidor vai rodar:
+
+- **[Oracle Cloud — grátis](#opção-a-oracle-cloud-grátis)** (máquina ARM com 2 processadores e
+  12 GB, sem prazo). Cadastro mais chato e acesso por chave SSH.
+- **[Hetzner — cerca de €6/mês](#opção-b-hetzner-pago)**. Mais simples de criar.
+
+Os passos 3 a 5 (instalar, ligar à conta e usar) são iguais nas duas.
+
+### Opção A: Oracle Cloud (grátis)
+
+#### A1. Criar a conta
+
+1. Cadastre-se em <https://signup.cloud.oracle.com>.
+2. Em **Home Region**, escolha **Brazil East (São Paulo)**. ⚠️ Não dá para mudar depois, e a
+   máquina grátis só pode ficar na região principal.
+3. A Oracle pede um cartão de crédito **só para verificar** a identidade (pode aparecer uma
+   pré-autorização pequena que some depois). A conta pode levar alguns minutos para ativar.
+
+#### A2. Criar a máquina
+
+1. No painel: menu **☰ → Compute → Instances → Create instance**.
+2. **Name:** `cineclip`.
+3. **Image and shape → Edit:**
+   - **Change image** → **Ubuntu** → **Canonical Ubuntu 24.04**.
+   - **Change shape** → **Ampere** → **VM.Standard.A1.Flex** → **2 OCPUs** e **12 GB** de memória.
+     Confira se aparece o selo **Always Free-eligible**.
+4. **Networking:** deixe criar uma rede nova (*Create new virtual cloud network*) com sub-rede
+   pública e **Assign a public IPv4 address** marcado.
+5. **Add SSH keys:** escolha **Generate a key pair for me** e clique em **Save private key**.
+   Guarde o arquivo baixado na pasta **Downloads** e renomeie para `cineclip.key`.
+6. Clique em **Create**. Quando ficar verde (**Running**), copie o **Public IP address**.
+
+> **"Out of capacity"?** A máquina grátis às vezes esgota. Troque o *Availability domain* (se
+> houver outro) ou tente de novo mais tarde — costuma liberar em algumas horas.
+
+#### A3. Evitar que a Oracle recolha a máquina
+
+A Oracle pode recolher máquinas grátis que passem 7 dias quase paradas, e o servidor fica
+parado a maior parte do tempo, esperando links. Para evitar isso, converta a conta para
+**Pay As You Go**: menu **☰ → Billing & Cost Management → Upgrade and Manage Payment →
+Upgrade to Pay As You Go**. Os recursos *Always Free* continuam grátis. Por segurança, crie
+também um alerta de gastos: **Billing → Budgets → Create Budget** com valor de US$ 1, para ser
+avisado por e-mail se algo começar a cobrar.
+
+#### A4. Entrar no servidor pelo Windows
+
+Abra o **PowerShell** e rode, um comando por vez (troque `IP_DO_SERVIDOR` pelo IP copiado):
+
+```powershell
+cd $HOME\Downloads
+icacls cineclip.key /inheritance:r /grant:r "$($env:USERNAME):(R)"
+ssh -i cineclip.key ubuntu@IP_DO_SERVIDOR
+```
+
+Na primeira vez ele pergunta se confia no servidor: digite `yes` e Enter. O segundo comando
+existe porque o SSH do Windows recusa chaves que outros utilizadores do PC podem ler.
+
+Agora siga para o [passo 3](#3-instalar).
+
+### Opção B: Hetzner (pago)
+
+#### B1. Criar o servidor
 
 1. Crie uma conta em <https://console.hetzner.cloud> e cadastre o cartão.
 2. Crie um projeto e clique em **Adicionar servidor**:
@@ -30,7 +93,7 @@ de dar problema e o processamento é bem mais rápido.
    - **Chave SSH:** pode pular. Sem chave, a Hetzner manda a senha do `root` por e-mail.
 3. Clique em **Criar e comprar**. Em um minuto o servidor está pronto.
 
-### 2. Abrir o terminal do servidor
+#### B2. Abrir o terminal do servidor
 
 Na página do servidor, clique no ícone **`>_` Console**. Entre com `root` e a senha do e-mail
 (na primeira vez ele pede para trocar a senha).
@@ -41,13 +104,14 @@ Na página do servidor, clique no ícone **`>_` Console**. Entre com `root` e a 
 
 ### 3. Instalar
 
-Cole este comando e aperte Enter:
+Cole este comando e aperte Enter (no PowerShell, cola-se com o botão direito do mouse):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/RonanX0/cine-flowx/main/servidor/instalar.sh | bash
+curl -fsSL https://raw.githubusercontent.com/RonanX0/cine-flowx/main/servidor/instalar.sh | sudo bash
 ```
 
-Ele instala tudo sozinho (Node.js, FFmpeg, fontes, o CineClip e o serviço). Leva uns 3 minutos.
+Ele instala tudo sozinho (Node.js, FFmpeg, fontes, o CineClip e o serviço). Leva uns 3 a 5
+minutos. Funciona tanto na máquina ARM da Oracle como no x86 da Hetzner.
 
 ### 4. Ligar o servidor à sua conta
 
@@ -56,7 +120,7 @@ Ele instala tudo sozinho (Node.js, FFmpeg, fontes, o CineClip e o serviço). Lev
 2. No servidor:
 
    ```bash
-   cineclip configurar
+   sudo cineclip configurar
    ```
 
    Cole a chave e aperte Enter. Ele testa tudo e mostra **✅ Tudo pronto**.
@@ -73,12 +137,12 @@ escolha** para os próximos irem direto. A opção aparece quando o app vê o se
 
 | Comando | O que faz |
 |---|---|
-| `cineclip logs` | Mostra o que o servidor está fazendo agora (Ctrl+C para sair) |
-| `cineclip testar` | Confere cofre, R2, FFmpeg, fontes e chaves |
-| `cineclip estado` | O serviço está rodando? |
-| `cineclip reiniciar` | Reinicia o serviço |
-| `cineclip atualizar` | Baixa a versão mais recente do GitHub (também roda sozinho todo dia às 4h20) |
-| `cineclip configurar` | Troca a chave (por exemplo, depois de mudar a senha do CineClip) |
+| `sudo cineclip logs` | Mostra o que o servidor está fazendo agora (Ctrl+C para sair) |
+| `sudo cineclip testar` | Confere cofre, R2, FFmpeg, fontes e chaves |
+| `sudo cineclip estado` | O serviço está rodando? |
+| `sudo cineclip reiniciar` | Reinicia o serviço |
+| `sudo cineclip atualizar` | Baixa a versão mais recente do GitHub (também roda sozinho todo dia às 4h20) |
+| `sudo cineclip configurar` | Troca a chave (por exemplo, depois de mudar a senha do CineClip) |
 
 ## O que acontece com cada link
 
@@ -91,9 +155,10 @@ escolha** para os próximos irem direto. A opção aparece quando o app vê o se
 
 ## Custos e como parar
 
-- Hetzner CX23: preço fixo mensal (cerca de €6). Não há custo extra por vídeo.
-- A Hetzner cobra **mesmo com o servidor desligado**. Para parar de pagar, **exclua** o servidor
-  no painel da Hetzner.
+- **Oracle Always Free:** grátis dentro dos limites (2 OCPUs ARM e 12 GB no total da conta).
+  Não crie outras máquinas além desta, para não sair do gratuito, e mantenha o alerta de gastos.
+- **Hetzner CX23:** preço fixo mensal (cerca de €6). Não há custo extra por vídeo. A Hetzner
+  cobra **mesmo com o servidor desligado**; para parar de pagar, **exclua** o servidor.
 
 ## Detalhes técnicos
 

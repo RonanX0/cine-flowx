@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# ☁️ CineClip — instalação do servidor na nuvem (Ubuntu 24.04, ex.: Hetzner CX23)
+# ☁️ CineClip — instalação do servidor na nuvem (Ubuntu 24.04: Oracle Cloud ARM ou Hetzner x86)
 #
 #   curl -fsSL https://raw.githubusercontent.com/RonanX0/cine-flowx/main/servidor/instalar.sh | sudo bash
 #
@@ -31,18 +31,21 @@ if ! grep -qiE 'ubuntu|debian' /etc/os-release; then
 fi
 
 export DEBIAN_FRONTEND=noninteractive
+# Máquinas acabadas de criar (Oracle, Hetzner) correm as atualizações automáticas no
+# arranque e prendem o apt durante uns minutos: espera em vez de falhar.
+APT="apt-get -o DPkg::Lock::Timeout=600"
 
 passo "1/6 Pacotes do sistema (FFmpeg, fontes, git)"
-apt-get update -qq
-apt-get install -y -qq ca-certificates curl git ffmpeg fonts-inter fonts-noto-color-emoji >/dev/null
+$APT update -qq
+$APT install -y -qq ca-certificates curl git ffmpeg fonts-inter fonts-noto-color-emoji >/dev/null
 ok "ffmpeg $(ffmpeg -version | head -1 | awk '{print $3}')"
 
 passo "2/6 Node.js 22"
 if ! command -v node >/dev/null || [ "$(node -p 'process.versions.node.split(".")[0]')" -lt 20 ]; then
   curl -fsSL https://deb.nodesource.com/setup_22.x | bash - >/dev/null
-  apt-get install -y -qq nodejs >/dev/null
+  $APT install -y -qq nodejs >/dev/null
 fi
-ok "node $(node -v)"
+ok "node $(node -v) ($(uname -m))"
 
 passo "3/6 Utilizador e pastas"
 id -u "$UTILIZADOR" >/dev/null 2>&1 || useradd --system --home "$DADOS" --shell /usr/sbin/nologin "$UTILIZADOR"
