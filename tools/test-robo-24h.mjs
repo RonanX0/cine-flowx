@@ -181,6 +181,67 @@ for (const file of ["app-pronto.html", "404.html"]) {
   check(`${file}: igual a index.html (mesmo Robô 24h)`, outro === html);
 }
 
+/* ---------------------------------------------- 7. primeiro comentário */
+console.log("\n7. Primeiro comentário em cada Reel (Robô 24h)");
+{
+  const chamadas = [];
+  let responder = () => ({ id: "COMENTARIO_1" });
+  const ctx = vm.createContext({
+    console,
+    Logger: { log: () => {} },
+    Utilities: { sleep: () => {} },
+    UrlFetchApp: {
+      fetch: (url, opts) => {
+        chamadas.push({ url, opts });
+        const r = responder();
+        if (r && r.rede) throw new Error(r.rede);
+        return { getContentText: () => JSON.stringify(r), getResponseCode: () => 200 };
+      },
+    },
+  });
+  let carregou = true;
+  try {
+    vm.runInContext(gas + ";this.api={textoPrimeiroComentario,publicarPrimeiroComentario,modeloPrimeiroComentario};", ctx);
+  } catch (err) {
+    carregou = false;
+    console.log(`   ❌ o robô não carregou — ${err.message}`);
+    fail++;
+  }
+  if (carregou) {
+    const { textoPrimeiroComentario: texto, publicarPrimeiroComentario: comentar, modeloPrimeiroComentario: modelo } = ctx.api;
+    const reel = { title: "Interestelar", year: 2014, poster: "x.jpg" };
+    const conta = { metaAccessToken: " EAAG_token " };
+    check("cofre antigo (sem a definição) usa o padrão", texto(modelo({ settings: {} }), reel) === "🎬 Interestelar\nLINK NA B10", JSON.stringify(texto(modelo({ settings: {} }), reel)));
+    check("filme não identificado: só o LINK NA B10", texto(modelo({}), { title: "video_9" }) === "LINK NA B10");
+    check("vazio nas configurações = não comenta", texto(modelo({ settings: { primeiroComentario: "" } }), reel) === "");
+
+    chamadas.length = 0;
+    const ok = comentar(conta, "MEDIA_1", reel, modelo({ settings: {} }));
+    check("comenta no Reel publicado via Graph API", ok.id === "COMENTARIO_1" && chamadas.length === 1 && chamadas[0].url.endsWith("/MEDIA_1/comments"), chamadas.map((c) => c.url).join(","));
+    check("manda o texto e o token", chamadas[0] && chamadas[0].opts.payload.message === "🎬 Interestelar\nLINK NA B10" && chamadas[0].opts.payload.access_token === "EAAG_token");
+
+    chamadas.length = 0;
+    responder = () => ({ error: { code: 10, message: "(#10) Application does not have permission for this action" } });
+    const semPerm = comentar(conta, "MEDIA_1", reel, modelo({}));
+    check("sem permissão: avisa instagram_manage_comments e não insiste", /instagram_manage_comments/.test(semPerm.erro) && chamadas.length === 1, `${chamadas.length} tentativas`);
+
+    chamadas.length = 0;
+    responder = () => ({ rede: "Address unavailable" });
+    const rede = comentar(conta, "MEDIA_1", reel, modelo({}));
+    check("sem resposta: não repete (evita comentário duplicado)", !!rede.erro && chamadas.length === 1);
+
+    chamadas.length = 0;
+    const nada = comentar(conta, "MEDIA_1", reel, "");
+    check("desligado: nenhuma chamada", !nada.id && !nada.erro && chamadas.length === 0);
+  }
+  check(
+    "comenta logo depois de publicar pela Graph API",
+    /item\.publishedId = publicarMetaGraphApi\(acc, item, coverUrl\);[\s\S]{0,300}publicarPrimeiroComentario\(acc, item\.publishedId, item, modeloPrimeiroComentario\(vault\)\)/.test(gas)
+  );
+  check("o estado do Reel mostra o resultado do comentário", /primeiro comentário publicado/.test(gas) && /Primeiro comentário: " \+ item\.commentError/.test(gas));
+  check("o webhook (Make/n8n) recebe o firstComment", /firstComment: textoPrimeiroComentario\(modeloPrimeiroComentario\(vault\), item\)/.test(gas));
+}
+
 /* -------------------------------------------------------------------- fim */
 if (failures.length) {
   console.log("\nFalhas:");

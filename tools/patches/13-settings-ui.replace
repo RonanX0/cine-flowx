@@ -1,4 +1,5 @@
 d.jsxs("div",{className:"space-y-2",children:[d.jsx(er,{htmlFor:"ovl",children:"Texto por cima do vídeo"}),d.jsx(dn,{id:"ovl",value:c.overlayText,onChange:f=>u({...c,overlayText:f.target.value})})]}),
+d.jsxs("div",{className:"space-y-2",children:[d.jsx(er,{htmlFor:"pcom",children:"💬 Primeiro comentário em cada Reel"}),d.jsx(Qp,{id:"pcom",rows:2,value:c.primeiroComentario==null?"🎬 {filme}\nLINK NA B10":c.primeiroComentario,onChange:f=>u({...c,primeiroComentario:f.target.value}),placeholder:"🎬 {filme}\nLINK NA B10"}),d.jsx("p",{className:"text-[11px] text-muted-foreground",children:"Publicado logo depois do Reel (pelo app e pelo Robô 24h). {filme} vira o nome do filme e {ano} o ano; se o filme não foi identificado, essa linha sai. Deixe vazio para não comentar. O token da Meta precisa da permissão instagram_manage_comments."})]}),
 d.jsxs("div",{className:"space-y-2.5 rounded-lg border border-primary/35 bg-primary/5 p-3",children:[
 d.jsxs("div",{className:"flex flex-wrap items-center justify-between gap-2",children:[
 d.jsx(er,{htmlFor:"drv",className:"text-sm font-bold text-foreground",children:"☁️ Nuvem durável — Google Drive (grátis, sem cartão)"}),

@@ -171,7 +171,8 @@ function verificarEPostarReels() {
             videoUrl: item.remoteVideoUrl,
             coverUrl: coverUrl,
             poster: coverUrl,
-            videoFileName: item.videoFileName
+            videoFileName: item.videoFileName,
+            firstComment: textoPrimeiroComentario(modeloPrimeiroComentario(vault), item)
           }),
           muteHttpExceptions: true
         });
@@ -180,11 +181,17 @@ function verificarEPostarReels() {
       } else {
         if (!acc.igUserId || !acc.metaAccessToken) throw new Error("IG User ID ou Meta Token ausente na conta " + acc.name);
         item.publishedId = publicarMetaGraphApi(acc, item, coverUrl);
+        // 💬 Primeiro comentário (ex.: "🎬 Nome do filme" + "LINK NA B10"). Falhar aqui
+        // não desfaz a publicação: fica só o aviso no Reel.
+        const comentario = publicarPrimeiroComentario(acc, item.publishedId, item, modeloPrimeiroComentario(vault));
+        item.commentId = comentario.id;
+        item.commentError = comentario.erro;
       }
 
       item.status = "published";
       item.updatedAt = Date.now();
-      item.lastStep = "Publicado pelo Robô 24h na nuvem (PC e celular desligados) ✔";
+      item.lastStep = "Publicado pelo Robô 24h na nuvem (PC e celular desligados) ✔" +
+        (item.commentId ? " · 💬 primeiro comentário publicado" : item.commentError ? " · ⚠️ Primeiro comentário: " + item.commentError : "");
       item.errorMsg = "";
       item.needsReupload = false;
       item.cloudError = "";
@@ -261,6 +268,63 @@ function normalizarPoster(p) {
   const pequenos = ["92", "154", "185", "300", "342", "500"];
   if (pequenos.indexOf(size) < 0) return s;
   return s.substring(0, i) + marker + "780" + s.substring(j);
+}
+
+// ------------------------------------------------------ primeiro comentário
+// Texto em Configurações → "Primeiro comentário" no CineClip. {filme} e {ano} vêm do
+// Reel; se o filme não foi identificado, a linha que os usa sai. Vazio = não comenta.
+const COMENTARIO_PADRAO = "🎬 {filme}\\nLINK NA B10";
+
+function modeloPrimeiroComentario(vault) {
+  const s = (vault && vault.settings) || {};
+  return s.primeiroComentario == null ? COMENTARIO_PADRAO : String(s.primeiroComentario);
+}
+
+function textoPrimeiroComentario(modelo, item) {
+  modelo = modelo == null ? COMENTARIO_PADRAO : String(modelo);
+  if (!modelo.trim()) return "";
+  const identificado = !!(item && (item.year || item.poster || item.originalTitle));
+  const filme = identificado ? String(item.title || "").trim() : "";
+  const ano = item && item.year ? String(item.year).trim() : "";
+  return modelo.replace(/\\r/g, "").split("\\n").map(function (l) {
+    if (!ano) l = l.replace(/\\s*\\(\\{ano\\}\\)/g, "");
+    if ((!filme && l.indexOf("{filme}") >= 0) || (!ano && l.indexOf("{ano}") >= 0)) return null;
+    return l.split("{filme}").join(filme).split("{ano}").join(ano);
+  }).filter(function (l) { return l !== null; }).join("\\n").trim().slice(0, 2200);
+}
+
+function publicarPrimeiroComentario(acc, mediaId, item, modelo) {
+  const texto = textoPrimeiroComentario(modelo, item);
+  if (!texto || !mediaId) return { id: "", erro: "" };
+  let erro = "";
+  for (let t = 1; t <= 3; t++) {
+    let json = null;
+    try {
+      const r = UrlFetchApp.fetch(GRAPH_BASE + "/" + encodeURIComponent(mediaId) + "/comments", {
+        method: "post",
+        payload: { message: texto, access_token: acc.metaAccessToken.trim() },
+        muteHttpExceptions: true
+      });
+      json = JSON.parse(r.getContentText());
+    } catch (e) {
+      // Sem resposta não se sabe se comentou: não repete para não comentar 2x.
+      Logger.log("⚠️ Primeiro comentário sem resposta da Meta: " + (e && e.message ? e.message : e));
+      return { id: "", erro: String(e && e.message ? e.message : e) };
+    }
+    if (json && json.id && !json.error) {
+      Logger.log("💬 Primeiro comentário publicado.");
+      return { id: String(json.id), erro: "" };
+    }
+    const cod = String((json && json.error && json.error.code) || "");
+    erro = (json && json.error && json.error.message) || "resposta inválida da Meta";
+    if (cod === "10" || cod === "200" || cod === "190" || /permission/i.test(erro)) {
+      erro = "o token da Meta não tem a permissão instagram_manage_comments (" + erro + "). Gera o token outra vez com essa permissão.";
+      break;
+    }
+    if (t < 3) Utilities.sleep(4000 * t);
+  }
+  Logger.log("⚠️ Primeiro comentário falhou: " + erro);
+  return { id: "", erro: erro };
 }
 
 function publicarMetaGraphApi(acc, item, coverUrl) {

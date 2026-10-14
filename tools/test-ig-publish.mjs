@@ -119,6 +119,8 @@ function criarAmbiente(opcoes = {}) {
       bg: () => "https://nuvem.exemplo/reel.mp4",
       sonda: () => ({ status: 200, tipo: "video/mp4" }),
       claim: () => ({ ok: true, provider: "cloudflare-r2", key: "cc_hash_reel_1", owner: "app:1a2b" }),
+      comentar: () => ({ status: 200, json: { id: "COMENTARIO_1" } }),
+      settings: undefined, // se definido, injeta Eg() (as definições do app) no contexto
     },
     opcoes
   );
@@ -156,6 +158,11 @@ function criarAmbiente(opcoes = {}) {
       }
       if (acao === "media_publish") {
         const r = o.publicar(nContainers);
+        return resposta(r.status ?? 200, r.json);
+      }
+      if (acao === "comments") {
+        const r = o.comentar(partes[1], new URLSearchParams(corpo));
+        if (r && r.rede) throw new TypeError(r.rede);
         return resposta(r.status ?? 200, r.json);
       }
       const id = partes[1];
@@ -262,6 +269,7 @@ function criarAmbiente(opcoes = {}) {
     // defined" ao publicar). O bloco tem de o declarar por si (ver secção 0).
     Yo: "https://graph.facebook.com/v21.0",
   };
+  if (o.settings !== undefined) contexto.Eg = () => Object.assign({}, o.settings);
 
   const sandbox = vm.createContext(contexto);
   vm.runInContext(FONTE, sandbox, { filename: "cineclip-ig-publish.js" });
@@ -665,6 +673,70 @@ console.log("\n16. Reel só com link na nuvem (sem .mp4 no aparelho)");
   check("falha com o código 2207077 após as 2 tentativas", !out.ok && out.erro.igCode === "2207077" && /após 2 tentativas/.test(out.erro.message), out.ok ? "publicou" : String(out.erro && out.erro.message));
   check("explica que este aparelho não tem o .mp4", !out.ok && /não tem o ficheiro \.mp4/.test(out.erro.message), !out.ok ? out.erro.message : "");
   check("aponta a solução: reimportar para envio direto", !out.ok && /reimporta o \.mp4/.test(out.erro.message) && /direto/.test(out.erro.message));
+}
+
+/* ------------------------------------------------- 17. primeiro comentário */
+console.log("\n17. Primeiro comentário em cada Reel (🎬 filme + LINK NA B10)");
+{
+  const amb = criarAmbiente();
+  const t = amb.api.igTextoComentario;
+  check("padrão: nome do filme e LINK NA B10", t(undefined, { title: "Interestelar", year: 2014 }) === "🎬 Interestelar\nLINK NA B10", JSON.stringify(t(undefined, { title: "Interestelar", year: 2014 })));
+  check("filme não identificado: só o LINK NA B10", t(undefined, { title: "video_123" }) === "LINK NA B10", JSON.stringify(t(undefined, { title: "video_123" })));
+  check("vazio = não comenta", t("", { title: "Interestelar", year: 2014 }) === "" && t("   ", { title: "X", year: 1 }) === "");
+  check("{ano} sem ano some com os parênteses", t("🎬 {filme} ({ano})", { title: "Matrix", poster: "p.jpg" }) === "🎬 Matrix");
+  check("{ano} com ano", t("🎬 {filme} ({ano})\nLINK NA B10", { title: "Matrix", year: "1999" }) === "🎬 Matrix (1999)\nLINK NA B10");
+}
+{
+  // Publica pelo app (envio direto) → comenta no Reel publicado com o texto padrão.
+  const amb = criarAmbiente();
+  const out = await publicar(amb, item({ title: "Interestelar", year: 2014, poster: "https://image.tmdb.org/t/p/w500/x.jpg" }));
+  const com = amb.chamadas.filter((c) => c.tipo === "fetch" && /\/comments$/.test(new URL(c.url).pathname));
+  const corpo = com[0] ? new URLSearchParams(com[0].corpo) : null;
+  check("publica o Reel e comenta 1 vez", out.ok && com.length === 1, out.ok ? `${com.length} comentários` : String(out.erro && out.erro.message));
+  check("comenta no Reel publicado (MEDIA_PUBLICADA)", !!com[0] && com[0].url.includes("/MEDIA_PUBLICADA/comments"));
+  check("texto: 🎬 Interestelar + LINK NA B10", !!corpo && corpo.get("message") === "🎬 Interestelar\nLINK NA B10", corpo && JSON.stringify(corpo.get("message")));
+  check("usa o token da conta", !!corpo && corpo.get("access_token") === CONTA.metaAccessToken);
+  check("devolve o id do comentário", out.ok && out.res.commentId === "COMENTARIO_1" && !out.res.commentError);
+  check("comenta depois do media_publish", (() => { const i = amb.chamadas.findIndex((c) => c.url.includes("/media_publish")); const j = amb.chamadas.findIndex((c) => c.url.includes("/comments")); return i >= 0 && j > i; })());
+}
+{
+  const amb = criarAmbiente({ settings: { primeiroComentario: "" } });
+  const out = await publicar(amb, item({ title: "Interestelar", year: 2014 }));
+  check("desligado nas configurações: publica sem comentar", out.ok && !amb.chamadas.some((c) => c.url.includes("/comments")));
+}
+{
+  const amb = criarAmbiente({ settings: { primeiroComentario: "Assista {filme} completo 👉 LINK NA B10" } });
+  const out = await publicar(amb, item({ title: "Matrix", year: 1999 }));
+  const com = amb.chamadas.find((c) => c.url.includes("/comments"));
+  check("usa o texto das configurações", out.ok && !!com && new URLSearchParams(com.corpo).get("message") === "Assista Matrix completo 👉 LINK NA B10");
+}
+{
+  const amb = criarAmbiente({ comentar: () => ({ status: 400, json: { error: { code: 10, message: "(#10) Application does not have permission for this action" } } }) });
+  const out = await publicar(amb, item({ title: "Interestelar", year: 2014 }));
+  const n = amb.chamadas.filter((c) => c.url.includes("/comments")).length;
+  check("sem permissão: o Reel fica publicado", out.ok && out.res.publishedId === "MEDIA_PUBLICADA", out.ok ? "" : String(out.erro && out.erro.message));
+  check("sem permissão: explica qual permissão falta", out.ok && /instagram_manage_comments/.test(out.res.commentError || ""), out.ok ? out.res.commentError : "");
+  check("sem permissão: não insiste", n === 1, `${n} tentativas`);
+}
+{
+  let n = 0;
+  const amb = criarAmbiente({ comentar: () => (++n < 3 ? { status: 400, json: { error: { code: 1, message: "An unknown error occurred" } } } : { status: 200, json: { id: "COMENTARIO_3" } }) });
+  const out = await publicar(amb, item({ title: "Interestelar", year: 2014 }));
+  check("erro passageiro: tenta de novo e consegue", out.ok && out.res.commentId === "COMENTARIO_3" && n === 3, `${n} tentativas`);
+}
+{
+  const amb = criarAmbiente({ comentar: () => ({ rede: "Failed to fetch" }) });
+  const out = await publicar(amb, item({ title: "Interestelar", year: 2014 }));
+  const n = amb.chamadas.filter((c) => c.url.includes("/comments")).length;
+  check("sem resposta da Meta: não repete (evita comentário duplicado)", out.ok && n === 1 && !!out.res.commentError, `${n} tentativas`);
+}
+{
+  const amb = criarAmbiente();
+  const it = item({ title: "Interestelar", year: 2014 });
+  const out = await publicar(amb, it, Object.assign({}, CONTA, { mode: "webhook", webhookUrl: "https://hook.exemplo/reel" }));
+  const hook = amb.chamadas.find((c) => c.url === "https://hook.exemplo/reel");
+  const corpo = hook ? JSON.parse(hook.corpo) : {};
+  check("webhook (Make/n8n) recebe o firstComment pronto", out.ok && corpo.firstComment === "🎬 Interestelar\nLINK NA B10", JSON.stringify(corpo.firstComment));
 }
 
 /* ------------------------------------------------------------------ fim */
