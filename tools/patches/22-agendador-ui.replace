@@ -6,7 +6,12 @@ const cc_h = (t, p, ...c) => {
 const [cc_tab, cc_setTab] = b.useState("fila");
 const [cc_filter, cc_setFilter] = b.useState("pendentes");
 const [cc_open, cc_setOpen] = b.useState(null);
-const [cc_newSlot, cc_setNewSlot] = b.useState("");
+const [cc_hora, cc_setHora] = b.useState("12");
+const [cc_min, cc_setMin] = b.useState("00");
+const [cc_gDe, cc_setGDe] = b.useState("09");
+const [cc_gAte, cc_setGAte] = b.useState("23");
+const [cc_gCada, cc_setGCada] = b.useState("120");
+const [cc_copiar, cc_setCopiar] = b.useState([]);
 const [cc_custom, cc_setCustom] = b.useState(false);
 const [cc_sort, cc_setSortRaw] = b.useState(() => { try { return localStorage.getItem("cineclip.agenda.sort") || "hora"; } catch { return "hora"; } });
 const cc_setSort = (val) => { cc_setSortRaw(val); try { localStorage.setItem("cineclip.agenda.sort", val); } catch {} };
@@ -152,16 +157,48 @@ const cc_saveSlots = (list) => {
   te(uniq.join(", "));
   ye({ dailySlots: uniq });
 };
-const cc_addSlot = () => {
-  if (!/^\d{2}:\d{2}$/.test(cc_newSlot)) { je.error("Escolhe um horário (HH:MM)."); return; }
-  if (cc_slots.includes(cc_newSlot)) { je.error("Esse horário já existe."); return; }
-  cc_saveSlots([...cc_slots, cc_newSlot]);
-  cc_setNewSlot("");
-  je.success(`Horário ${cc_newSlot} adicionado em ${j.name}.`);
+const cc_addSlot = (hhmm) => {
+  const novo = hhmm || `${cc_hora}:${cc_min}`;
+  if (!/^\d{2}:\d{2}$/.test(novo)) { je.error("Escolhe um horário (HH:MM)."); return; }
+  if (cc_slots.includes(novo)) { je.error(`${novo} já está nos horários.`); return; }
+  cc_saveSlots([...cc_slots, novo]);
+  je.success(`Horário ${novo} adicionado em ${j.name}.`);
 };
 const cc_removeSlot = (s) => {
   if (cc_slots.length <= 1) { je.error("Mantém pelo menos 1 horário diário."); return; }
   cc_saveSlots(cc_slots.filter((x2) => x2 !== s));
+};
+const cc_HORAS = Array.from({ length: 24 }, (_, n) => cc_pad(n));
+const cc_MINUTOS = Array.from({ length: 12 }, (_, n) => cc_pad(n * 5));
+const cc_sugestoes = ["08:00", "10:00", "12:00", "15:00", "18:00", "19:30", "21:00", "22:30"].filter((s) => !cc_slots.includes(s)).slice(0, 4);
+// "Preencher automaticamente": de X até Y, a cada N minutos
+const cc_gerados = (() => {
+  const de = Number(cc_gDe) * 60;
+  const ate = Number(cc_gAte) * 60;
+  const passo = Number(cc_gCada) || 60;
+  const out = [];
+  for (let m = de; m <= ate && out.length < 48; m += passo) out.push(`${cc_pad(Math.floor(m / 60))}:${cc_pad(m % 60)}`);
+  return out;
+})();
+const cc_usarGerados = () => {
+  if (!cc_gerados.length) { je.error("O fim tem de ser depois do início."); return; }
+  if (!window.confirm(`Trocar os horários de ${j.name} por ${cc_gerados.length} horário(s): ${cc_gerados.join(" · ")}?`)) return;
+  cc_saveSlots(cc_gerados);
+  je.success(`${cc_gerados.length} horário(s) definidos em ${j.name}.`);
+};
+// Copiar os horários desta conta para outras
+const cc_outras = o.filter((a) => a.id !== j.id);
+const cc_alvos = cc_copiar.filter((id) => cc_outras.some((a) => a.id === id));
+const cc_alternarCopia = (id) => cc_setCopiar((l) => (l.includes(id) ? l.filter((x2) => x2 !== id) : [...l, id]));
+const cc_copiarHorarios = () => {
+  if (!cc_alvos.length) { je.error("Escolhe pelo menos uma conta."); return; }
+  const nomes = cc_outras.filter((a) => cc_alvos.includes(a.id)).map((a) => a.name).join(", ");
+  if (!window.confirm(`Copiar ${cc_slots.join(" · ")} para ${nomes}? Os horários dessas contas são substituídos (os Reels já agendados ficam onde estão).`)) return;
+  const agora = Date.now();
+  // updatedAt em cada conta alterada: sem isso, a sincronização podia ficar com os horários antigos.
+  i(o.map((a) => (cc_alvos.includes(a.id) ? { ...a, dailySlots: cc_slots.slice(), updatedAt: agora } : a)), j.id);
+  cc_setCopiar([]);
+  je.success(`Horários copiados para ${cc_alvos.length} conta(s).`);
 };
 
 const cc_modeLabel = j.mode === "meta_api" ? "API Oficial Meta" : j.mode === "webhook" ? "Webhook Make/n8n" : "Robô Meta Business Suite";
@@ -349,17 +386,46 @@ const cc_queue = cc_h("div", { className: "cc-queue" },
 
 const cc_slotEditor = cc_h("div", { className: "cc-card cc-slots" },
   cc_h("div", { className: "cc-slots-head" },
-    cc_h("div", null, cc_h("strong", null, "Horários diários de ", j.name), cc_h("span", { className: "cc-sub" }, "Cada Reel novo vai para o próximo horário livre desta conta.")),
+    cc_h("div", null,
+      cc_h("strong", null, "Horários diários de ", j.name),
+      cc_h("span", { className: "cc-sub" }, `${cc_slots.length} ${cc_slots.length === 1 ? "publicação" : "publicações"} por dia · cada Reel novo vai para o próximo horário livre${fe ? ` (${cc_when(fe)})` : ""}.`)),
     cc_h("label", { className: "cc-switch" },
       d.jsx("input", { type: "checkbox", checked: j.autoPilot, onChange: (ev) => ye({ autoPilot: ev.target.checked }) }),
       cc_h("span", null, cc_h("strong", null, "Auto-Pilot"), " publica sozinho no horário"))),
-  cc_h("div", { className: "cc-chips" },
+  cc_h("div", { className: "cc-chips cc-slot-list" },
     cc_slots.map((s) => cc_h("span", { key: s, className: "cc-slot" }, s,
-      cc_h("button", { type: "button", title: `Remover ${s}`, onClick: () => cc_removeSlot(s) }, d.jsx(ou, { className: "h-3 w-3" })))),
-    cc_h("span", { className: "cc-slot-add" },
-      d.jsx("input", { type: "time", value: cc_newSlot, onChange: (ev) => cc_setNewSlot(ev.target.value), onKeyDown: (ev) => ev.key === "Enter" && cc_addSlot(), className: "cc-input cc-input-time" }),
-      cc_h(Ae, { size: "sm", variant: "secondary", onClick: cc_addSlot }, d.jsx(wm, { className: "h-3.5 w-3.5" }), "Adicionar")),
-  ),
+      cc_h("button", { type: "button", title: `Remover ${s}`, "aria-label": `Remover ${s}`, onClick: () => cc_removeSlot(s) }, d.jsx(ou, { className: "h-3.5 w-3.5" }))))),
+  cc_h("div", { className: "cc-slot-novo" },
+    cc_h("span", { className: "cc-label" }, "Adicionar horário"),
+    cc_h("div", { className: "cc-slot-add" },
+      d.jsx("select", { className: "cc-input cc-sel", "aria-label": "Hora", value: cc_hora, onChange: (ev) => cc_setHora(ev.target.value), children: cc_HORAS.map((hh) => d.jsx("option", { value: hh, children: hh }, hh)) }),
+      cc_h("span", { className: "cc-dois-pontos" }, ":"),
+      d.jsx("select", { className: "cc-input cc-sel", "aria-label": "Minutos", value: cc_min, onChange: (ev) => cc_setMin(ev.target.value), children: cc_MINUTOS.map((mm) => d.jsx("option", { value: mm, children: mm }, mm)) }),
+      cc_h(Ae, { size: "sm", onClick: () => cc_addSlot(), className: "cc-add-btn" }, d.jsx(wm, { className: "h-3.5 w-3.5" }), `Adicionar ${cc_hora}:${cc_min}`)),
+    cc_sugestoes.length > 0 && cc_h("div", { className: "cc-sugestoes" },
+      cc_h("span", { className: "cc-sub" }, "Sugestões:"),
+      cc_sugestoes.map((s) => cc_h("button", { key: s, type: "button", className: "cc-sug", onClick: () => cc_addSlot(s) }, "+ ", s)))),
+  cc_h("details", { className: "cc-mais" },
+    cc_h("summary", null, "⚡ Preencher automaticamente"),
+    cc_h("div", { className: "cc-mais-corpo" },
+      cc_h("div", { className: "cc-slot-add" },
+        cc_h("span", { className: "cc-sub" }, "De"),
+        d.jsx("select", { className: "cc-input cc-sel", "aria-label": "Começa às", value: cc_gDe, onChange: (ev) => cc_setGDe(ev.target.value), children: cc_HORAS.map((hh) => d.jsx("option", { value: hh, children: hh + ":00" }, hh)) }),
+        cc_h("span", { className: "cc-sub" }, "até"),
+        d.jsx("select", { className: "cc-input cc-sel", "aria-label": "Acaba às", value: cc_gAte, onChange: (ev) => cc_setGAte(ev.target.value), children: cc_HORAS.map((hh) => d.jsx("option", { value: hh, children: hh + ":00" }, hh)) }),
+        cc_h("span", { className: "cc-sub" }, "a cada"),
+        d.jsx("select", { className: "cc-input cc-sel", "aria-label": "Intervalo", value: cc_gCada, onChange: (ev) => cc_setGCada(ev.target.value), children: [["30", "30 min"], ["60", "1 h"], ["90", "1 h 30"], ["120", "2 h"], ["180", "3 h"], ["240", "4 h"]].map(([v2, t2]) => d.jsx("option", { value: v2, children: t2 }, v2)) })),
+      cc_h("span", { className: "cc-sub" }, cc_gerados.length ? `${cc_gerados.length} horário(s): ${cc_gerados.join(" · ")}` : "O fim tem de ser depois do início."),
+      cc_h(Ae, { size: "sm", variant: "secondary", disabled: !cc_gerados.length, onClick: cc_usarGerados }, "Usar estes horários"))),
+  cc_outras.length > 0 && cc_h("details", { className: "cc-mais" },
+    cc_h("summary", null, "📋 Copiar estes horários para outras contas"),
+    cc_h("div", { className: "cc-mais-corpo" },
+      cc_outras.map((a) => cc_h("label", { key: a.id, className: "cc-copia" },
+        d.jsx("input", { type: "checkbox", checked: cc_alvos.includes(a.id), onChange: () => cc_alternarCopia(a.id) }),
+        cc_h("span", null, cc_h("strong", null, a.name), cc_h("span", { className: "cc-sub" }, "agora: ", (a.dailySlots || []).join(" · ") || "—")))),
+      cc_h("div", { className: "cc-slot-add" },
+        cc_h(Ae, { size: "sm", variant: "ghost", onClick: () => cc_setCopiar(cc_alvos.length === cc_outras.length ? [] : cc_outras.map((a) => a.id)) }, cc_alvos.length === cc_outras.length ? "Desmarcar todas" : "Selecionar todas"),
+        cc_h(Ae, { size: "sm", disabled: !cc_alvos.length, onClick: cc_copiarHorarios }, `Copiar para ${cc_alvos.length || ""} conta${cc_alvos.length === 1 ? "" : "s"}`.replace("para  ", "para "))))),
   cc_h("label", { className: "cc-switch cc-switch-sm" },
     d.jsx("input", { type: "checkbox", checked: j.shareToFeed, onChange: (ev) => ye({ shareToFeed: ev.target.checked }) }),
     cc_h("span", null, "Partilhar os Reels também na grelha do Feed")),
