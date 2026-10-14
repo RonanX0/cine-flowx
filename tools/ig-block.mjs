@@ -10,14 +10,15 @@
  *
  * `analisarAutossuficiencia` faz a análise estática que apanha isso: devolve as chamadas
  * a nomes que não são declarados dentro do bloco, builtins da linguagem, nem os helpers
- * que o bundle realmente define fora do bloco (`bg` e `Yo`).
+ * que o bundle realmente define fora do bloco (`bg`, `Yo` e `Eg`).
  */
 
 export const INICIO_BLOCO_IG = "async function mS(r){";
 export const FIM_BLOCO_IG = "/* ==CINECLIP-IG-FIM== */";
 
-/** Nomes definidos pelo bundle que envolve o bloco (nuvem `bg` e base da Graph API `Yo`). */
-export const BUNDLE_FORA_DO_BLOCO = ["bg", "Yo"];
+/** Nomes definidos pelo bundle que envolve o bloco (nuvem `bg`, base da Graph API `Yo` e
+ *  definições `Eg`, usada pelo primeiro comentário). */
+export const BUNDLE_FORA_DO_BLOCO = ["bg", "Yo", "Eg"];
 
 export const BUILTINS_JS = [
   "fetch", "URL", "URLSearchParams", "XMLHttpRequest", "Promise", "Date", "Math", "JSON",

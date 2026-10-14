@@ -308,6 +308,49 @@ async function pS(u,o,a,i){
   return{publishedId:id,publishedUrl:link};
 }
 
+/* ==CINECLIP-PRIMEIRO-COMENTARIO== Depois de publicar, comenta no Reel (ex.:
+   "🎬 Nome do filme" + "LINK NA B10"). Configurações → "Primeiro comentário".
+   {filme} e {ano} vêm do Reel; se o filme não foi identificado, a linha que os usa
+   sai. Falhar aqui nunca desfaz nem repete a publicação. */
+var IG_COMENTARIO_PADRAO="🎬 {filme}\nLINK NA B10";
+function igTextoComentario(modelo,r){
+  modelo=modelo==null?IG_COMENTARIO_PADRAO:String(modelo);
+  if(!modelo.trim())return"";
+  var identificado=!!(r&&(r.year||r.poster||r.originalTitle));
+  var filme=identificado?String(r.title||"").trim():"";
+  var ano=r&&r.year?String(r.year).trim():"";
+  var linhas=modelo.replace(/\r/g,"").split("\n").map(function(l){
+    if(!ano)l=l.replace(/\s*\(\{ano\}\)/g,"");
+    if((!filme&&l.indexOf("{filme}")>=0)||(!ano&&l.indexOf("{ano}")>=0))return null;
+    return l.split("{filme}").join(filme).split("{ano}").join(ano);
+  }).filter(function(l){return l!==null});
+  return linhas.join("\n").trim().slice(0,2200);
+}
+function igModeloComentario(){try{return typeof Eg==="function"?Eg().primeiroComentario:void 0}catch(e){return void 0}}
+async function igPrimeiroComentario(mediaId,token,r,onStep){
+  var texto=igTextoComentario(igModeloComentario(),r);
+  if(!texto||!mediaId)return{commentId:"",commentError:""};
+  onStep&&onStep("A publicar o primeiro comentário…");
+  var erro="";
+  for(var t=1;t<=3;t++){
+    var res;
+    try{
+      res=await igGraphPost("/"+encodeURIComponent(mediaId)+"/comments",new URLSearchParams({message:texto,access_token:token}));
+    }catch(e){
+      /* Sem resposta não se sabe se comentou: não repete para não comentar 2x. */
+      return{commentId:"",commentError:(e&&e.message)||String(e)};
+    }
+    if(res.ok&&res.json&&res.json.id&&!res.json.error)return{commentId:String(res.json.id),commentError:""};
+    var cod=String(res.json&&res.json.error&&res.json.error.code||"");
+    erro=(res.json&&res.json.error&&res.json.error.message)||("HTTP "+res.status);
+    if(cod==="10"||cod==="200"||cod==="190"||/permission/i.test(erro)){
+      return{commentId:"",commentError:"o token da Meta não tem a permissão instagram_manage_comments ("+erro+"). Gera o token outra vez com essa permissão."};
+    }
+    if(t<3)await mS(4000*t);
+  }
+  return{commentId:"",commentError:erro};
+}
+
 async function gS(r,o,a,claim){
   if(!r.videoBlob&&!r.remoteVideoUrl)throw new Error("Este item não possui o ficheiro de vídeo (.mp4) anexado nem URL na nuvem.");
   const i=hS(r.poster),temBlob=!!r.videoBlob;
@@ -327,7 +370,7 @@ async function gS(r,o,a,claim){
     let url=(r.remoteVideoUrl&&/^https?:/i.test(r.remoteVideoUrl))?r.remoteVideoUrl:"";
     if(!url){const env=await enviarArquivo("");if(!env.url)throw new Error("Não foi possível gerar link direto (.mp4) do vídeo: "+env.erro);url=env.url}
     a&&a(i?"A acionar Webhook com vídeo + pôster oficial de capa…":"A acionar Webhook (Make.com / n8n)…");
-    const k=await fetch(w,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:r.id,accountId:o.id||r.accountId||"acc_default",accountName:o.name||"@conta.principal",title:r.title,originalTitle:r.originalTitle,year:r.year,hookText:r.hookText,caption:r.caption,scheduledAt:r.scheduledAt,platforms:r.platforms,videoUrl:url,coverUrl:i||"",poster:i||"",videoFileName:r.videoFileName})});
+    const k=await fetch(w,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:r.id,accountId:o.id||r.accountId||"acc_default",accountName:o.name||"@conta.principal",title:r.title,originalTitle:r.originalTitle,year:r.year,hookText:r.hookText,caption:r.caption,scheduledAt:r.scheduledAt,platforms:r.platforms,videoUrl:url,coverUrl:i||"",poster:i||"",videoFileName:r.videoFileName,firstComment:igTextoComentario(igModeloComentario(),r)})});
     if(!k.ok)throw new Error("O Webhook respondeu com erro HTTP "+k.status+".");
     return{publishedId:"webhook_"+Date.now(),publishedUrl:url,remoteVideoUrl:url};
   }
@@ -474,6 +517,7 @@ async function gS(r,o,a,claim){
       }
       const res=await pS(u,containerId,f,a);
       res.remoteVideoUrl=link||r.remoteVideoUrl;
+      try{Object.assign(res,await igPrimeiroComentario(res.publishedId,f,r,a))}catch(e){res.commentError=(e&&e.message)||String(e)}
       return res;
     }catch(e){
       ultimoErro=e;
