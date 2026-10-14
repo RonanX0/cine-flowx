@@ -42,7 +42,9 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.2.0";
+  var VERSION = "1.2.1";
+  /** Sem bytes a sair durante este tempo, o envio é dado como parado e repetido. */
+  var STALL_MS = 60000;
   var SETTINGS_KEY = "cineclip.settings";
   var STATE_KEY = "cineclip.cloud.state";
   var MAX_LOG = 80;
@@ -149,7 +151,8 @@
       presign: s.r2Presign !== false,
       mirrorLegacy: s.cloudMirrorLegacy !== false,
       provider: String(s.cloudProvider || "auto").trim().toLowerCase(),
-      timeoutMs: Number(s.cloudTimeoutMs || 0) || 300000
+      timeoutMs: Number(s.cloudTimeoutMs || 0) || 300000,
+      stallMs: Number(s.cloudStallMs || 0) || STALL_MS
     };
   }
 
@@ -516,23 +519,61 @@
       Object.keys(opts.headers || {}).forEach(function (k) {
         xhr.setRequestHeader(k, opts.headers[k]);
       });
+      /* Vigia: se os bytes deixarem de sair durante STALL_MS (internet caiu, ligação
+         presa), aborta já e deixa a camada de cima tentar de novo — em vez de ficar
+         parado no mesmo % até ao tempo-limite de 5 minutos. */
+      var stallMs = opts.stallMs || STALL_MS;
+      var enviado = false;
+      var parou = null;
+      var vigia = null;
+      function parar() {
+        if (vigia) clearTimeout(vigia);
+        vigia = null;
+      }
+      function vigiar() {
+        parar();
+        if (enviado) return;
+        vigia = setTimeout(function () {
+          if (enviado) return;
+          parou = new Error(
+            "O envio parou: nenhum dado saiu em " + Math.round(stallMs / 1000) +
+              " s. A internet caiu ou está muito lenta — a tentar outra vez."
+          );
+          parou.code = "stalled";
+          parou.retryable = true;
+          try {
+            xhr.abort();
+          } catch (e) {}
+        }, stallMs);
+      }
       xhr.upload.onprogress = function (ev) {
+        if (ev.lengthComputable && ev.loaded >= ev.total) enviado = true;
+        vigiar();
         if (opts.onProgress && ev.lengthComputable) {
           opts.onProgress(Math.round((ev.loaded / ev.total) * 100), ev.loaded, ev.total);
         }
       };
+      xhr.upload.onload = function () {
+        enviado = true;
+        parar();
+      };
       xhr.onload = function () {
+        parar();
         resolve({ status: xhr.status, text: xhr.responseText || "" });
       };
       xhr.onerror = function () {
+        parar();
         reject(new Error("Falha de rede ao enviar para " + url + " (sem resposta do servidor)."));
       };
       xhr.ontimeout = function () {
+        parar();
         reject(new Error("Tempo esgotado ao enviar (" + Math.round((opts.timeoutMs || 0) / 1000) + " s). Verifica a ligação ou reduz o tamanho do clipe."));
       };
       xhr.onabort = function () {
-        reject(new Error("Envio cancelado."));
+        parar();
+        reject(parou || new Error("Envio cancelado."));
       };
+      vigiar();
       xhr.send(opts.body);
     });
   }
@@ -583,6 +624,7 @@
       }),
       body: buffer,
       timeoutMs: cfg.timeoutMs,
+      stallMs: cfg.stallMs,
       onProgress: onProgress
     });
 
@@ -625,6 +667,7 @@
       headers: { "Content-Type": "video/mp4" },
       body: buffer,
       timeoutMs: cfg.timeoutMs,
+      stallMs: cfg.stallMs,
       onProgress: onProgress
     });
     if (put.status < 200 || put.status >= 300) {

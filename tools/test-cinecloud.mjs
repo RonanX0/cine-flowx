@@ -123,6 +123,8 @@ function makeStorage() {
 }
 
 class XMLHttpRequestStub {
+  static travarProximos = 0;
+  static travados = 0;
   constructor() {
     this.upload = {};
     this.status = 0;
@@ -139,6 +141,13 @@ class XMLHttpRequestStub {
   }
   send(body) {
     const total = body ? body.byteLength || body.length || 0 : 0;
+    if (XMLHttpRequestStub.travarProximos > 0) {
+      // Simula uma ligação presa: sai 1% e depois nada, até alguém chamar abort().
+      XMLHttpRequestStub.travarProximos--;
+      XMLHttpRequestStub.travados++;
+      if (this.upload.onprogress) this.upload.onprogress({ lengthComputable: true, loaded: Math.floor(total / 100), total });
+      return;
+    }
     (async () => {
       try {
         if (this.upload.onprogress) this.upload.onprogress({ lengthComputable: true, loaded: Math.floor(total / 2), total });
@@ -374,6 +383,22 @@ check("classifyUrl → 'r2' (durável)", CC.classifyUrl(smallUrl) === "r2", CC.c
 check("isDurable('r2') === true", CC.isDurable(smallUrl) === true);
 check("classifyUrl de host antigo → 'temp'", CC.classifyUrl("https://kappa.lol/abc.mp4") === "temp");
 check("isDurable de host antigo === false", CC.isDurable("https://uguu.se/x.mp4") === false);
+
+/* 5b — envio preso em 1% → aborta e tenta de novo, sem esperar os 5 minutos */
+setSettings(sb, { r2WorkerUrl: "/cloud-api", r2Token: TOKEN, r2MaxMb: 95, cloudStallMs: 150 });
+XMLHttpRequestStub.travarProximos = 1;
+XMLHttpRequestStub.travados = 0;
+const t0 = Date.now();
+let urlDepoisDeParar = "";
+let erroParado = null;
+try {
+  urlDepoisDeParar = await CC.uploadVideo(new Blob([randomBytes(64 * 1024)], { type: "video/mp4" }), "preso.mp4", {});
+} catch (e) {
+  erroParado = e;
+}
+check("envio preso: deteta que parou e tenta de novo", XMLHttpRequestStub.travados === 1 && /\/cloud-api\/v\//.test(urlDepoisDeParar), erroParado ? erroParado.message : urlDepoisDeParar);
+check("envio preso: não espera o tempo-limite de 5 min", Date.now() - t0 < 15000, `${Date.now() - t0} ms`);
+setSettings(sb, { r2WorkerUrl: "/cloud-api", r2Token: TOKEN, r2MaxMb: 95 });
 
 const full = await fetch(smallUrl);
 const back = Buffer.from(await full.arrayBuffer());
