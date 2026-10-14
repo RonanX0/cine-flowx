@@ -42,7 +42,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "1.2.1";
+  var VERSION = "1.2.2";
   /** Sem bytes a sair durante este tempo, o envio é dado como parado e repetido. */
   var STALL_MS = 60000;
   var SETTINGS_KEY = "cineclip.settings";
@@ -937,12 +937,17 @@
     var mem = await readIntoMemory(blobOrFile, name);
     var size = mem.size;
     var failures = [];
+    var recusaTamanho = null;
 
     for (var i = 0; i < providers.length; i++) {
       var provider = providers[i];
       if (provider === "legacy") continue;
 
-      if (provider === "r2" && size > cfg.maxMb * 1024 * 1024 && !cfg.presign) {
+      // Acima do limite do Worker (100 MB no plano grátis) NÃO se manda o vídeo ao Worker:
+      // a Cloudflare corta a ligação a meio e o envio ficava preso em 1%. Vai direto pela
+      // URL pré-assinada (se o Worker a tiver) ou passa à nuvem seguinte.
+      var grande = provider === "r2" && size > cfg.maxMb * 1024 * 1024;
+      if (grande && !cfg.presign) {
         failures.push("R2: vídeo com " + fmtSize(size) + " excede " + cfg.maxMb + " MB sem presign");
         continue;
       }
@@ -955,7 +960,9 @@
         attempt++;
         try {
           var out = provider === "r2"
-            ? await uploadToWorker(cfg, mem.buffer, name, opts.onProgress)
+            ? (grande
+                ? await uploadPresigned(cfg, mem.buffer, name, opts.onProgress)
+                : await uploadToWorker(cfg, mem.buffer, name, opts.onProgress))
             : await uploadToDrive(cfg, mem.buffer, name, opts.onProgress);
           await verifyPublicUrl(out.url);
           log("info", "Vídeo na nuvem durável: " + out.url + " (" + out.provider + ")");
@@ -965,7 +972,12 @@
           lastErr = e;
           lastError = e && e.message ? e.message : String(e);
           // erros que não se resolvem repetindo: falha já, sem gastar 3 tentativas
-          if (e && (e.code === "unreadable_source" || e.code === "presign_unavailable" || e.code === "too_large")) throw e;
+          if (e && e.code === "unreadable_source") throw e;
+          // não se resolvem repetindo nesta nuvem, mas a seguinte ainda pode aceitar
+          if (e && (e.code === "presign_unavailable" || e.code === "too_large")) {
+            if (e.code === "too_large") recusaTamanho = e;
+            break;
+          }
           var retryable = !e.status || e.retryable || e.status === 429 || e.status >= 500;
           log("warn", provider + " tentativa " + attempt + "/3 falhou: " + lastError);
           if (!retryable || attempt === 3) break;
@@ -974,6 +986,21 @@
       }
       failures.push((provider === "r2" ? "R2" : "Drive") + ": " + (lastErr && lastErr.message ? lastErr.message : lastErr));
     }
+
+    // Grande demais para todas as nuvens (e para os hosts temporários, que aceitam até
+    // 100 MB): falha já com a solução, em vez de tentar mais envios que ficam presos.
+    if (size > cfg.maxMb * 1024 * 1024) {
+      var errBig = new Error(
+        "O vídeo tem " + fmtSize(size) + " e passa do limite de " + cfg.maxMb + " MB da nuvem. " +
+          "Passa-o pelo 📦 Upload em massa ou pelo Estúdio (o vídeo sai comprimido, normalmente 10–30 MB) e agenda essa versão. " +
+          "(" + failures.join(" | ") + ")"
+      );
+      errBig.code = "too_large";
+      throw errBig;
+    }
+    // Uma nuvem durável recusou pelo tamanho (ex.: Drive acima de 45 MB) e nenhuma aceitou:
+    // um host temporário apagaria o vídeo antes da hora — melhor dizer já o que fazer.
+    if (recusaTamanho) throw recusaTamanho;
 
     if (opts.allowTemp === false) {
       var errAll = new Error("Não foi possível colocar o vídeo na nuvem durável. " + failures.join(" | "));
