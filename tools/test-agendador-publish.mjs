@@ -281,12 +281,57 @@ const reel = {
   updatedAt: Date.now(),
 };
 await putQueueItem(reel);
+const duplicateTimeA = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 16);
+const duplicateTimeB = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString().slice(0, 16);
+const duplicateBase = {
+  accountId: "acc_default",
+  status: "scheduled",
+  title: "A Mesma Cena na Fila",
+  videoFileName: "mesma-cena.mp4",
+  videoSize: 2048,
+  caption: "legenda",
+  platforms: ["instagram"],
+  updatedAt: Date.now(),
+};
+await putQueueItem({ ...duplicateBase, id: "reel_duplicado_a", createdAt: Date.now() - 1000, scheduledAt: duplicateTimeA });
+await putQueueItem({ ...duplicateBase, id: "reel_duplicado_b", createdAt: Date.now(), scheduledAt: duplicateTimeB });
 
 agendadorTab.click();
 
-const publishButton = await waitFor("botão Publicar do item", () =>
-  window.document.querySelector(".cc-pub")
+const cloudTab = await waitFor("aba Nuvem / Duplicados", () =>
+  findByText(window, "button", "Nuvem / Duplicados")
 );
+check("aba Nuvem / Duplicados aparece no Agendador", !!cloudTab);
+cloudTab.click();
+const cloudPanel = await waitFor("painel de nuvem e duplicados", () =>
+  window.document.querySelector(".cc-cloud-panel")
+);
+check("a aba mostra o painel de estado da nuvem", !!cloudPanel);
+check("a aba inclui ação explícita para testar a nuvem", !!findByText(window, "button", "Testar ligação"));
+const duplicateGroup = await waitFor("grupo de duplicados", () =>
+  window.document.querySelector(".cc-duplicate-group")
+);
+check("dois itens com os mesmos metadados são agrupados como possíveis duplicados",
+  !!duplicateGroup && duplicateGroup.querySelectorAll(".cc-duplicate-row").length === 2);
+check("a deteção avisa que não remove itens automaticamente",
+  (cloudPanel.textContent || "").includes("nada é removido automaticamente"));
+const removeDuplicateButton = duplicateGroup.querySelector(".cc-duplicate-remove");
+let duplicateConfirmationAsked = false;
+window.confirm = () => { duplicateConfirmationAsked = true; return false; };
+removeDuplicateButton && removeDuplicateButton.click();
+await sleep(50);
+const queueAfterCancel = await readQueueFromIndexedDB();
+check("remover um possível duplicado pede confirmação", duplicateConfirmationAsked);
+check("cancelar a confirmação mantém o Reel na fila",
+  queueAfterCancel.some((item) => item.id === "reel_duplicado_a") && queueAfterCancel.some((item) => item.id === "reel_duplicado_b"));
+window.confirm = () => true;
+
+const filaTab = await waitFor("aba Fila", () => findByText(window, "button", "Fila"));
+filaTab.click();
+const itemRow = await waitFor("item da publicação de teste", () =>
+  [...window.document.querySelectorAll(".cc-item")].find((row) => row.textContent.includes(reel.title))
+);
+const publishButton = itemRow && itemRow.querySelector(".cc-pub");
 check("item da fila aparece com o botão \"Publicar\"", !!publishButton);
 check("botão \"Publicar\" está ativo (tem vídeo na nuvem)", !publishButton.disabled);
 

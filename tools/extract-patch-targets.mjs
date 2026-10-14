@@ -108,6 +108,10 @@ const P = {
   // 🎬 Publicação de Reels à prova do erro 2207077: envio direto (resumable), link
   // verificado/renovado e repetição com container novo.
   "24-ig-2207077": between("async function mS(r){", "return await pS(u,String(x.id),f,a)}"),
+  // Geração e validação dos ganchos virais que chegam ao campo do Estúdio.
+  "41-viral-hooks": between("async function Hm(", "async function Zb(").slice(0, -"async function Zb(".length),
+  "42-viral-hook-shape": `ganchos:Array.isArray(k.ganchos)?k.ganchos.map(T=>String(T).trim()).filter(Boolean):void 0`,
+  "43-viral-hook-prompt": between('6. ALTERNATIVAS ("alternativas"):', "\n${u}").slice(0, -"\n${u}".length),
 };
 
 let failed = 0;

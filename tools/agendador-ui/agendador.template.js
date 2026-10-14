@@ -49,6 +49,8 @@ const [cc_q, cc_setQ] = b.useState("");
 const [cc_drag, cc_setDrag] = b.useState(null);
 const [cc_over, cc_setOver] = b.useState(null);
 const [cc_busy, cc_setBusy] = b.useState(false);
+const [cc_cloudHealth, cc_setCloudHealth] = b.useState(null);
+const [cc_cloudChecking, cc_setCloudChecking] = b.useState(false);
 b.useEffect(() => {
   // Criar conta / abrir configuração (código antigo) passa a abrir a aba "Conta"
   if (g) { cc_setTab("conta"); v(!1); }
@@ -166,6 +168,94 @@ const cc_repack = async () => {
   } finally { cc_setBusy(!1); }
 };
 const cc_nextFreeFor = (it) => za(f.filter((x2) => x2.id !== it.id), j.dailySlots, j.id);
+
+/* ------------------------------------------------------- nuvem e duplicados */
+const cc_isDurable = (it) => {
+  try { return !!(it && it.remoteVideoUrl && window.CineCloud && window.CineCloud.isDurable(it.remoteVideoUrl)); }
+  catch { return false; }
+};
+const cc_cloudKind = (it) => {
+  if (cc_isDurable(it)) return it.needsReupload || it.cloudError
+    ? { label: "Nuvem durável · verificar", cls: "warn" }
+    : { label: "Nuvem durável", cls: "ok" };
+  if (it.remoteVideoUrl) return { label: "Link temporário", cls: "warn" };
+  if (it.videoBlob) return { label: "Só neste aparelho", cls: "warn" };
+  return { label: "Sem vídeo", cls: "muted" };
+};
+const cc_cloudNeedsWork = X.filter((it) => it.status !== "published" &&
+  (it.needsReupload || it.cloudError || !cc_isDurable(it)));
+const cc_cloudMetrics = {
+  durable: X.filter((it) => it.status !== "published" && cc_isDurable(it)).length,
+  action: cc_cloudNeedsWork.length,
+  temporary: X.filter((it) => it.status !== "published" && it.remoteVideoUrl && !cc_isDurable(it)).length,
+  missing: X.filter((it) => it.status !== "published" && !it.videoBlob && !it.remoteVideoUrl).length,
+};
+const cc_duplicateGroups = (() => {
+  const groups = new Map();
+  for (const it of X) {
+    if (!it) continue;
+    let key = null;
+    let reason = "";
+    const remote = String(it.remoteVideoUrl || "").trim();
+    const name = cc_norm(it.videoFileName || "");
+    const size = Number(it.videoSize || (it.videoBlob && it.videoBlob.size) || 0);
+    const title = cc_norm(it.title || "");
+    if (name && size > 0 && title) {
+      key = `file:${name}|${size}|${title}`;
+      reason = "Mesmo nome, tamanho e título";
+    } else if (remote) {
+      try {
+        const url = new URL(remote, window.location.href);
+        key = `url:${url.origin}${url.pathname}`;
+      } catch { key = `url:${remote.split(/[?#]/, 1)[0]}`; }
+      reason = "Mesmo link de vídeo";
+    } else if (it.videoBlob && typeof it.videoBlob === "object") {
+      key = it.videoBlob;
+      reason = "Mesmo ficheiro local";
+    }
+    if (key === null) continue;
+    let group = groups.get(key);
+    if (!group) { group = { reason, items: [] }; groups.set(key, group); }
+    group.items.push(it);
+  }
+  return Array.from(groups.values()).filter((group) => group.items.length > 1).map((group) => ({
+    ...group,
+    items: group.items.slice().sort((a, b) =>
+      Number(a.createdAt || a.updatedAt || 0) - Number(b.createdAt || b.updatedAt || 0) || cc_byTime(a, b)),
+  }));
+})();
+const cc_duplicateCount = cc_duplicateGroups.reduce((sum, group) => sum + group.items.length - 1, 0);
+const cc_cloudTabCount = cc_cloudNeedsWork.length + cc_duplicateCount;
+const cc_testCloud = async () => {
+  if (cc_cloudChecking) return;
+  if (!window.CineCloud || typeof window.CineCloud.healthCheck !== "function") {
+    cc_setCloudHealth({ ok: false, message: "A camada de nuvem não está disponível neste browser." });
+    return;
+  }
+  cc_setCloudChecking(true);
+  try {
+    const report = await window.CineCloud.healthCheck();
+    cc_setCloudHealth(report || { ok: false, message: "A nuvem não devolveu um resultado." });
+    report && report.ok
+      ? je.success(report.message || "Ligação à nuvem verificada.")
+      : je.error((report && report.message) || "Não foi possível confirmar a ligação à nuvem.");
+  } catch (err) {
+    const message = (err && err.message) || "Falha ao testar a ligação à nuvem.";
+    cc_setCloudHealth({ ok: false, message });
+    je.error(message);
+  } finally { cc_setCloudChecking(false); }
+};
+const cc_syncCloud = async () => {
+  if (cc_busy) return;
+  cc_setBusy(true);
+  try {
+    await he();
+    if (typeof u === "function") await u();
+    je("☁️ Sincronização da fila iniciada.");
+  } catch (err) {
+    je.error((err && err.message) || "Não foi possível sincronizar a fila.");
+  } finally { cc_setBusy(false); }
+};
 
 // Próximos horários livres desta conta (atalhos rápidos para agendar)
 const cc_quick = b.useMemo(() => {
@@ -414,6 +504,120 @@ const cc_queue = cc_h("div", { className: "cc-queue" },
         cc_h("div", { className: "cc-day-list" }, grp.items.map(cc_item)))),
 );
 
+const cc_cloudMetric = (label, value, hint, tone) =>
+  cc_h("div", { className: qe("cc-cloud-metric", tone && `cc-cloud-metric-${tone}`) },
+    cc_h("span", { className: "cc-cloud-metric-label" }, label),
+    cc_h("strong", { className: "cc-cloud-metric-value" }, value),
+    cc_h("span", { className: "cc-cloud-metric-hint" }, hint),
+  );
+
+const cc_cloudItem = (it) => {
+  const kind = cc_cloudKind(it);
+  const canRetry = !!it.videoBlob && it.status !== "published" && it.status !== "publishing";
+  return cc_h("div", { key: it.id, className: "cc-cloud-row" },
+    cc_h("div", { className: "cc-cloud-info" },
+      cc_h("strong", null, it.title || it.videoFileName || "Reel sem título"),
+      cc_h("span", { className: "cc-sub" }, `${kind.label} · ${cc_when(it.scheduledAt)}`),
+      it.cloudError && cc_h("span", { className: "cc-cloud-error" }, it.cloudError),
+      !it.videoBlob && !cc_isDurable(it) && cc_h("span", { className: "cc-sub" }, "Importa o .mp4 neste aparelho para o poder reenviar."),
+    ),
+    cc_h("div", { className: "cc-cloud-actions" },
+      cc_h("span", { className: qe("cc-cloud-pill", `cc-cloud-pill-${kind.cls}`) }, kind.label),
+      canRetry && cc_h(Ae, { size: "sm", variant: "secondary", onClick: () => {
+        je("☁️ A sincronizar e a reenviar os vídeos pendentes…");
+        if (typeof u === "function") u();
+      } }, d.jsx(Kr, { className: "h-3.5 w-3.5" }), "Reenviar"),
+    ),
+  );
+};
+
+const cc_duplicateGroup = (group, index) => cc_h("section", { key: `duplicate-${index}`, className: "cc-duplicate-group" },
+  cc_h("div", { className: "cc-duplicate-head" },
+    cc_h("strong", null, `Possível duplicado · ${group.items.length} itens`),
+    cc_h("span", { className: "cc-sub" }, group.reason),
+  ),
+  cc_h("div", { className: "cc-duplicate-list" }, group.items.map((it) => {
+    const kind = cc_statusInfo(it, cc_isLate(it));
+    const canRemove = it.status !== "published" && it.status !== "publishing";
+    return cc_h("div", { key: it.id, className: "cc-duplicate-row" },
+      cc_h("div", { className: "cc-cloud-info" },
+        cc_h("strong", null, it.title || it.videoFileName || "Reel sem título"),
+        cc_h("span", { className: "cc-sub" }, `${cc_when(it.scheduledAt)} · ${it.videoFileName || "nome de ficheiro desconhecido"}${it.videoSize ? ` · ${Fa(it.videoSize)}` : ""}`),
+      ),
+      cc_h("div", { className: "cc-cloud-actions" },
+        cc_h("span", { className: qe("cc-cloud-pill", `cc-cloud-pill-${kind.cls === "cc-st-ok" ? "ok" : kind.cls === "cc-st-err" ? "err" : "muted"}`) }, kind.label),
+        cc_h(Ae, { size: "sm", variant: "ghost", onClick: () => {
+          cc_setTab("fila"); cc_setFilter("todos"); cc_setQ(it.title || ""); cc_setOpen(it.id);
+        } }, "Ver na fila"),
+        canRemove && cc_h(Ae, { size: "sm", variant: "outline", className: "cc-duplicate-remove", onClick: () => {
+          const title = it.title || it.videoFileName || "este Reel";
+          if (window.confirm(`Remover “${title}” da fila de ${j.name}? O vídeo no Drive/R2 não será apagado.`)) H(it.id);
+        }, title: "Pede confirmação; o vídeo na nuvem é preservado" },
+          d.jsx(bm, { className: "h-3.5 w-3.5" }), "Remover"),
+      ),
+    );
+  })),
+);
+
+const cc_cloudDiagnostics = (() => {
+  try { return window.CineCloud && typeof window.CineCloud.diagnostics === "function" ? window.CineCloud.diagnostics() : null; }
+  catch { return null; }
+})();
+const cc_cloudConfigured = (() => {
+  try { return !!(window.CineCloud && typeof window.CineCloud.configured === "function" && window.CineCloud.configured()); }
+  catch { return false; }
+})();
+const cc_cloudPanel = cc_h("div", { className: "cc-cloud-panel" },
+  cc_h("div", { className: "cc-card cc-cloud-overview" },
+    cc_h("div", { className: "cc-cloud-head" },
+      cc_h("div", null,
+        cc_h("strong", { className: "cc-cloud-title" }, "Nuvem durável · fila de ", j.name),
+        cc_h("span", { className: "cc-sub" }, cc_cloudConfigured
+          ? `Provider configurado para este cofre${cc_cloudDiagnostics && cc_cloudDiagnostics.lastProvider ? ` · último envio: ${cc_cloudDiagnostics.lastProvider}` : ""}`
+          : "Drive ou Cloudflare R2 ainda não configurado para este cofre."),
+      ),
+      cc_h("div", { className: "cc-cloud-actions" },
+        cc_h(Ae, { size: "sm", variant: "outline", disabled: cc_cloudChecking, onClick: cc_testCloud },
+          cc_cloudChecking ? d.jsx(rr, { className: "h-3.5 w-3.5 animate-spin" }) : d.jsx(ap, { className: "h-3.5 w-3.5" }),
+          cc_cloudChecking ? "A testar…" : "Testar ligação"),
+        cc_h(Ae, { size: "sm", variant: "secondary", disabled: cc_busy, onClick: cc_syncCloud },
+          cc_busy ? d.jsx(rr, { className: "h-3.5 w-3.5 animate-spin" }) : d.jsx(Kr, { className: "h-3.5 w-3.5" }), "Sincronizar fila"),
+      ),
+    ),
+    cc_h("div", { className: "cc-cloud-metrics" },
+      cc_cloudMetric("Na nuvem", cc_cloudMetrics.durable, "Drive ou R2", "ok"),
+      cc_cloudMetric("Ação necessária", cc_cloudMetrics.action, "pendentes de envio", cc_cloudMetrics.action ? "warn" : "ok"),
+      cc_cloudMetric("Links temporários", cc_cloudMetrics.temporary, "podem expirar", cc_cloudMetrics.temporary ? "warn" : null),
+      cc_cloudMetric("Sem ficheiro", cc_cloudMetrics.missing, "importa o .mp4", cc_cloudMetrics.missing ? "warn" : null),
+    ),
+    cc_cloudHealth && cc_h("p", { className: qe("cc-cloud-result", cc_cloudHealth.ok ? "cc-cloud-result-ok" : "cc-cloud-result-err") },
+      cc_cloudHealth.message || (cc_cloudHealth.ok ? "Ligação verificada." : "Não foi possível verificar a ligação.")),
+    cc_cloudHealth && Array.isArray(cc_cloudHealth.steps) && cc_cloudHealth.steps.length > 0 && cc_h("details", { className: "cc-cloud-details" },
+      cc_h("summary", null, "Ver detalhes do teste"),
+      cc_h("ul", null, cc_cloudHealth.steps.map((step, index) => cc_h("li", { key: index }, step))),
+    ),
+    !cc_cloudConfigured && cc_h("p", { className: "cc-cloud-hint" }, "Configura Google Drive ou Cloudflare R2 em Configurações → Nuvem durável (a configuração vale para o cofre). O teste só corre quando carregas em “Testar ligação”."),
+  ),
+  cc_h("div", { className: "cc-card cc-cloud-section" },
+    cc_h("div", { className: "cc-cloud-section-head" },
+      cc_h("div", null, cc_h("strong", null, "Itens que precisam de atenção"), cc_h("span", { className: "cc-sub" }, `Fila de ${j.name} · ${cc_cloudNeedsWork.length} item(ns)`)),
+    ),
+    cc_cloudNeedsWork.length
+      ? cc_h("div", { className: "cc-cloud-list" }, cc_cloudNeedsWork.map(cc_cloudItem))
+      : cc_h("div", { className: "cc-cloud-empty" }, d.jsx(ap, { className: "h-5 w-5" }), "Todos os vídeos pendentes têm um link durável."),
+  ),
+  cc_h("div", { className: "cc-card cc-cloud-section" },
+    cc_h("div", { className: "cc-cloud-section-head" },
+      cc_h("div", null, cc_h("strong", null, "Possíveis duplicados"), cc_h("span", { className: "cc-sub" }, "Deteção apenas para revisão — nada é removido automaticamente.")),
+      cc_h("span", { className: "cc-cloud-count" }, cc_duplicateCount),
+    ),
+    cc_h("p", { className: "cc-cloud-hint" }, "Compara o link do vídeo ou o mesmo nome + tamanho + título, apenas nesta conta. Revê os itens antes de remover; os já publicados ficam protegidos."),
+    cc_duplicateGroups.length
+      ? cc_h("div", { className: "cc-duplicate-groups" }, cc_duplicateGroups.map(cc_duplicateGroup))
+      : cc_h("div", { className: "cc-cloud-empty" }, d.jsx(ap, { className: "h-5 w-5" }), "Não encontrei possíveis duplicados nesta conta."),
+  ),
+);
+
 const cc_slotEditor = cc_h("div", { className: "cc-card cc-slots" },
   cc_h("div", { className: "cc-slots-head" },
     cc_h("div", null,
@@ -482,9 +686,11 @@ return cc_h("section", { className: "cc-ag" },
     cc_tabBtn("fila", xi, "Fila", cc_counts.pendentes),
     cc_tabBtn("conta", Z0, cc_h("span", null, "Conta", cc_h("span", { className: "cc-hide-sm" }, " e horários")), 0),
     cc_tabBtn("robo", Kr, "Robô 24h", 0),
+    cc_tabBtn("cloud", T0, "Nuvem / Duplicados", cc_cloudTabCount),
   ),
   cc_tab === "fila" && cc_h("div", { className: "cc-panel" }, cc_compose, cc_queue),
   cc_tab === "conta" && cc_h("div", { className: "cc-panel" }, cc_slotEditor, __CC_CONFIG__),
   cc_tab === "robo" && cc_h("div", { className: "cc-panel" }, __CC_ROBO__),
+  cc_tab === "cloud" && cc_h("div", { className: "cc-panel" }, cc_cloudPanel),
 );
 }
