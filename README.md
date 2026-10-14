@@ -97,6 +97,13 @@ O código está em `lote-massa.js` (legível, fora do bundle). A ligação ao bu
 `27-lote-ponte` (expõe `window.CineClipCore` e `window.__CineClipApp`); os patches `26` e
 `28` carregam o script e mudam a área de upload. Testes: `npm run lote:test`.
 
+## ☁️ Processar na nuvem (servidor)
+
+Um servidor próprio (ex.: Hetzner CX23, ~€6/mês) processa sozinho os links que o celular manda
+com **☁️ Processar na nuvem** — celular e PC podem ficar desligados. Usa o mesmo código do site
+(IA, TMDB, upload em massa) com o FFmpeg nativo. Instalação num comando e guia passo a passo
+em [`servidor/README.md`](servidor/README.md).
+
 ## 📅 Agendador (layout)
 
 A aba **Agendador** tem um layout próprio: resumo (na fila / próximo post / publicados /
