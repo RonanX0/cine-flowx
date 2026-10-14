@@ -92,6 +92,16 @@
     agora: function () {
       return Date.now();
     },
+    /** ☁️ Nuvem na própria Vercel (api/nuvem.js): está configurada? */
+    consultarNuvem: function () {
+      return fetch("/api/nuvem", { cache: "no-store" }).then(function (r) {
+        return r.ok ? r.json() : null;
+      });
+    },
+    /** Acorda a nuvem da Vercel para processar os links pendentes (responde logo). */
+    acordarNuvem: function () {
+      return fetch("/api/nuvem", { method: "POST", keepalive: true });
+    },
   };
 
   /** Dimensões e duração do vídeo, lidas por um <video> escondido. */
@@ -908,6 +918,30 @@
   var CHAVE_SERVIDOR = "cineclip.servidor.visto";
   var LIGADO_MS = 15 * 60 * 1000;
   var verificandoServidor = null;
+  /* A nuvem também pode ser a própria Vercel (api/nuvem.js, sem servidor ligado o
+     tempo todo): basta a chave do servidor nas variáveis da Vercel. Ela não dá sinal
+     de vida sozinha — o app pergunta-lhe se está configurada e acorda-a quando há
+     links à espera. */
+  var nuvemVercel = null;
+  var ultimoAcordar = 0;
+
+  function nuvemVercelPronta() {
+    return !!(nuvemVercel && nuvemVercel.configurado);
+  }
+
+  /** Acorda a nuvem da Vercel se houver links à espera (no máximo 1x a cada 2 min, salvo `ja`). */
+  function acordarNuvem(ja) {
+    if (!nuvemVercelPronta()) return false;
+    var espera = lerCaixa().some(function (e) { return e.destino === "nuvem" && e.estado === "pendente"; });
+    if (!espera) return false;
+    if (!ja && ambiente.agora() - ultimoAcordar < 2 * 60 * 1000) return false;
+    ultimoAcordar = ambiente.agora();
+    try {
+      var p = ambiente.acordarNuvem();
+      if (p && typeof p.catch === "function") p.catch(function () {});
+    } catch (e) {}
+    return true;
+  }
 
   function servidorVistoEm() {
     return Number(lerJson(CHAVE_SERVIDOR, 0)) || 0;
@@ -925,6 +959,15 @@
     if (verificandoServidor) return verificandoServidor;
     verificandoServidor = (async function () {
       try {
+        try {
+          nuvemVercel = await ambiente.consultarNuvem();
+        } catch (e) {
+          nuvemVercel = null;
+        }
+        if (nuvemVercelPronta()) {
+          gravarJson(CHAVE_SERVIDOR, ambiente.agora());
+          return true;
+        }
         var cc = window.CineCloud;
         if (!cc || typeof cc.activeClaims !== "function") return servidorLigado();
         var lista = await cc.activeClaims();
@@ -1014,6 +1057,11 @@
     }
     try {
       await app.sincronizar();
+      if (nuvem) {
+        // O link já está no cofre: acorda a nuvem da Vercel (se for essa a nuvem).
+        if (!nuvemVercelPronta()) await verificarServidor();
+        acordarNuvem(true);
+      }
       mostrarRecebidos(links, "", nuvem
         ? "✅ Enviado para a nuvem. O servidor processa e agenda sozinho em poucos minutos. Já podes fechar." +
           (servidorLigado() ? "" : " (O servidor não deu sinal de vida há algum tempo — confere se está ligado.)")
@@ -1103,7 +1151,10 @@
     aguardarApp(10 * 60 * 1000).then(function (ok) {
       if (ok) {
         verificarCaixa();
-        verificarServidor();
+        // Links que ficaram à espera da nuvem (ex.: o celular fechou antes de a acordar).
+        verificarServidor().then(function () {
+          acordarNuvem(false);
+        });
       }
     });
   }
@@ -1535,11 +1586,13 @@
   function desenharEstadoNuvem() {
     var visto = servidorVistoEm();
     var minutos = visto ? Math.max(0, Math.round((ambiente.agora() - visto) / 60000)) : null;
-    var linha = servidorLigado()
+    var linha = nuvemVercelPronta()
+      ? "☁️ Nuvem (Vercel): pronta — processa quando mandas links"
+      : servidorLigado()
       ? "☁️ Servidor na nuvem: ligado" + (minutos ? " (visto há " + minutos + " min)" : "")
       : visto
         ? "☁️ Servidor na nuvem: sem sinal há " + (minutos >= 120 ? Math.round(minutos / 60) + " h" : minutos + " min")
-        : "☁️ Servidor na nuvem: ainda não deu sinal (ver servidor/README.md para o instalar)";
+        : "☁️ Nuvem: ainda não configurada — cola a chave abaixo nas variáveis da Vercel (ver servidor/README.md)";
     var nuvem = lerCaixa()
       .filter(function (e) { return e.destino === "nuvem"; })
       .sort(function (a, b) { return (b.atualizadoEm || 0) - (a.atualizadoEm || 0); })
@@ -1562,6 +1615,9 @@
             // concorda manda agendar assim mesmo.
             reabrirEntrada(e.id, "nuvem", { forcar: rever });
             pedirSincronizacao();
+            sincronizacao.then(function () {
+              acordarNuvem(true);
+            });
             desenhar();
           } }, [rever ? "Agendar mesmo assim (nuvem)" : "Tentar de novo na nuvem"]));
           acoes.push(el("button", { type: "button", className: "cl-btn cl-sec cl-mini", onClick: function () {
@@ -1819,6 +1875,8 @@
       meuAparelho: meuAparelho,
       aoTocarColar: aoTocarColar,
       verificarServidor: verificarServidor,
+      acordarNuvem: acordarNuvem,
+      nuvemVercelPronta: nuvemVercelPronta,
       chaveDoServidor: chaveDoServidor,
       servidorLigado: servidorLigado,
       verificarLinkCopiado: verificarLinkCopiado,

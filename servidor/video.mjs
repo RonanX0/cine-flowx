@@ -15,9 +15,13 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const FFMPEG = process.env.CINECLIP_FFMPEG || "ffmpeg";
-const FFPROBE = process.env.CINECLIP_FFPROBE || "ffprobe";
+const AQUI = path.dirname(fileURLToPath(import.meta.url));
+// Lidos na hora (não no import): na Vercel o FFmpeg vem do pacote ffmpeg-static e o
+// caminho só se conhece depois de carregar o módulo.
+const ffmpeg = () => process.env.CINECLIP_FFMPEG || "ffmpeg";
+const ffprobe = () => process.env.CINECLIP_FFPROBE || "ffprobe";
 
 /** Corre um comando e devolve stdout (Buffer). `aoLog` recebe o stderr linha a linha. */
 export function correr(cmd, args, { aoLog, entrada } = {}) {
@@ -49,9 +53,17 @@ export async function pastaTemporaria(prefixo = "cineclip-") {
 
 /** Largura, altura (já com a rotação aplicada), duração e se há áudio. */
 export async function sondar(caminho) {
-  const saida = await correr(FFPROBE, ["-v", "error", "-show_entries",
+  let saida;
+  try {
+    if (process.env.CINECLIP_FFPROBE === "nenhum") throw Object.assign(new Error("sem ffprobe"), { code: "ENOENT" });
+    saida = await correr(ffprobe(), ["-v", "error", "-show_entries",
     "stream=codec_type,codec_name,width,height:stream_side_data=rotation:stream_tags=rotate:format=duration",
     "-of", "json", caminho]);
+  } catch (e) {
+    // Sem ffprobe (ex.: Vercel, só com o ffmpeg-static): lê o mesmo do "ffmpeg -i".
+    if (e && e.code === "ENOENT") return sondarComFfmpeg(caminho);
+    throw e;
+  }
   const j = JSON.parse(saida.toString());
   const v = (j.streams || []).find((s) => s.codec_type === "video") || {};
   const a = (j.streams || []).find((s) => s.codec_type === "audio");
@@ -62,9 +74,46 @@ export async function sondar(caminho) {
   return { largura, altura, duracao: Number(j.format && j.format.duration) || 0, temAudio: !!a, codec: v.codec_name || "" };
 }
 
+/** O mesmo que `sondar`, a partir do relatório do "ffmpeg -i" (quando não há ffprobe). */
+export function lerRelatorioFfmpeg(texto) {
+  const t = String(texto || "");
+  const dur = /Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/.exec(t);
+  const linhaVideo = (t.split("\n").find((l) => /Stream #\S+.*: Video:/.test(l)) || "");
+  const codec = (/: Video:\s*([\w-]+)/.exec(linhaVideo) || [])[1] || "";
+  const dim = /,\s*(\d{2,5})x(\d{2,5})(?=[\s,\[]|$)/.exec(linhaVideo);
+  let largura = dim ? Number(dim[1]) : 0;
+  let altura = dim ? Number(dim[2]) : 0;
+  const rot = /displaymatrix:\s*rotation of\s*(-?[\d.]+)\s*degrees/i.exec(t) || /\brotate\s*:\s*(-?\d+)/i.exec(t);
+  if (rot && Math.abs(Math.round(Number(rot[1]))) % 180 === 90) [largura, altura] = [altura, largura];
+  return {
+    largura,
+    altura,
+    duracao: dur ? Number(dur[1]) * 3600 + Number(dur[2]) * 60 + Number(dur[3]) : 0,
+    temAudio: /Stream #\S+.*: Audio:/.test(t),
+    codec,
+  };
+}
+
+function sondarComFfmpeg(caminho) {
+  return new Promise((resolve, reject) => {
+    const p = spawn(ffmpeg(), ["-hide_banner", "-i", caminho], { stdio: ["ignore", "ignore", "pipe"] });
+    let texto = "";
+    p.stderr.on("data", (d) => {
+      texto += d.toString();
+    });
+    p.on("error", reject);
+    p.on("close", () => {
+      const info = lerRelatorioFfmpeg(texto);
+      if (!info.largura || !info.altura) {
+        reject(new Error("Não consegui ler o vídeo: " + texto.split("\n").filter(Boolean).slice(-2).join(" | ")));
+      } else resolve(info);
+    });
+  });
+}
+
 /** Um quadro em RGB cru, à escala pedida. */
 async function quadroRGB(caminho, t, largura, altura) {
-  return correr(FFMPEG, ["-v", "error", "-ss", t.toFixed(3), "-i", caminho, "-frames:v", "1",
+  return correr(ffmpeg(), ["-v", "error", "-ss", t.toFixed(3), "-i", caminho, "-frames:v", "1",
     "-vf", `scale=${largura}:${altura}`, "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]);
 }
 
@@ -165,12 +214,12 @@ export async function quadros(caminho, inicio, fim, corte) {
     for (const pos of [0.08, 0.24, 0.41, 0.58, 0.75, 0.91]) {
       const t = Math.min(V - 0.05, Math.max(0, inicio + se * pos));
       const destino = path.join(pasta, `q${++i}.jpg`);
-      await correr(FFMPEG, ["-v", "error", "-y", "-ss", t.toFixed(3), "-i", caminho, "-frames:v", "1",
+      await correr(ffmpeg(), ["-v", "error", "-y", "-ss", t.toFixed(3), "-i", caminho, "-frames:v", "1",
         "-vf", `crop=iw:${x}:0:${topo},scale=${T}:${D},setsar=1`, "-q:v", "3", destino]);
       soltos.push(destino);
     }
     const mosaico = path.join(pasta, "mosaico.jpg");
-    await correr(FFMPEG, ["-v", "error", "-y", "-framerate", "1", "-i", path.join(pasta, "q%d.jpg"),
+    await correr(ffmpeg(), ["-v", "error", "-y", "-framerate", "1", "-i", path.join(pasta, "q%d.jpg"),
       "-vf", `scale=${ladoTile}:${k},setsar=1,tile=2x3`, "-frames:v", "1", "-q:v", "3", mosaico]);
     const lista = [dataUrl(await fs.promises.readFile(mosaico))];
     for (const s of soltos) lista.push(dataUrl(await fs.promises.readFile(s)));
@@ -195,7 +244,7 @@ export async function audio(caminho, inicio = 0, fim = 45) {
   const g = Math.max(1, Math.min(45, (fim || info.duracao) - p));
   let wav;
   try {
-    wav = await correr(FFMPEG, ["-v", "error", "-ss", p.toFixed(2), "-t", g.toFixed(2), "-i", caminho,
+    wav = await correr(ffmpeg(), ["-v", "error", "-ss", p.toFixed(2), "-t", g.toFixed(2), "-i", caminho,
       "-vn", "-ac", "1", "-ar", "12000", "-c:a", "pcm_s16le", "-f", "wav", "-"]);
   } catch {
     return null;
@@ -245,8 +294,13 @@ async function canvasComFontes() {
       "/usr/share/fonts/opentype/inter/Inter-ExtraBold.otf",
       "/usr/share/fonts/truetype/inter/Inter-ExtraBold.ttf",
       "/usr/share/fonts/opentype/inter/Inter-Bold.otf",
+      path.join(AQUI, "fontes", "Inter-ExtraBold.ttf"), // as que vão no repositório (Vercel)
     ].filter(Boolean);
-    const emoji = [process.env.CINECLIP_FONTE_EMOJI, "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf"].filter(Boolean);
+    const emoji = [
+      process.env.CINECLIP_FONTE_EMOJI,
+      "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+      path.join(AQUI, "fontes", "NotoColorEmoji.ttf"),
+    ].filter(Boolean);
     fontesProntas = { inter: false, emoji: false };
     for (const c of candidatos) {
       if (fs.existsSync(c) && mod.GlobalFonts.registerFromPath(c, "Inter")) {
@@ -344,7 +398,7 @@ export async function processar(entrada, inicio, fim, resolucao, gancho, aoProgr
       "-pix_fmt", "yuv420p", "-bsf:v", "filter_units=remove_types=6",
       "-c:a", "aac", "-ar", "44100", "-ac", "2", "-b:a", "128k", "-shortest", "-movflags", "+faststart", saida
     );
-    await correr(FFMPEG, args, {
+    await correr(ffmpeg(), args, {
       aoLog: (t) => {
         const s = tempoDoLog(t);
         if (s != null && aoProgresso) aoProgresso(Math.min(0.99, s / dur));

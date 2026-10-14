@@ -6,7 +6,9 @@ identifica o filme, cria o gancho e a legenda, formata em 9:16, guarda no seu Cl
 e agenda o Reel. O **Robô 24h** publica no Instagram, como sempre. Celular e PC podem ficar
 desligados.
 
-Pode rodar de graça na **Oracle Cloud** ou por cerca de €6/mês na **Hetzner**.
+O jeito mais simples é a **própria Vercel**, onde o site já está: grátis, sem cartão e sem
+máquina para criar ([Opção 0](#opção-0-vercel-grátis-sem-servidor-recomendado)). Também pode
+rodar numa máquina só sua, de graça na **Oracle Cloud** ou por cerca de €6/mês na **Hetzner**.
 
 O servidor usa **o mesmo código do site** (IA, TMDB, regras do upload em massa). Só a parte
 de vídeo troca o FFmpeg do navegador pelo FFmpeg do servidor — por isso vídeos em H.265 deixam
@@ -19,7 +21,39 @@ de dar problema e o processamento é bem mais rápido.
 - **Robô 24h ativo** (Agendador → Robô 24h). É ele que publica.
 - Chaves de IA (NVIDIA ou Gemini) e TMDB nas configurações do app — o servidor usa as mesmas.
 
-## Instalação
+## Opção 0: Vercel (grátis, sem servidor) — recomendado
+
+A nuvem corre dentro do próprio site (`api/nuvem.js`). Não fica nada ligado: quando um link
+chega, a Vercel acorda, trata **1 vídeo por pedido** (até 5 minutos) e volta a dormir. Quem a
+acorda é o celular, logo depois de mandar o link, e o **Robô 24h**, a cada 5 minutos, enquanto
+houver links à espera.
+
+1. **Copie a chave.** No CineClip: **📦 Upload em massa → 📱 Compartilhar do celular →
+   🔑 Copiar chave do servidor**.
+2. **Cole na Vercel.** Em <https://vercel.com> abra o projeto **cine-flowx** → **Settings →
+   Environment Variables**:
+   - **Key:** `CINECLIP_CHAVE_SERVIDOR`
+   - **Value:** a chave copiada (começa com `CINECLIP1:`)
+   - **Environments:** *Production* (pode marcar **Sensitive**)
+   - **Save**.
+3. **Publique de novo.** As variáveis só valem para publicações novas: **Deployments** → na
+   mais recente, **⋯ → Redeploy**.
+4. **Atualize o Robô 24h.** Copie de novo o código do Robô (**Agendador → Robô 24h → 1. Copiar
+   Código**) e cole por cima no Apps Script (💾 Salvar). É ele que acorda a nuvem se o celular
+   fechar antes.
+5. **Confira.** Em **📱 Compartilhar do celular** deve aparecer **"☁️ Nuvem (Vercel): pronta"**.
+   Compartilhe um vídeo → **CineClip** → **☁️ Processar na nuvem**.
+
+**Limites do plano grátis (Hobby) da Vercel:** cerca de **4 horas de processador por mês** —
+dá uns 120 a 200 vídeos (cada um gasta 1 a 2 minutos) — e **5 minutos por vídeo**. Um vídeo
+que não termine em 3 tentativas fica com **Erro** e o botão **Fazer aqui**. O plano grátis é
+para uso pessoal (não comercial). Para ver o que a nuvem fez: projeto na Vercel → **Logs**,
+filtrando por `/api/nuvem` (guardados durante 1 hora).
+
+Opcional: `CINECLIP_AGENDAR_POUCA_CERTEZA=1` agenda também os vídeos em que a IA teve menos de
+65% de certeza do filme.
+
+## Instalação num servidor próprio
 
 Escolha onde o servidor vai rodar:
 
@@ -162,6 +196,10 @@ escolha** para os próximos irem direto. A opção aparece quando o app vê o se
 
 ## Detalhes técnicos
 
+- `vercel.mjs` + `../api/nuvem.js` — a nuvem na Vercel: `GET` diz se está configurada,
+  `POST` responde logo e trata 1 link em segundo plano (`waitUntil`), com um trinco nas
+  claims do R2 (um pedido de cada vez) e o registo cifrado no R2 (o disco da Vercel é
+  temporário). Usa o FFmpeg do pacote `ffmpeg-static` (sem ffprobe) e as fontes de `fontes/`.
 - `index.mjs` — comandos e ciclo (a cada `INTERVALO_S`, 60 s por padrão).
 - `trabalhador.mjs` — lê o cofre, processa os links com destino `nuvem`, envia o vídeo para o
   R2, junta o Reel à fila e marca o link. Relê o cofre antes de gravar e, durante 30 min,

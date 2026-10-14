@@ -220,3 +220,59 @@ export async function sinalDeVida(cfg, dono, { fetchFn = fetch, ttlMs = 5 * 60 *
     return false;
   }
 }
+
+/* ------------------------------------------------- trinco e registo (R2) */
+
+/**
+ * Trinco simples com as claims do Worker: só um processamento de cada vez (na
+ * Vercel podem chegar dois pedidos ao mesmo tempo — o do celular e o do Robô).
+ * Devolve true se ficou com o trinco. Sem R2 não há trinco (devolve true).
+ */
+export async function reclamar(cfg, nome, dono, { fetchFn = fetch, ttlMs = 5 * 60 * 1000 } = {}) {
+  if (!r2(cfg)) return true;
+  const r = await fetchFn(`${cfg.R2_WORKER_URL}/api/claims/acquire`, {
+    method: "POST",
+    headers: { Authorization: "Bearer " + cfg.R2_TOKEN, "Content-Type": "application/json" },
+    body: JSON.stringify({ key: `cc_${cfg.VAULT_HASH}_${nome}`, owner: dono, ttlMs }),
+  });
+  const j = await r.json().catch(() => null);
+  return !!(j && j.acquired);
+}
+
+export async function libertar(cfg, nome, dono, { fetchFn = fetch } = {}) {
+  if (!r2(cfg)) return;
+  await fetchFn(`${cfg.R2_WORKER_URL}/api/claims/release`, {
+    method: "POST",
+    headers: { Authorization: "Bearer " + cfg.R2_TOKEN, "Content-Type": "application/json" },
+    body: JSON.stringify({ key: `cc_${cfg.VAULT_HASH}_${nome}`, owner: dono }),
+  }).catch(() => {});
+}
+
+const REGISTO_VAZIO = () => ({ links: {}, reels: {}, tentativas: {} });
+
+/**
+ * Registo do servidor guardado no R2 (cifrado como o cofre). Na Vercel o disco é
+ * temporário: sem isto, um link já tratado podia ser processado outra vez se uma
+ * sincronização do app o devolvesse a "pendente".
+ */
+export function registoNoR2(cfg, { fetchFn = fetch } = {}) {
+  const url = `${cfg.R2_WORKER_URL}/api/vault/cc_${encodeURIComponent(cfg.VAULT_HASH)}_registo_nuvem`;
+  return {
+    async ler() {
+      const r = await fetchFn(url, { headers: { Authorization: "Bearer " + cfg.R2_TOKEN } });
+      if (r.status === 404) return REGISTO_VAZIO();
+      if (!r.ok) throw new Error("Não consegui ler o registo da nuvem (HTTP " + r.status + ").");
+      const texto = await r.text();
+      if (!texto || texto.length < 3) return REGISTO_VAZIO();
+      return { ...REGISTO_VAZIO(), ...(await decifrar(texto, cfg.ENCRYPTION_KEY_B64)) };
+    },
+    async gravar(registo) {
+      const r = await fetchFn(url, {
+        method: "PUT",
+        headers: { Authorization: "Bearer " + cfg.R2_TOKEN, "Content-Type": "application/json" },
+        body: cifrar(registo, cfg.ENCRYPTION_KEY_B64),
+      });
+      if (!r.ok) throw new Error("Não consegui gravar o registo da nuvem (HTTP " + r.status + ").");
+    },
+  };
+}

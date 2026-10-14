@@ -142,10 +142,30 @@ async function fetchFalso(url, opts = {}) {
       nuvem.videos[key] = Buffer.from(opts.body);
       return json(200, { ok: true, url: `${R2}/v/${encodeURIComponent(key)}`, key, size: nuvem.videos[key].length });
     }
+    if (u.pathname.startsWith("/api/vault/")) {
+      // Outros nomes no cofre (ex.: o registo da nuvem da Vercel).
+      const nome = decodeURIComponent(u.pathname.slice("/api/vault/".length));
+      nuvem.outros = nuvem.outros || {};
+      if (metodo === "PUT") {
+        nuvem.outros[nome] = String(opts.body);
+        return json(200, { ok: true });
+      }
+      return nome in nuvem.outros ? new Response(nuvem.outros[nome], { status: 200 }) : json(404, { error: "not_found" });
+    }
     if (u.pathname === "/api/claims/acquire") {
       const b = JSON.parse(opts.body);
-      nuvem.claims[b.key] = b;
+      const atual = nuvem.claims[b.key];
+      if (atual && atual.owner !== b.owner && (atual.expiresAt || Infinity) > Date.now()) {
+        return json(200, { ok: true, acquired: false, holder: atual.owner });
+      }
+      nuvem.claims[b.key] = { ...b, expiresAt: Date.now() + (b.ttlMs || 60000) };
       return json(200, { ok: true, acquired: true, claim: b });
+    }
+    if (u.pathname === "/api/claims/release") {
+      const b = JSON.parse(opts.body);
+      const atual = nuvem.claims[b.key];
+      if (atual && atual.owner === b.owner) delete nuvem.claims[b.key];
+      return json(200, { ok: true, released: !!atual });
     }
   }
   // TikTok
@@ -292,6 +312,101 @@ console.log("\n6. «Agendar mesmo assim» depois de rever");
   const depois = await decifrar(nuvem.cofre, cfg.ENCRYPTION_KEY_B64);
   const ligado = depois.linksCelular.find((x) => x.id === "lk_duvida");
   check("o servidor agenda o vídeo de pouca certeza quando o utilizador manda", ligado.estado === "feito" && depois.queue.some((r) => r.id === ligado.reelId && r.title === "Talvez Este"), JSON.stringify(ligado));
+}
+
+/* ------------------------------------------------------------------ 7 */
+console.log("\n7. Nuvem na Vercel (api/nuvem.js): sem servidor ligado, 1 link por pedido");
+{
+  const { estadoDaNuvem, trabalharNaVercel } = await import("../servidor/vercel.mjs");
+  const chave = "CINECLIP1:" + Buffer.from(JSON.stringify({
+    CONTA: "ronan", VAULT_HASH: cfg.VAULT_HASH, ENCRYPTION_KEY_B64: cfg.ENCRYPTION_KEY_B64,
+    R2_WORKER_URL: cfg.R2_WORKER_URL, R2_TOKEN: cfg.R2_TOKEN, DRIVE_SCRIPT_URL: "", DRIVE_TOKEN: "",
+  })).toString("base64");
+  const env = { CINECLIP_CHAVE_SERVIDOR: chave };
+  check("GET /api/nuvem: configurada com a chave do servidor", estadoDaNuvem(env).configurado === true);
+  const semChave = estadoDaNuvem({});
+  check("GET /api/nuvem: sem a variável diz o que falta", semChave.configurado === false && /CINECLIP_CHAVE_SERVIDOR/.test(semChave.erro));
+  check("GET /api/nuvem: não devolve segredos", !JSON.stringify(estadoDaNuvem(env)).includes(cfg.R2_TOKEN));
+
+  // FFmpeg do pacote ffmpeg-static e sem ffprobe — como na Vercel.
+  let ffmpegVercel = "";
+  try {
+    ffmpegVercel = (await import("ffmpeg-static")).default || "";
+  } catch {}
+  if (!ffmpegVercel || !fs.existsSync(ffmpegVercel)) ffmpegVercel = "ffmpeg";
+
+  const c = await decifrar(nuvem.cofre, cfg.ENCRYPTION_KEY_B64);
+  const t = Date.now();
+  c.linksCelular.push(
+    { id: "lk_v1", url: "https://vm.tiktok.com/ZMv1/", destino: "nuvem", contaId: "acc_cena", aparelho: "ap_cel", estado: "pendente", criadoEm: t, atualizadoEm: t },
+    { id: "lk_v2", url: "https://vm.tiktok.com/ZMv2/", destino: "nuvem", contaId: "acc_cena", aparelho: "ap_cel", estado: "pendente", criadoEm: t, atualizadoEm: t },
+  );
+  nuvem.cofre = cifrar(c, cfg.ENCRYPTION_KEY_B64);
+
+  let arranques = 0;
+  const arrancar = async () => {
+    arranques++;
+    return { ...app, fechar() {} };
+  };
+  const pastaVercel = path.join(tmp, "vercel");
+  const regV = [];
+  const opcoes = { env, origem: cfg.SITE, fetchFn: fetchFalso, ffmpeg: ffmpegVercel, arrancar, pastaDados: pastaVercel, log: (...a) => regV.push(a.join(" ")) };
+  const antes = Object.keys(nuvem.videos).length;
+  const t0 = Date.now();
+  const r1 = await trabalharNaVercel(opcoes);
+  const seg = ((Date.now() - t0) / 1000).toFixed(1);
+  check(`1.º pedido: trata 1 link e diz que falta outro (${seg}s)`, r1.feito === true && r1.restantes === 1, JSON.stringify(r1) + " " + regV.join(" | "));
+  check("com o ffmpeg-static e sem ffprobe", process.env.CINECLIP_FFPROBE === "nenhum" && Object.keys(nuvem.videos).length === antes + 1);
+  const trinco = `cc_${cfg.VAULT_HASH}_nuvem_vercel`;
+  check("liberta o trinco no fim", !nuvem.claims[trinco]);
+  const nomeRegisto = `cc_${cfg.VAULT_HASH}_registo_nuvem`;
+  const registoR2 = nuvem.outros && nuvem.outros[nomeRegisto] ? await decifrar(nuvem.outros[nomeRegisto], cfg.ENCRYPTION_KEY_B64) : null;
+  check("o registo fica no R2 (cifrado), não no disco temporário", !!registoR2 && !!registoR2.links.lk_v1 && !fs.existsSync(path.join(pastaVercel, "registo.json")));
+  const r2 = await trabalharNaVercel(opcoes);
+  check("2.º pedido: trata o outro e não sobra nada", r2.feito === true && r2.restantes === 0, JSON.stringify(r2));
+  let depois = await decifrar(nuvem.cofre, cfg.ENCRYPTION_KEY_B64);
+  const v1 = depois.linksCelular.find((e) => e.id === "lk_v1");
+  const v2 = depois.linksCelular.find((e) => e.id === "lk_v2");
+  check("os dois links ficam agendados com Reel", v1.estado === "feito" && v2.estado === "feito" && depois.queue.some((r) => r.id === v1.reelId) && depois.queue.some((r) => r.id === v2.reelId));
+  if (ffmpegVercel !== "ffmpeg") {
+    const ultimo = Object.keys(nuvem.videos).pop();
+    const fim = path.join(tmp, "vercel.mp4");
+    fs.writeFileSync(fim, nuvem.videos[ultimo]);
+    const p = JSON.parse(execFileSync("ffprobe", ["-v", "error", "-show_entries", "stream=codec_type,codec_name,width,height", "-of", "json", fim]).toString());
+    const vv = p.streams.find((s) => s.codec_type === "video");
+    check("o ffmpeg-static faz o 9:16 H.264 a partir do H.265", vv && vv.codec_name === "h264" && vv.width === 720 && vv.height === 1280, JSON.stringify(vv));
+  }
+
+  const arranquesAntes = arranques;
+  const r3 = await trabalharNaVercel(opcoes);
+  check("sem links à espera: nem arranca o app (poupa o tempo grátis)", r3.feito === false && r3.motivo === "sem links" && arranques === arranquesAntes);
+
+  // Outro pedido a trabalhar (o do celular e o do Robô ao mesmo tempo).
+  const c2 = await decifrar(nuvem.cofre, cfg.ENCRYPTION_KEY_B64);
+  c2.linksCelular.push({ id: "lk_v3", url: "https://vm.tiktok.com/ZMv3/", destino: "nuvem", contaId: "acc_cena", aparelho: "ap_cel", estado: "pendente", criadoEm: t, atualizadoEm: t });
+  nuvem.cofre = cifrar(c2, cfg.ENCRYPTION_KEY_B64);
+  nuvem.claims[trinco] = { key: trinco, owner: "vercel:outro", expiresAt: Date.now() + 60000 };
+  const r4 = await trabalharNaVercel(opcoes);
+  check("dois pedidos ao mesmo tempo: o segundo não processa", r4.motivo === "ocupado" && r4.feito === false);
+  delete nuvem.claims[trinco];
+
+  // Um vídeo que é cortado a meio 3 vezes (limite de 5 min) não fica em ciclo eterno.
+  const reg = await decifrar(nuvem.outros[nomeRegisto], cfg.ENCRYPTION_KEY_B64);
+  reg.tentativas.lk_v3 = 3;
+  nuvem.outros[nomeRegisto] = cifrar(reg, cfg.ENCRYPTION_KEY_B64);
+  const videosAntes = Object.keys(nuvem.videos).length;
+  await trabalharNaVercel(opcoes);
+  depois = await decifrar(nuvem.cofre, cfg.ENCRYPTION_KEY_B64);
+  const v3 = depois.linksCelular.find((e) => e.id === "lk_v3");
+  check("depois de 3 tentativas cortadas: marca erro e sugere «Fazer aqui»", v3.estado === "erro" && /3 vezes/.test(v3.erro) && /Fazer aqui/.test(v3.erro) && Object.keys(nuvem.videos).length === videosAntes, JSON.stringify(v3));
+
+  // Fontes que vão no repositório (a Vercel não tem fontes instaladas).
+  const { GlobalFonts } = await import("@napi-rs/canvas");
+  check("fontes do gancho no repositório (Inter + emoji)",
+    !!GlobalFonts.registerFromPath(path.join(root, "servidor/fontes/Inter-ExtraBold.ttf"), "InterTeste") &&
+    !!GlobalFonts.registerFromPath(path.join(root, "servidor/fontes/NotoColorEmoji.ttf"), "EmojiTeste"));
+  const rel = video.lerRelatorioFfmpeg("  Duration: 00:01:30.50, start: 0.000000, bitrate: 900 kb/s\n  Stream #0:0[0x1](und): Video: hevc (Main) (hvc1 / 0x31637668), yuv420p(tv), 1920x1080 [SAR 1:1 DAR 16:9], 30 fps\n      Side data:\n        displaymatrix: rotation of -90.00 degrees\n  Stream #0:1[0x2](und): Audio: aac (LC), 44100 Hz, stereo\n");
+  check("sem ffprobe, lê duração, rotação, codec e áudio do «ffmpeg -i»", rel.duracao === 90.5 && rel.largura === 1080 && rel.altura === 1920 && rel.codec === "hevc" && rel.temAudio === true, JSON.stringify(rel));
 }
 
 app.fechar();
