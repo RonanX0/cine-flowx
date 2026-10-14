@@ -60,9 +60,11 @@
         agendarComPoucaCerteza: !!o.agendarComPoucaCerteza,
         aoPartilhar: o.aoPartilhar === "aqui" || o.aoPartilhar === "pc" ? o.aoPartilhar : "perguntar",
         processarLinksDoCelular: typeof o.processarLinksDoCelular === "boolean" ? o.processarLinksDoCelular : !eCelular(),
+        botaoColar: o.botaoColar !== false,
+        avisarLinkCopiado: o.avisarLinkCopiado !== false,
       };
     } catch (e) {
-      return { agendarComPoucaCerteza: false, aoPartilhar: "perguntar", processarLinksDoCelular: !eCelular() };
+      return { agendarComPoucaCerteza: false, aoPartilhar: "perguntar", processarLinksDoCelular: !eCelular(), botaoColar: true, avisarLinkCopiado: true };
     }
   }
 
@@ -1004,9 +1006,184 @@
       }
     } catch (e) {}
     receberPartilha(window.location.href);
+    iniciarBotaoColar();
     // Links "aqui" que ficaram a meio (a página recarregou) e links mandados para o PC.
     aguardarApp(10 * 60 * 1000).then(function (ok) {
       if (ok) verificarCaixa();
+    });
+  }
+
+  /* ------------------------------------------ 📋 botão "Colar e processar" */
+  /*
+   * Um site não pode desenhar por cima do TikTok/Kwai (isso exige app nativo). O
+   * mais perto disso: um botão flutuante no CineClip. No TikTok → "Copiar link",
+   * volta ao CineClip, toca no botão → o link segue o mesmo caminho da partilha
+   * (pergunta "aqui ou PC", ou usa a escolha lembrada).
+   * Além disso, ao voltar ao app com um link novo copiado, o CineClip oferece
+   * processá-lo — só quando o Chrome já deu permissão para ler a área de
+   * transferência (nunca pede permissão sem um toque).
+   */
+
+  var CHAVE_OFERTADOS = "cineclip.links.ofertados";
+  var botaoColar = null;
+  var avisoCopiado = null;
+
+  function appLogado() {
+    var app = ambiente.app();
+    return !!(app && ambiente.core() && app.logado !== false);
+  }
+
+  async function lerAreaDeTransferencia() {
+    if (!navigator.clipboard || typeof navigator.clipboard.readText !== "function") {
+      throw new Error("sem-acesso");
+    }
+    return String((await navigator.clipboard.readText()) || "");
+  }
+
+  async function permissaoDeLeitura() {
+    try {
+      if (!navigator.permissions || !navigator.permissions.query) return "desconhecida";
+      var p = await navigator.permissions.query({ name: "clipboard-read" });
+      return p.state;
+    } catch (e) {
+      return "desconhecida";
+    }
+  }
+
+  function lembrarOfertado(link) {
+    var lista = lerJson(CHAVE_OFERTADOS, []);
+    if (!Array.isArray(lista)) lista = [];
+    lista = lista.filter(function (l) { return l !== link; });
+    lista.push(link);
+    gravarJson(CHAVE_OFERTADOS, lista.slice(-50));
+  }
+
+  function jaConhecido(link) {
+    var id = idDoLink(link);
+    var ofertados = lerJson(CHAVE_OFERTADOS, []);
+    return (Array.isArray(ofertados) && ofertados.indexOf(link) !== -1) ||
+      lerCaixa().some(function (e) { return e.id === id; });
+  }
+
+  /** Os links copiados seguem o mesmo caminho de uma partilha do Android. */
+  function tratarLinksColados(links) {
+    links.forEach(lembrarOfertado);
+    fecharAvisoCopiado();
+    var escolha = estado.opcoes.aoPartilhar;
+    if (escolha === "aqui" || escolha === "pc") enviarPara(links, escolha);
+    else mostrarRecebidos(links, "");
+  }
+
+  async function aoTocarColar() {
+    var texto = null;
+    try {
+      texto = await lerAreaDeTransferencia();
+    } catch (e) {
+      texto = null;
+    }
+    if (texto === null) {
+      mostrarColarAMao("O navegador não deixou ler o link copiado. Cola-o aqui:");
+      return;
+    }
+    var links = extrairLinks(texto);
+    if (!links.length) {
+      mostrarColarAMao("Não há link do TikTok ou do Kwai copiado. No vídeo, toca em Partilhar → Copiar link e volta aqui — ou cola-o abaixo:");
+      return;
+    }
+    tratarLinksColados(links);
+  }
+
+  /** Folha com uma caixa para colar à mão (quando ler a área de transferência falha). */
+  function mostrarColarAMao(mensagem) {
+    garantirEstilo();
+    fecharRecebidos();
+    var area = el("textarea", { className: "cl-texto", rows: "3", placeholder: "https://vm.tiktok.com/…", "aria-label": "Link do vídeo" });
+    var aviso = el("div", { className: "cl-sub", role: "status" });
+    folhaRecebidos = el("div", { className: "cl-overlay cl-folha" }, [
+      el("div", { className: "cl-painel cl-corpo", role: "dialog", "aria-modal": "true" }, [
+        el("h2", { text: "📋 Colar link" }),
+        el("p", { className: "cl-sub", text: mensagem }),
+        area,
+        aviso,
+        el("div", { className: "cl-botoes cl-escolha" }, [
+          el("button", { type: "button", className: "cl-btn cl-prim", onClick: function () {
+            var links = extrairLinks(area.value);
+            if (!links.length) {
+              aviso.textContent = "Isto não parece um link do TikTok ou do Kwai.";
+              return;
+            }
+            tratarLinksColados(links);
+          } }, ["Continuar"]),
+          el("button", { type: "button", className: "cl-btn cl-sec", onClick: fecharRecebidos }, ["Cancelar"]),
+        ]),
+      ]),
+    ]);
+    document.body.appendChild(folhaRecebidos);
+    try {
+      area.focus();
+    } catch (e) {}
+  }
+
+  function fecharAvisoCopiado() {
+    if (avisoCopiado) avisoCopiado.remove();
+    avisoCopiado = null;
+  }
+
+  /** Ao voltar ao app: há um link novo copiado? Oferece processá-lo. */
+  async function verificarLinkCopiado() {
+    if (!estado.opcoes.avisarLinkCopiado || !appLogado() || folhaRecebidos || avisoCopiado) return;
+    if (document.visibilityState !== "visible") return;
+    if ((await permissaoDeLeitura()) !== "granted") return;
+    var texto;
+    try {
+      texto = await lerAreaDeTransferencia();
+    } catch (e) {
+      return;
+    }
+    var links = extrairLinks(texto).filter(function (l) { return !jaConhecido(l); });
+    if (!links.length) return;
+    garantirEstilo();
+    avisoCopiado = el("div", { className: "cl-copiado", role: "alert" }, [
+      el("span", { text: "🔗 Link copiado: " + (links.length > 1 ? links.length + " vídeos" : links[0].replace(/^https?:\/\/(www\.)?/, "").slice(0, 40)) }),
+      el("div", { className: "cl-botoes" }, [
+        el("button", { type: "button", className: "cl-btn cl-prim cl-mini", onClick: function () { tratarLinksColados(links); } }, ["Processar"]),
+        el("button", { type: "button", className: "cl-btn cl-sec cl-mini", onClick: function () {
+          links.forEach(lembrarOfertado);
+          fecharAvisoCopiado();
+        } }, ["Ignorar"]),
+      ]),
+    ]);
+    document.body.appendChild(avisoCopiado);
+  }
+
+  /** Mostra/esconde o botão flutuante conforme o login e a opção. */
+  function atualizarBotaoColar() {
+    var mostrar = estado.opcoes.botaoColar && appLogado() && !estado.aberto;
+    if (!mostrar) {
+      if (botaoColar) botaoColar.remove();
+      botaoColar = null;
+      return;
+    }
+    if (botaoColar && botaoColar.isConnected) return;
+    garantirEstilo();
+    botaoColar = el("button", {
+      type: "button",
+      className: "cl-fab",
+      title: "Colar o link copiado e processar",
+      "aria-label": "Colar o link copiado do TikTok ou do Kwai e processar",
+      onClick: aoTocarColar,
+    }, [el("span", { className: "cl-fab-icone", "aria-hidden": "true", text: "📋" }), el("span", { className: "cl-fab-texto", text: "Colar link" })]);
+    document.body.appendChild(botaoColar);
+  }
+
+  function iniciarBotaoColar() {
+    atualizarBotaoColar();
+    setInterval(atualizarBotaoColar, 1500);
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "visible") setTimeout(verificarLinkCopiado, 400);
+    });
+    window.addEventListener("focus", function () {
+      setTimeout(verificarLinkCopiado, 400);
     });
   }
 
@@ -1066,6 +1243,11 @@
     ".cl-links summary{cursor:pointer;font-size:14px;font-weight:700}",
     ".cl-links[open] summary{margin-bottom:6px}",
     ".cl-select{margin-left:6px;border-radius:8px;border:1px solid var(--border,rgba(255,255,255,.15));background:var(--background,#141418);color:inherit;padding:4px 8px;font:inherit}",
+    ".cl-fab{position:fixed;right:16px;bottom:16px;z-index:9988;display:inline-flex;align-items:center;gap:8px;height:56px;padding:0 20px 0 16px;border-radius:28px;border:0;background:var(--primary,#e5484d);color:#fff;font:600 15px/1 inherit;font-family:inherit;box-shadow:0 10px 28px rgba(0,0,0,.45);cursor:pointer}",
+    ".cl-fab:active{transform:scale(.96)}",
+    ".cl-fab-icone{font-size:20px}",
+    ".cl-copiado{position:fixed;left:12px;right:12px;bottom:84px;z-index:9989;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;padding:12px 14px;border-radius:14px;background:var(--card,#1c1c22);color:var(--foreground,#f4f4f6);border:1px solid var(--primary,#e5484d);box-shadow:0 12px 32px rgba(0,0,0,.5);font-size:14px;font-family:inherit;max-width:560px;margin:0 auto}",
+    "@media (min-width:768px){.cl-fab{height:48px;font-size:14px}.cl-fab-texto{display:inline}}",
     ".cl-folha{align-items:flex-end;padding:0}",
     ".cl-folha .cl-painel{max-width:560px;border-radius:16px 16px 0 0;padding:20px;gap:12px;display:flex;flex-direction:column}",
     ".cl-folha h2{margin:0;font-size:18px}",
@@ -1095,7 +1277,7 @@
     ".cl-rodape{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;padding:14px 20px;border-top:1px solid var(--border,rgba(255,255,255,.09))}",
     ".cl-resumo{font-size:13px;color:var(--muted-foreground,#a3a3ad)}",
     ".cl-botoes{display:flex;flex-wrap:wrap;gap:8px}",
-    ".cl-pilula{position:fixed;right:16px;bottom:16px;z-index:9989;background:var(--card,#1c1c22);color:var(--foreground,#f4f4f6);border:1px solid var(--primary,#e5484d);border-radius:999px;padding:10px 16px;font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.4);font-family:inherit}",
+    ".cl-pilula{position:fixed;right:16px;bottom:84px;z-index:9989;background:var(--card,#1c1c22);color:var(--foreground,#f4f4f6);border:1px solid var(--primary,#e5484d);border-radius:999px;padding:10px 16px;font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.4);font-family:inherit}",
     "@media (max-width:560px){.cl-overlay{padding:0}.cl-painel{border-radius:0;min-height:100%}.cl-rodape{flex-direction:column;align-items:stretch}.cl-botoes .cl-btn{flex:1}}",
   ].join("\n");
 
@@ -1198,7 +1380,19 @@
       el("span", { className: "cl-sub", text: "No Android: abre o site no Chrome → menu ⋮ → «Instalar app». Depois, no TikTok ou no Kwai, toca em Partilhar → CineClip." }),
       el("label", { className: "cl-opcao" }, [el("span", { text: "Quando partilho um vídeo:" }), seletor]),
       el("label", { className: "cl-opcao" }, [caixaPC, el("span", { text: "Este aparelho processa sozinho os links mandados do celular para o PC (deixa-o com o CineClip aberto)." })]),
+      opcaoSimples("botaoColar", "Mostrar o botão flutuante 📋 «Colar link»", atualizarBotaoColar),
+      opcaoSimples("avisarLinkCopiado", "Ao voltar ao app com um link copiado, perguntar se quero processá-lo", null),
     ]);
+  }
+
+  function opcaoSimples(chave, texto, depois) {
+    var caixa = el("input", { type: "checkbox", checked: estado.opcoes[chave] || null });
+    caixa.addEventListener("change", function () {
+      estado.opcoes[chave] = caixa.checked;
+      gravarOpcoes();
+      if (depois) depois();
+    });
+    return el("label", { className: "cl-opcao" }, [caixa, el("span", { text: texto })]);
   }
 
   function desenhar() {
@@ -1379,6 +1573,7 @@
     }
     if (!raiz.isConnected) document.body.appendChild(raiz);
     estado.aberto = true;
+    atualizarBotaoColar();
     document.addEventListener("keydown", aoTeclar);
     if (ficheiros && ficheiros.length) adicionarFicheiros(ficheiros);
     else desenhar();
@@ -1386,6 +1581,7 @@
 
   function fechar() {
     estado.aberto = false;
+    setTimeout(atualizarBotaoColar, 0);
     document.removeEventListener("keydown", aoTeclar);
     if (raiz && raiz.isConnected) raiz.remove();
     desenhar();
@@ -1419,6 +1615,9 @@
       linksDaPartilha: linksDaPartilha,
       enviarPara: enviarPara,
       meuAparelho: meuAparelho,
+      aoTocarColar: aoTocarColar,
+      verificarLinkCopiado: verificarLinkCopiado,
+      atualizarBotaoColar: atualizarBotaoColar,
       iniciar: iniciar,
       parar: parar,
       processarItem: processarItem,
