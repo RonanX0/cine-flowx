@@ -85,6 +85,8 @@ check("o bundle usa o normalizador antes de devolver sugestões", html.includes(
 check("a identificação principal também protege os ganchos", html.includes("ganchos:Array.isArray(k.ganchos)?ccNormalizeViralHooks(k.ganchos):void 0"));
 check("o prompt pede ganchos curtos, específicos e sem promessas falsas",
   html.includes("5 a 9 palavras") && html.includes("64 caracteres") && html.includes("sem inventar nem prometer um desfecho"));
+check("o gancho com a obra confirmada corre em segundo plano (não trava a identificação)",
+  html.includes("Xa&&ne.length===0&&Hm(S.nvidiaKey,Ue,S.lang,{titulo:Xa.title") && !html.includes("const gh=await Hm("));
 const generatedHookPatch = fs.readFileSync(path.join(root, "tools", "patches", "41-viral-hooks.replace"), "utf8").trim();
 check("o patch gerado corresponde ao template mantido", generatedHookPatch === source.trim());
 const legacyUpdater = fs.readFileSync(path.join(root, "tools", "update-identificador.py"), "utf8");
