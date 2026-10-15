@@ -14,7 +14,7 @@
  * Os vídeos são tratados um de cada vez (o FFmpeg do navegador só faz um de cada
  * vez). Se a IA não tiver certeza do filme (confiança < 65%), o vídeo não é
  * agendado — fica marcado para rever no Estúdio — a não ser que ligues a opção
- * "Agendar mesmo com pouca certeza".
+ * "Agendar mesmo com pouca certeza" (hoje sempre ativo: nada trava por falta de certeza).
  *
  * Este ficheiro é código legível de propósito: o resto do app vive num bundle
  * compilado. A ligação ao bundle são dois objetos que ele publica em `window`
@@ -57,14 +57,14 @@
       var bruto = window.localStorage.getItem(CHAVE_OPCOES);
       var o = bruto ? JSON.parse(bruto) : {};
       return {
-        agendarComPoucaCerteza: !!o.agendarComPoucaCerteza,
+        agendarComPoucaCerteza: o.agendarComPoucaCerteza !== false,
         aoPartilhar: o.aoPartilhar === "aqui" || o.aoPartilhar === "pc" || o.aoPartilhar === "nuvem" ? o.aoPartilhar : "perguntar",
         processarLinksDoCelular: typeof o.processarLinksDoCelular === "boolean" ? o.processarLinksDoCelular : !eCelular(),
         botaoColar: o.botaoColar !== false,
         avisarLinkCopiado: o.avisarLinkCopiado !== false,
       };
     } catch (e) {
-      return { agendarComPoucaCerteza: false, aoPartilhar: "perguntar", processarLinksDoCelular: !eCelular(), botaoColar: true, avisarLinkCopiado: true };
+      return { agendarComPoucaCerteza: true, aoPartilhar: "perguntar", processarLinksDoCelular: !eCelular(), botaoColar: true, avisarLinkCopiado: true };
     }
   }
 
@@ -1257,36 +1257,38 @@
     var parMidia = await Promise.all([promQuadros, promAudio]);
     var quadros = parMidia[0];
     var audio = parMidia[1];
-    var ia = await comLimite(
-      core.identificar(s.nvidiaKey, quadros, s.lang, {
-        fileName: ficheiro.name,
-        metaTitle: tituloMetadados,
-        userHint: "",
-        geminiKey: s.geminiKey,
-        audioClip: audio,
-      }),
-      120000,
-      "A identificação do filme pela IA demorou demasiado."
-    );
-    if (!ia || (!ia.titulo && !ia.titulo_original && !ia._pistaDireta && !(ia.atores && ia.atores.length) && !(ia.alternativas && ia.alternativas.length))) {
-      throw erroComTipo("A IA não conseguiu identificar o filme deste clipe.", "identificacao");
-    }
-    var filme = await comLimite(core.procurarTmdb(s.tmdbKey, ia), 30000, "A pesquisa no TMDB demorou demasiado.");
-    if (!filme) {
-      throw erroComTipo(
-        'Não encontrei "' + (ia.titulo || ia.titulo_original || "o filme") + '" no TMDB.',
-        "identificacao"
+    /* Nada nesta etapa pode travar o vídeo: se a IA falhar, não achar o filme ou
+       tiver pouca certeza, segue com o melhor palpite (ou com o nome do ficheiro). */
+    var ia = null;
+    try {
+      ia = await comLimite(
+        core.identificar(s.nvidiaKey, quadros, s.lang, {
+          fileName: ficheiro.name,
+          metaTitle: tituloMetadados,
+          userHint: "",
+          geminiKey: s.geminiKey,
+          audioClip: audio,
+        }),
+        120000,
+        "A identificação do filme pela IA demorou demasiado."
       );
+    } catch (e) {
+      if (e && (e.status === 401 || e.status === 403)) throw e; /* chave inválida: aí sim, avisa */
+      ia = null;
     }
-    var confianca = Number(ia.confianca) || 0;
+    if (!ia || typeof ia !== "object") ia = {};
+    var temPista = !!(ia.titulo || ia.titulo_original || ia._pistaDireta || (ia.atores && ia.atores.length) || (ia.alternativas && ia.alternativas.length));
+    var filme = null;
+    if (temPista) {
+      try {
+        filme = await comLimite(core.procurarTmdb(s.tmdbKey, ia), 30000, "A pesquisa no TMDB demorou demasiado.");
+      } catch (e) {
+        filme = null;
+      }
+    }
+    if (!filme) filme = filmeProvisorio(ia, ficheiro, tituloMetadados);
+    var confianca = temPista ? Number(ia.confianca) || 0 : 0;
     item.resultado = { titulo: filme.title, ano: filme.year, confianca: confianca };
-    if (confianca < CONFIANCA_MINIMA && !estado.opcoes.agendarComPoucaCerteza) {
-      throw erroComTipo(
-        'A IA acha que é "' + filme.title + (filme.year ? " (" + filme.year + ")" : "") + '", mas só com ' +
-          confianca + "% de certeza. Confere no Estúdio ou liga “Agendar mesmo com pouca certeza”.",
-        "revisar"
-      );
-    }
 
     /* 3. Gancho ------------------------------------------------------------ */
     definirPasso(item, "A criar o gancho…", 0.2);
@@ -1306,7 +1308,9 @@
           s.nvidiaKey,
           quadros,
           s.lang,
-          { titulo: filme.title, ano: filme.year, tipo: filme.kind, sinopse: filme.overview, generos: filme.genres },
+          filme.provisorio
+            ? filme.title /* palpite fraco: o gancho trata como pista do ficheiro, não como obra confirmada */
+            : { titulo: filme.title, ano: filme.year, tipo: filme.kind, sinopse: filme.overview, generos: filme.genres },
           s.geminiKey,
           audio
         ),
@@ -1341,16 +1345,24 @@
 
     /* 5. Legenda ------------------------------------------------------------- */
     definirPasso(item, "A escrever a legenda…", 0.88);
-    var legenda = await comLimite(
-      core.gerarLegenda(s.nvidiaKey, filme, s.lang, {
-        cena: cena,
-        hookText: gancho,
-        geminiKey: s.geminiKey,
-      }),
-      90000,
-      "A criação da legenda pela IA demorou demasiado."
-    );
-    if (!legenda || !String(legenda).trim()) throw erroComTipo("A IA devolveu uma legenda vazia.", "legenda");
+    var legenda = "";
+    try {
+      legenda = await comLimite(
+        core.gerarLegenda(s.nvidiaKey, filme, s.lang, {
+          cena: cena,
+          hookText: gancho,
+          geminiKey: s.geminiKey,
+        }),
+        90000,
+        "A criação da legenda pela IA demorou demasiado."
+      );
+    } catch (e) {
+      legenda = "";
+    }
+    if (!legenda || !String(legenda).trim()) {
+      /* sem legenda da IA, publica com o gancho e o título em vez de travar */
+      legenda = [gancho, filme.title ? "🎬 " + filme.title + (filme.year ? " (" + filme.year + ")" : "") : ""].filter(Boolean).join("\n\n");
+    }
     try {
       core.guardarHistorico({ title: filme.title, year: filme.year, caption: legenda, date: ambiente.agora() });
     } catch (e) {}
@@ -1400,6 +1412,32 @@
     item.resultado.horario = horario;
     item.resultado.reelId = reel.id;
     return reel;
+  }
+
+  /** Filme "de reserva" quando a IA/TMDB não deram nada: usa o palpite da IA ou o nome do ficheiro. */
+  function filmeProvisorio(ia, ficheiro, tituloMetadados) {
+    var alt = ia && ia.alternativas && ia.alternativas[0];
+    var nome = semExtensao((ficheiro && ficheiro.name) || "")
+      .replace(/_cineclip$/i, "")
+      .replace(/[_.]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    var titulo =
+      (ia && (ia.titulo || ia.titulo_original)) ||
+      (alt && (alt.titulo || alt.titulo_original)) ||
+      String(tituloMetadados || "").trim() ||
+      nome ||
+      "Cena de filme";
+    return {
+      id: undefined,
+      kind: ia && ia.tipo === "tv" ? "tv" : "movie",
+      title: titulo,
+      original: (ia && ia.titulo_original) || titulo,
+      year: String((ia && ia.ano) || "").slice(0, 4),
+      overview: (ia && ia.cena) || "",
+      genres: [],
+      provisorio: true,
+    };
   }
 
   /* --------------------------------------------------------- o ciclo */
@@ -2610,16 +2648,7 @@
       ]),
     ]));
 
-    var caixa = el("input", { type: "checkbox", checked: estado.opcoes.agendarComPoucaCerteza || null });
-    caixa.addEventListener("change", function () {
-      estado.opcoes.agendarComPoucaCerteza = caixa.checked;
-      gravarOpcoes();
-    });
-    corpo.push(el("label", { className: "cl-opcao" }, [
-      caixa,
-      el("span", { text: "Agendar mesmo quando a IA tem pouca certeza do filme (abaixo de " + CONFIANCA_MINIMA + "%). Desligado, esses vídeos ficam para rever." }),
-    ]));
-
+    /* Sem opção de «agendar com pouca certeza»: o vídeo nunca fica parado à espera de certeza da IA. */
     corpo.push(desenharSecaoCelular());
 
     if (estado.itens.length) {

@@ -1,0 +1,1 @@
+k=ccParseIaJson(raw),C=Array.isArray(k.atores)

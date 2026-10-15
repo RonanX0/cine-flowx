@@ -572,6 +572,42 @@
     return true;
   }
 
+  /**
+   * O ID do IMDb que a IA escreveu de cabeça pode estar errado (é um dos
+   * campos que os modelos mais inventam). Só se confia nele quando o filme
+   * que o TMDB devolve não contradiz o resto do que a IA disse:
+   *   • sem título nem ano da IA → não há com que comparar, aceita;
+   *   • com título → tem de casar (exacto, por palavras ou numa alternativa);
+   *   • com ano → a diferença tem de ser de 2 anos ou menos.
+   */
+  function imdbConsistente(candidato, ia) {
+    if (!candidato) return false;
+    var tituloIA = normalizar((ia.titulo_original || "") + " " + (ia.titulo || "")).trim();
+    if (tituloIA) {
+      var D = normalizar(candidato.original);
+      var O = normalizar(candidato.title);
+      var palavrasCand = new Set((D + " " + O).split(" ").filter(Boolean));
+      var palavrasIA = tituloIA.split(" ").filter(Boolean);
+      var comuns = 0;
+      palavrasIA.forEach(function (p) {
+        if (palavrasCand.has(p)) comuns++;
+      });
+      var casa = casouTitulo(candidato, ia) || (comuns > 0 && comuns >= Math.min(palavrasIA.length, palavrasCand.size));
+      if (!casa) {
+        casa = (ia.alternativas || []).some(function (a) {
+          var orig = normalizar(a.titulo_original || "");
+          var pt = normalizar(a.titulo || "");
+          return (orig && (D === orig || O === orig)) || (pt && (O === pt || D === pt));
+        });
+      }
+      if (!casa) return false;
+    }
+    var ano = Number(String(ia.ano || "").slice(0, 4)) || 0;
+    var anoCand = Number(candidato.year) || 0;
+    if (ano && anoCand && Math.abs(ano - anoCand) > 2) return false;
+    return true;
+  }
+
   function escolher(candidatos, ia, contagemAtores, pesoAtores) {
     var melhor = null;
     candidatos.forEach(function (c) {
@@ -709,9 +745,13 @@
     var imdbId = normalizarImdb(ia.imdb_id || ia.imdbId);
     if (imdbId) {
       return procurarPorImdb(chave, imdbId).then(function (achado) {
-        if (!achado) return null;
-        achado.imdbId = imdbId;
-        return finalizar([{ candidato: achado, pontos: 999 }], 0);
+        if (achado && imdbConsistente(achado, ia)) {
+          achado.imdbId = imdbId;
+          return finalizar([{ candidato: achado, pontos: 999 }], 0);
+        }
+        /* O ID não existe no TMDB ou aponta para outra obra (ID inventado):
+           ignora-o e resolve pelo título, como se a IA não o tivesse dado. */
+        return procurar(chave, Object.assign({}, ia, { imdb_id: "", imdbId: "" }));
       });
     }
 
@@ -899,6 +939,7 @@
       pontuar: pontuar,
       confiante: confiante,
       normalizarImdb: normalizarImdb,
+      imdbConsistente: imdbConsistente,
       casouTitulo: casouTitulo,
       normalizarTMDB: normalizarTMDB,
       chaveDe: chaveDe,

@@ -1,0 +1,1 @@
+generationConfig:{temperature:c?.1:.55,maxOutputTokens:maxTok}};i&&(p.tools=[{googleSearch:{}}]);

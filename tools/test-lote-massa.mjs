@@ -172,7 +172,7 @@ console.log("A1. Um lote com vídeos bons, um H.265, um com pouca certeza e um i
   await c.lote.iniciar();
   const porNome = Object.fromEntries(c.lote.estado.itens.map((it) => [it.nome, it]));
 
-  check("2 Reels entram na fila do Agendador", c.fila.length === 2, `fila=${c.fila.length}`);
+  check("3 Reels entram na fila do Agendador (a pouca certeza também segue)", c.fila.length === 3, `fila=${c.fila.length}`);
   check("longo.mp4 é cortado em 90 s", c.chamadas.processar.find((p) => p.nome === "longo.mp4")?.fim === 90);
   check("curto.mp4 usa o vídeo todo (40 s)", c.chamadas.processar.find((p) => p.nome === "curto.mp4")?.fim === 40);
   check("o corte começa sempre no início (0 s)", c.chamadas.processar.every((p) => p.inicio === 0));
@@ -187,16 +187,15 @@ console.log("A1. Um lote com vídeos bons, um H.265, um com pouca certeza e um i
   check("o Reel leva o vídeo processado e o nome _cineclip.mp4", c.fila[0].videoBlob && c.fila[0].videoBlob.size === 100 && c.fila[0].videoFileName === "longo_cineclip.mp4");
   check("o Reel fica «scheduled» para Instagram", c.fila.every((r) => r.status === "scheduled" && r.platforms[0] === "instagram"));
   check("H.265: erro claro sem gastar a IA", porNome["hevc.mp4"].estado === "erro" && /H\.265\/HEVC/.test(porNome["hevc.mp4"].erro), porNome["hevc.mp4"].erro);
-  check("pouca certeza: fica para rever, não é agendado", porNome["duvida.mp4"].estado === "revisar" && /50%/.test(porNome["duvida.mp4"].erro), porNome["duvida.mp4"].erro);
-  check("pouca certeza: não chega a processar o vídeo", !c.chamadas.processar.some((p) => p.nome === "duvida.mp4"));
+  check("pouca certeza: segue em frente e é agendado", porNome["duvida.mp4"].estado === "agendado" && c.fila.some((r) => r.title === "Talvez Este"), porNome["duvida.mp4"].estado);
+  check("pouca certeza: o vídeo é processado", c.chamadas.processar.some((p) => p.nome === "duvida.mp4"));
   check("o .txt fica com erro de formato", porNome["notas.txt"].estado === "erro" && /Formato não suportado/.test(porNome["notas.txt"].erro));
-  check("cada Reel agendado pede a sincronização (upload para a nuvem)", c.chamadas.sincronizar === 2 && c.chamadas.atualizarFila === 2);
-  check("a legenda vai para o histórico de legendas", c.chamadas.historico === 2);
+  check("cada Reel agendado pede a sincronização (upload para a nuvem)", c.chamadas.sincronizar === 3 && c.chamadas.atualizarFila === 3);
+  check("a legenda vai para o histórico de legendas", c.chamadas.historico === 3);
 
   const textoPainel = window.document.querySelector(".cl-painel").textContent;
-  check("o painel mostra o resumo do lote", /2 agendados/.test(textoPainel) && /1 para rever/.test(textoPainel) && /2 com erro/.test(textoPainel), textoPainel.slice(-160));
+  check("o painel mostra o resumo do lote", /3 agendados/.test(textoPainel) && !/para rever/.test(textoPainel) && /2 com erro/.test(textoPainel), textoPainel.slice(-160));
   check("o painel mostra o horário legível", /14\/10 às 12:00/.test(textoPainel));
-  check("«Abrir no Estúdio» aparece para o vídeo a rever", [...window.document.querySelectorAll(".cl-item[data-estado=revisar] button")].some((b) => b.textContent === "Abrir no Estúdio"));
   check("o .txt não tem «Tentar de novo»", ![...window.document.querySelectorAll(".cl-item")].find((li) => /notas\.txt/.test(li.textContent))?.textContent.includes("Tentar de novo"));
   dom.window.close();
 }
@@ -227,7 +226,7 @@ console.log("\nA2b. A IA de ganchos falha → usa o gancho que veio da identific
   dom.window.close();
 }
 
-console.log("\nA3. Opção «Agendar mesmo com pouca certeza»");
+console.log("\nA3. Pouca certeza nunca trava (a opção antiga vem ligada por defeito)");
 {
   const dom = novoDom();
   const c = cenario(dom.window);
@@ -235,6 +234,38 @@ console.log("\nA3. Opção «Agendar mesmo com pouca certeza»");
   c.lote.adicionarFicheiros([ficheiro(dom.window, "duvida.mp4")]);
   await c.lote.iniciar();
   check("agenda o vídeo com 50% de certeza", c.fila.length === 1 && c.fila[0].title === "Talvez Este");
+  dom.window.close();
+}
+
+console.log("\nA3a. A IA não identifica nada e o TMDB não acha → segue com o nome do ficheiro");
+{
+  const dom = novoDom();
+  const c = cenario(dom.window);
+  const origCore = c.lote.ambiente.core();
+  c.lote.ambiente.core = () => Object.assign({}, origCore, {
+    identificar: async () => ({ titulo: "", atores: [], alternativas: [], confianca: 0 }),
+    procurarTmdb: async () => null,
+  });
+  c.lote.adicionarFicheiros([ficheiro(dom.window, "cena_incrivel.mp4")]);
+  await c.lote.iniciar();
+  check("agenda o vídeo mesmo sem identificar", c.fila.length === 1 && c.lote.estado.itens[0].estado === "agendado", `fila=${c.fila.length} estado=${c.lote.estado.itens[0].estado}`);
+  check("usa o nome/metadados do ficheiro como título", /cena.incrivel/.test(c.fila[0]?.title || ""), c.fila[0]?.title);
+  dom.window.close();
+}
+
+console.log("\nA3a2. A IA lança erro e a legenda vem vazia → ainda assim agenda");
+{
+  const dom = novoDom();
+  const c = cenario(dom.window);
+  const origCore = c.lote.ambiente.core();
+  c.lote.ambiente.core = () => Object.assign({}, origCore, {
+    identificar: async () => { throw new Error("Unexpected token N in JSON"); },
+    gerarLegenda: async () => "",
+  });
+  c.lote.adicionarFicheiros([ficheiro(dom.window, "qualquer.mp4")]);
+  await c.lote.iniciar();
+  check("agenda o vídeo", c.fila.length === 1, `fila=${c.fila.length}`);
+  check("a legenda de reserva tem o título", /qualquer/.test(c.fila[0]?.caption || ""), c.fila[0]?.caption);
   dom.window.close();
 }
 
