@@ -52,6 +52,27 @@ check("não devolve chamadas genéricas nem campos vazios", normalize([
   "🔥",
 ]).length === 0);
 
+check("recusa hashtags, menções e a palavra spoiler", normalize([
+  "Ele abriu a porta e ouviu uma voz conhecida #filme 😳",
+  "Ela falou com @alguem sobre o segredo antigo 🔥",
+  "Spoiler: o detetive percebeu quem mentia o tempo todo 😱",
+]).length === 0);
+check("recusa clichês novos de elogio vazio", normalize([
+  "Essa cena é simplesmente incrível demais 😱",
+  "Melhor cena do filme inteiro sem dúvida 🔥",
+  "Plot twist que ninguém viu chegando 😳",
+]).length === 0);
+const comEmoji = normalize(["A porta estava fechada até ele ouvir o nome 😱😱🔥", "Quem mandou aquela carta para a velha casa?"]);
+check("termina sempre com exatamente um emoji", comEmoji.every((hook) => (hook.match(/\p{Extended_Pictographic}/gu) || []).length === 1 && /\p{Extended_Pictographic}$/u.test(hook)), JSON.stringify(comEmoji));
+check("acrescenta o emoji que a IA esqueceu", comEmoji.some((hook) => hook.startsWith("Quem mandou aquela carta") && hook.endsWith("😳")), JSON.stringify(comEmoji));
+const reordenado = normalize([
+  "Ele descobre que o irmão morre no final do filme 😱",
+  "Por que ela escondeu a chave debaixo do tapete? 😳",
+]);
+check("passa à frente a opção que não entrega o desfecho", reordenado[0].startsWith("Por que ela escondeu"), JSON.stringify(reordenado));
+const cheio = normalize(["A verdade daquela noite finalmente aparece para todos e muda tudo o que eles acreditavam 😳"]);
+check("o limite de 64 conta o emoji e o espaço", cheio.length === 1 && Array.from(new Intl.Segmenter("pt", { granularity: "grapheme" }).segment(cheio[0])).length <= 64, JSON.stringify(cheio));
+
 const long = normalize(["A verdade daquela noite finalmente aparece para todos e muda tudo o que eles acreditavam ".repeat(4) + "😳"]);
 const graphemes = long[0] && typeof Intl.Segmenter === "function"
   ? Array.from(new Intl.Segmenter("pt", { granularity: "grapheme" }).segment(long[0])).length

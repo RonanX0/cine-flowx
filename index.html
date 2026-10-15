@@ -355,11 +355,26 @@ function ccViralGraphemes(value) {
   return Array.from(value);
 }
 
+function ccViralIsEmoji(grapheme) {
+  return /\p{Extended_Pictographic}/u.test(grapheme);
+}
+
+function ccViralScore(text) {
+  // Ajuste leve sobre a ordem que a IA deu (a primeira opção é a que vai para o vídeo):
+  // só reordena quando um sinal claro mostra que a opção é fraca ou entrega o desfecho.
+  const key = text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pt-BR");
+  let score = 0;
+  if (key.includes("?")) score += 2;
+  if (/\b(?:no final|morre|morreu|mata|matou|descobre que|acaba|termina)\b/.test(key)) score -= 3;
+  if (/^(?:essa|esta|nessa|desta|aquela|o filme|a serie)\b/.test(key)) score -= 2;
+  return score;
+}
+
 function ccNormalizeViralHooks(values) {
   if (!Array.isArray(values)) return [];
-  const output = [];
+  const candidates = [];
   const seen = new Set();
-  const generic = /^(?:voce precisa (?:ver|assistir)|assista ate o final|voce nao vai acreditar|ninguem (?:estava preparado|esperava)|prepare se)(?: |$)/;
+  const generic = /^(?:voce precisa (?:ver|assistir)|assista ate o final|voce nao vai acreditar|ninguem (?:estava preparado|esperava)|prepare se|(?:essa|esta|nessa|aquela) cena (?:e|eh|foi|vai)|(?:melhor|maior) cena|cena (?:iconica|epica|historica)|(?:esse|este) (?:filme|serie) (?:e|eh|foi|vai)|final (?:chocante|inesperado)|plot twist)(?: |$)/;
 
   for (const candidate of values) {
     if (typeof candidate !== "string") continue;
@@ -371,28 +386,45 @@ function ccNormalizeViralHooks(values) {
       .replace(/\s+/g, " ")
       .trim();
     if (!text) continue;
+    // Hashtags e menções não cabem no topo do vídeo e o prompt já as proíbe.
+    if (/(?:^|\s)[#@]\p{L}/u.test(text)) continue;
 
-    let graphemes = ccViralGraphemes(text);
-    if (graphemes.length > 64) {
-      const clipped = graphemes.slice(0, 64).join("");
-      const boundary = clipped.lastIndexOf(" ");
-      text = (boundary > 16 ? clipped.slice(0, boundary) : clipped).trim();
-      graphemes = ccViralGraphemes(text);
+    // Separa o corpo do emoji final: o gancho termina sempre com exatamente um emoji.
+    let parts = ccViralGraphemes(text);
+    let emoji = "";
+    while (parts.length && (ccViralIsEmoji(parts[parts.length - 1]) || /^\s$/.test(parts[parts.length - 1]) || parts[parts.length - 1] === "\uFE0F")) {
+      const last = parts.pop();
+      if (ccViralIsEmoji(last)) emoji = last;
     }
-    const words = text.match(/[\p{L}\p{N}]+(?:['’\-][\p{L}\p{N}]+)*/gu) || [];
-    if (graphemes.length < 8 || words.length < 3 || words.length > 14) continue;
+    let body = parts.join("").replace(/[\s.,;:\-–—]+$/, "").trim();
+    if (!body) continue;
 
-    const key = text.normalize("NFD")
+    const wordsOf = (value) => value.match(/[\p{L}\p{N}]+(?:['’\-][\p{L}\p{N}]+)*/gu) || [];
+    if (!emoji) emoji = body.includes("?") ? "😳" : "🔥";
+
+    // 64 caracteres no total, contando o espaço e o emoji.
+    const room = 64 - 1 - ccViralGraphemes(emoji).length;
+    const bodyGraphemes = ccViralGraphemes(body);
+    if (bodyGraphemes.length > room) {
+      const clipped = bodyGraphemes.slice(0, room).join("");
+      const boundary = clipped.lastIndexOf(" ");
+      body = (boundary > 16 ? clipped.slice(0, boundary) : clipped).replace(/[\s.,;:\-–—]+$/, "").trim();
+    }
+    const words = wordsOf(body);
+    if (ccViralGraphemes(body).length < 8 || words.length < 3 || words.length > 14) continue;
+
+    const key = body.normalize("NFD")
       .replace(/[\u0300-\u036f]/g, "")
       .toLocaleLowerCase("pt-BR")
       .replace(/[^\p{L}\p{N}]+/gu, " ")
       .trim();
-    if (!key || generic.test(key) || seen.has(key)) continue;
+    if (!key || generic.test(key) || /\bspoilers?\b/.test(key) || seen.has(key)) continue;
     seen.add(key);
-    output.push(text);
-    if (output.length >= 3) break;
+    const finalText = `${body} ${emoji}`;
+    candidates.push({ text: finalText, rank: ccViralScore(finalText) - candidates.length * 0.6 });
   }
-  return output;
+  candidates.sort((a, b) => b.rank - a.rank);
+  return candidates.slice(0, 3).map((item) => item.text);
 }
 
 function ccHookObra(value) {
@@ -432,6 +464,9 @@ REGRAS DOS GANCHOS:
 - Prenda cada opção a um detalhe real das imagens, do diálogo ou de um personagem da sinopse; crie curiosidade sem inventar nem prometer um desfecho e sem revelar o final da história.
 - Pode citar o nome de um personagem se ele aparece na sinopse ou é dito na cena; não cite atores.
 - Linguagem natural, como quem conta a cena para um amigo; frases curtas e diretas funcionam melhor do que descrição.
+- Abra com a tensão, não com a descrição: as 3 primeiras palavras precisam prender quem rola o feed. Mostre o conflito ou a consequência e deixe a resolução em aberto (lacuna de curiosidade).
+- Não cite o título da obra no gancho e não use "essa cena", "esse filme" nem elogios vazios ("incrível", "épico", "icônico").
+- Antes de responder, confira cada gancho: um estranho que nunca viu o filme entende a tensão só lendo a frase?
 - Evite clichês e chamadas genéricas como "Você precisa assistir esse filme", "assista até o final", "você não vai acreditar" e "ninguém estava preparado".
 - Não inclua hashtags, aspas, números, rótulos como "Gancho 1" ou texto fora dos campos.
 Responda SOMENTE com JSON válido:

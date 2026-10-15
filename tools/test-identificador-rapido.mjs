@@ -353,6 +353,25 @@ console.log("\n5. Caminho IMDb (1 pedido /find + 1 de detalhes)");
   check("mantém o IMDb ID no resultado", resultado.imdbId === "tt0086759");
 }
 
+console.log("\n5b. ID do IMDb inventado pela IA (aponta para outra obra)");
+{
+  const { ident, pedidos } = instalar();
+  const resultado = await ident.procurar("chave-de-teste", {
+    titulo: "O Iluminado",
+    titulo_original: "The Shining",
+    ano: 1980,
+    tipo: "movie",
+    imdb_id: "tt0903747" /* é o Breaking Bad */,
+  });
+  check("não aceita o filme errado só porque o ID existe", resultado && resultado.id === 694, JSON.stringify(resultado && resultado.title));
+  check("volta à pesquisa por título", pedidos.some((p) => p.startsWith("/search/")));
+  check("não guarda o ID inventado", !resultado || resultado.imdbId !== "tt0903747");
+  const { imdbConsistente } = ident._internas;
+  check("ID coerente com título e ano é aceito", imdbConsistente({ title: "O Iluminado", original: "The Shining", year: "1980", kind: "movie" }, { titulo_original: "The Shining", ano: 1980 }));
+  check("mesmo título com ano muito diferente é recusado", !imdbConsistente({ title: "Duna", original: "Dune", year: "1984", kind: "movie" }, { titulo_original: "Dune", ano: 2021 }));
+  check("sem título nem ano da IA não há com que comparar", imdbConsistente({ title: "X", original: "X", year: "2000", kind: "movie" }, {}));
+}
+
 /* ------------------------------------------------------------- 6. cache */
 
 console.log("\n6. Cache (o mesmo título não vai duas vezes à rede)");
