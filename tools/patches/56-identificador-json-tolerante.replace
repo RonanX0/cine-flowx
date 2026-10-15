@@ -1,0 +1,1 @@
+k=(()=>{try{return JSON.parse(m?m[0]:String(raw||""))}catch{return{analise_deducao:String(raw||"").replace(/\s+/g," ").trim().slice(0,300)}}})(),C=Array.isArray(k.atores)
