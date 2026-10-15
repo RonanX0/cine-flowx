@@ -21,3 +21,15 @@
 # must-revalidate garante a atualização mesmo que algum proxy descarte a query.
 /nuvem-duravel.js
   Cache-Control: public, max-age=0, must-revalidate
+
+# Os módulos legíveis (upload em massa e identificador rápido) são servidos
+# pelo build com ?v=<hash>; o must-revalidate garante a atualização mesmo que
+# algum proxy descarte a query.
+/lote-massa.js
+  Cache-Control: public, max-age=0, must-revalidate
+
+/identificador-rapido.js
+  Cache-Control: public, max-age=0, must-revalidate
+
+/confirmacao-externa.js
+  Cache-Control: public, max-age=0, must-revalidate

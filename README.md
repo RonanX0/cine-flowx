@@ -8,7 +8,10 @@ Aplicação web **100% no navegador** que limpa metadados de vídeos, corta até
 - `app-pronto.html` e `404.html` — cópias do bundle principal (o `404.html` é o fallback do GitHub Pages)
 - `nuvem-duravel.js` — camada de armazenamento durável (`window.CineCloud`), carregada antes do app
 - `lote-massa.js` — upload em massa (`window.CineLote`), código legível fora do bundle
+- `identificador-rapido.js` — resolução de títulos no TMDB (`window.CineIdentificador`), código legível fora do bundle
+- `confirmacao-externa.js` — confirmação independente em Wikidata e TVmaze (`window.CineConfirmacao`), código legível fora do bundle
 - `tools/viral-hooks/viral-hooks.template.js` — prompt e sanitização dos ganchos; `npm run patch:viral` reaplica a alteração ao bundle
+- `tools/build-identificador-patch.mjs` — gera e aplica os patches que ligam o bundle ao identificador rápido (`npm run patch:identificador`)
 - `apps-script/cineclip-cloud-drive.js` e `cloudflare/r2-worker.js` — backends do Google Drive e Cloudflare R2
 - `tools/` — servidor de preview, mocks, testes e ferramentas para reaplicar os patches do bundle
 - `tools/renovar-cloudflare.mjs` — renova o backend Cloudflare (`npm run cloudflare:renovar`):deploy + verificação do link `/v/:key`, das claims e do espaço no R2
@@ -40,6 +43,74 @@ npm run preview
 > `npm run nuvem`; esse servidor não precisa de `npm install`. Vercel e Netlify têm proxy
 > NVIDIA incluído. GitHub Pages serve apenas arquivos estáticos e não executa `/api/`; a
 > identificação que depende da NVIDIA precisa de um backend em Vercel/Netlify (ou outro host).
+
+## 🎬 Identificador de filmes (rápido)
+
+A identificação de um filme é o passo mais lento do app: a IA (NVIDIA ou Gemini) devolve
+o título, o ano e os atores, e depois é preciso **confirmar no TMDB** qual é a obra certa.
+A versão anterior fazia isso às cegas: até **30 pedidos** ao TMDB por identificação
+(5 títulos × 2 variantes × 3 tipos de pesquisa), mais 6 pedidos de atores, mais 2 de
+detalhes — todos em paralelo, sem cache. Em mobile dá filas de espera e *429*.
+
+Agora a resolução está em `identificador-rapido.js` (`window.CineIdentificador`), fora do
+bundle, e é feita **por degraus**: só se paga o degrau seguinte quando o anterior não deu
+uma resposta confiante.
+
+| Degrau | O que procura | Pedidos |
+| --- | --- | --- |
+| 0 | ID do IMDb que a IA deu (`/find`) — resposta exacta | 1 |
+| 1 | O título principal, filme + série em paralelo | 2 |
+| 2 | Variantes do mesmo título (sem `(2014)`, sem subtítulo) + o título em português | ≤ 4 |
+| 3 | Outros títulos + créditos dos atores | ≤ 10 |
+| — | Detalhes (sinopse, póster, genres, IMDb ID) | 1 |
+
+- **Caso comum** (a IA acerta o título): **3 pedidos** ao TMDB em vez de ~30 (mais 1
+  pedido a uma fonte externa, que corre **em paralelo** e não acrescenta tempo).
+- A pesquisa **para** assim que o título, o tipo e o ano batem certo — por isso um remake
+  ("Duna" de 1984 vs 2021) não ganha por ser mais popular.
+- **Cache** em memória e em `sessionStorage` (12 h): no *upload em massa* o mesmo filme
+  aparece dezenas de vezes e só o primeiro pedido sai para a rede.
+- O prompt da IA pede o **ID do IMDb**; quando vem, o degrau 0 dá a resposta exacta.
+- Os IDs canónicos ficam guardados no reel agendado: `tmdbId` (`movie:550`), `imdbId`
+  (`tt0133093`) e `chave` (`movie-550`) — é o que permite reconhecer a mesma obra mesmo
+  que o título venha traduzido de outra forma.
+- Se o ficheiro não carregar (CDN em baixo, cache antiga), o bundle cai na implementação
+  antiga — nenhuma functionality fica a menos.
+
+### 🔎 Confirmação em fontes externas (Wikidata + TVmaze)
+
+O TMDB é um catálogo comunitário: tem remakes com o mesmo nome, por vezes falta a série e
+às vezes o índice de pesquisa não devolve o que existe. Para isso o identificador consulta
+**duas bases gratuitas, sem chave e com CORS** — `confirmacao-externa.js`
+(`window.CineConfirmacao`):
+
+| Fonte | O que dá | Quando é usada |
+| --- | --- | --- |
+| **Wikidata** (`wikidata.org/w/api.php`) | rótulo, aliases, **ano**, e os IDs de interoperabilidade `P345` (IMDb) e `P4947`/`P4983` (TMDB) | filmes e séries, pelo título |
+| **TVmaze** (`api.tvmaze.com`) | nome oficial, data de estreia e **nota** | séries, pelo ID do IMDb |
+
+O que isso acrescenta, na prática:
+
+- **Confirmação independente.** O resultado passa a ter `confirmacao: { fonte, ano, titulo,
+  nota }` — o mesmo título confirmado noutra base, com o ano a bater certo.
+- **Recusa do remake errado.** Se a fonte externa conhece a obra com outro ano *e* esse ano
+  é o que a IA também deu, o candidato é deitado fora: em vez de adivinhar, vai-se buscar a
+  **obra exacta** que a fonte externa conhece (pelo ID do IMDb ou pelo ID do TMDB).
+- **Ponte para o TMDB.** Quando a pesquisa por título não acha nada, o Wikidata sabe o
+  identificador canónico da obra — é a rede de segurança que encontra o filme em falta.
+- **Custo zero em tempo.** A confirmação arranca **em paralelo** com a pesquisa no TMDB e só
+  se espera por ela 1,2 s; se a fonte estiver lenta ou em baixo, o app continua exactamente
+  como antes (sem selo). Nada disto exige chaves novas.
+
+O mesmo ficheiro serve de fallback: se `confirmacao-externa.js` não carregar, o
+identificador funciona só com o TMDB.
+
+Para mexer no identificador: edita `identificador-rapido.js` e corre
+`npm run patch:identificador` (regenera e reaplica os patches do bundle).
+Testes: `npm run identificador:rapido:test` (TMDB, Wikidata e TVmaze simulados, sem rede).
+Benchmark: `npm run identificador:bench` — corre a implementação antiga (que
+continua no bundle como fallback) e a nova lado a lado contra o mesmo TMDB
+simulado, e compara pedidos e tempo.
 
 ## 📦 Upload em massa
 

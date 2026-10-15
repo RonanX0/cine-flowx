@@ -42,7 +42,7 @@ const appPath = path.join(root, "index.html");
 const PAGINAS = ["index.html", "app-pronto.html", "404.html"];
 /** Ficheiros copiados tal e qual. */
 const ESTATICOS = [
-  "nuvem-duravel.js", "lote-massa.js", "_redirects", "_headers",
+  "nuvem-duravel.js", "lote-massa.js", "identificador-rapido.js", "confirmacao-externa.js", "_redirects", "_headers",
   // App instalável no Android (menu Compartilhar do TikTok/Kwai)
   "manifest.webmanifest", "sw.js", "icone-192.png", "icone-512.png", "icone-maskable-512.png",
 ];
@@ -50,6 +50,10 @@ const ESTATICOS = [
 const TAG_NUVEM = '<script src="nuvem-duravel.js"></script>';
 /** Upload em massa (código legível fora do bundle) — também com cache-busting. */
 const TAG_LOTE = '<script src="lote-massa.js"></script>';
+/** Identificador rápido (resolução de títulos no TMDB) — também com cache-busting. */
+const TAG_IDENT = '<script src="identificador-rapido.js"></script>';
+/** Confirmação externa (Wikidata / TVmaze) — também com cache-busting. */
+const TAG_CONFIRMACAO = '<script src="confirmacao-externa.js"></script>';
 
 for (const file of [...PAGINAS, ...ESTATICOS]) {
   if (!fs.existsSync(path.join(root, file))) {
@@ -87,6 +91,8 @@ function descobrirVersao(fallback) {
 
 const hashNuvem = hash(fs.readFileSync(path.join(root, "nuvem-duravel.js")));
 const hashLote = hash(fs.readFileSync(path.join(root, "lote-massa.js")));
+const hashIdent = hash(fs.readFileSync(path.join(root, "identificador-rapido.js")));
+const hashConfirmacao = hash(fs.readFileSync(path.join(root, "confirmacao-externa.js")));
 const hashApp = hash(html);
 const versao = descobrirVersao(hashApp);
 const data = new Date().toISOString();
@@ -122,7 +128,9 @@ const scriptCarimbo =
 function prepararPagina(fonte) {
   return fonte
     .replace(TAG_NUVEM, `${scriptCarimbo}\n    <script src="nuvem-duravel.js?v=${hashNuvem}"></script>`)
-    .replace(TAG_LOTE, `<script src="lote-massa.js?v=${hashLote}"></script>`);
+    .replace(TAG_LOTE, `<script src="lote-massa.js?v=${hashLote}"></script>`)
+    .replace(TAG_IDENT, `<script src="identificador-rapido.js?v=${hashIdent}"></script>`)
+    .replace(TAG_CONFIRMACAO, `<script src="confirmacao-externa.js?v=${hashConfirmacao}"></script>`);
 }
 
 fs.rmSync(dist, { recursive: true, force: true });
@@ -135,8 +143,14 @@ for (const file of PAGINAS) {
   if (pagina.includes(TAG_LOTE)) {
     throw new Error(`${file}: a tag do upload em massa não recebeu o cache-busting (?v=).`);
   }
+  if (pagina.includes(TAG_IDENT)) {
+    throw new Error(`${file}: a tag do identificador rápido não recebeu o cache-busting (?v=).`);
+  }
   if (pagina.includes(TAG_NUVEM)) {
     throw new Error(`${file}: a tag de nuvem não recebeu o cache-busting (?v=) — o deploy serviria código em cache.`);
+  }
+  if (pagina.includes(TAG_CONFIRMACAO)) {
+    throw new Error(`${file}: a tag da confirmação externa não recebeu o cache-busting (?v=).`);
   }
   fs.writeFileSync(path.join(dist, file), pagina);
 }

@@ -1281,7 +1281,13 @@
       );
     }
     var confianca = Number(ia.confianca) || 0;
-    item.resultado = { titulo: filme.title, ano: filme.year, confianca: confianca };
+    item.resultado = {
+      titulo: filme.title,
+      ano: filme.year,
+      confianca: confianca,
+      tmdbId: filme.tmdbId || (filme.id !== undefined ? filme.kind + ":" + filme.id : undefined),
+      imdbId: filme.imdbId,
+    };
     if (confianca < CONFIANCA_MINIMA && !estado.opcoes.agendarComPoucaCerteza) {
       throw erroComTipo(
         'A IA acha que é "' + filme.title + (filme.year ? " (" + filme.year + ")" : "") + '", mas só com ' +
@@ -1370,6 +1376,13 @@
       originalTitle: filme.original,
       year: filme.year,
       poster: filme.poster,
+      /* Identificadores canónicos: com eles o mesmo filme é reconhecido
+         mesmo que o título venha traduzido de outra forma, e dá para ligar
+         à página do filme. */
+      tmdbId: filme.tmdbId || (filme.id !== undefined ? filme.kind + ":" + filme.id : undefined),
+      imdbId: filme.imdbId,
+      kind: filme.kind,
+      chave: filme.chave || (filme.id !== undefined ? filme.kind + "-" + filme.id : undefined),
       hookText: gancho,
       caption: core.limparLegenda(String(legenda)),
       videoBlob: blob,
