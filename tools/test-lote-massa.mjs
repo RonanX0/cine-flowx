@@ -80,7 +80,7 @@ function ficheiro(window, nome, bytes = 4096) {
 
 function cenario(window, opcoes = {}) {
   const fila = [];
-  const chamadas = { processar: [], identificar: 0, gerarGancho: 0, sincronizar: 0, atualizarFila: 0, historico: 0, cancelar: 0 };
+  const chamadas = { processar: [], obras: [], identificar: 0, gerarGancho: 0, sincronizar: 0, atualizarFila: 0, historico: 0, cancelar: 0 };
   const slots = ["12:00", "18:00"];
   let travarProcessamento = null;
 
@@ -99,9 +99,11 @@ function cenario(window, opcoes = {}) {
       return { titulo: "Filme " + nome, confianca: 92, cena: "cena de " + nome, ganchos: ["Gancho de " + nome + " 😳", "outro"] };
     },
     procurarTmdb: async (chave, ia) => ({ title: ia.titulo, original: ia.titulo + " (orig)", year: 2024, poster: "https://img/p.jpg", kind: "movie", genres: [], overview: "" }),
-    gerarGancho: async () => {
+    /* O gancho recebe a obra JÁ confirmada no TMDB (objeto), não o nome do ficheiro. */
+    gerarGancho: async (chave, quadros, lang, obra) => {
       chamadas.gerarGancho++;
-      return { cena: "cena gerada", ganchos: ["Gancho gerado 🔥"] };
+      chamadas.obras.push(obra);
+      return { cena: "cena gerada", ganchos: ["Gancho de " + obra.titulo + " 🔥"] };
     },
     processar: async (f, inicio, fim, resolucao, gancho, progresso, corte) => {
       chamadas.processar.push({ nome: f.name, inicio, fim, resolucao, gancho, corte });
@@ -175,9 +177,10 @@ console.log("A1. Um lote com vídeos bons, um H.265, um com pouca certeza e um i
   check("curto.mp4 usa o vídeo todo (40 s)", c.chamadas.processar.find((p) => p.nome === "curto.mp4")?.fim === 40);
   check("o corte começa sempre no início (0 s)", c.chamadas.processar.every((p) => p.inicio === 0));
   check("as barras pretas detetadas vão para o FFmpeg", c.chamadas.processar[0]?.corte?.top === 100 && c.chamadas.processar[0]?.corte?.bottom === 180);
-  check("o gancho de cada vídeo vem da IA", c.fila[0].hookText === "Gancho de longo.mp4 😳" && c.fila[1].hookText === "Gancho de curto.mp4 😳", c.fila.map((r) => r.hookText).join(" | "));
-  check("o gancho vai para o vídeo (FFmpeg)", c.chamadas.processar[0].gancho === "Gancho de longo.mp4 😳");
-  check("a legenda é da IA e sem **negrito**", c.fila[0].caption === "Filme longo.mp4 — Gancho de longo.mp4 😳", c.fila[0].caption);
+  check("o gancho de cada vídeo é escrito com o filme confirmado", c.fila[0].hookText === "Gancho de Filme longo.mp4 🔥" && c.fila[1].hookText === "Gancho de Filme curto.mp4 🔥", c.fila.map((r) => r.hookText).join(" | "));
+  check("a IA de ganchos recebe o título e o ano do TMDB", c.chamadas.obras[0]?.titulo === "Filme longo.mp4" && c.chamadas.obras[0]?.ano === 2024, JSON.stringify(c.chamadas.obras[0]));
+  check("o gancho vai para o vídeo (FFmpeg)", c.chamadas.processar[0].gancho === "Gancho de Filme longo.mp4 🔥");
+  check("a legenda é da IA e sem **negrito**", c.fila[0].caption === "Filme longo.mp4 — Gancho de Filme longo.mp4 🔥", c.fila[0].caption);
   check("os Reels vão para a conta ativa", c.fila.every((r) => r.accountId === "acc_cena"));
   check("horários diferentes, nos horários livres da conta", c.fila[0].scheduledAt === "2026-10-14T12:00" && c.fila[1].scheduledAt === "2026-10-14T18:00", c.fila.map((r) => r.scheduledAt).join(", "));
   check("o Reel leva título, ano e pôster do TMDB", c.fila[0].title === "Filme longo.mp4" && c.fila[0].year === 2024 && c.fila[0].poster === "https://img/p.jpg");
@@ -198,14 +201,29 @@ console.log("A1. Um lote com vídeos bons, um H.265, um com pouca certeza e um i
   dom.window.close();
 }
 
-console.log("\nA2. Sem gancho na identificação → pede um gancho à IA");
+console.log("\nA2. Sem gancho na identificação → o gancho vem da IA, com o filme confirmado");
 {
   const dom = novoDom();
   const c = cenario(dom.window);
   c.lote.adicionarFicheiros([ficheiro(dom.window, "sem-gancho.mp4")]);
   await c.lote.iniciar();
   check("chama a IA de ganchos", c.chamadas.gerarGancho === 1);
-  check("usa o gancho gerado", c.fila[0]?.hookText === "Gancho gerado 🔥", c.fila[0]?.hookText);
+  check("usa o gancho gerado", c.fila[0]?.hookText === "Gancho de Sem Gancho 🔥", c.fila[0]?.hookText);
+  dom.window.close();
+}
+
+console.log("\nA2b. A IA de ganchos falha → usa o gancho que veio da identificação");
+{
+  const dom = novoDom();
+  const c = cenario(dom.window);
+  const origCore = c.lote.ambiente.core();
+  c.lote.ambiente.core = () => Object.assign({}, origCore, {
+    gerarGancho: async () => { throw new Error("IA indisponível"); },
+  });
+  c.lote.adicionarFicheiros([ficheiro(dom.window, "curto.mp4")]);
+  await c.lote.iniciar();
+  check("agenda o vídeo mesmo assim", c.fila.length === 1, `fila=${c.fila.length}`);
+  check("usa o gancho da identificação como reserva", c.fila[0]?.hookText === "Gancho de curto.mp4 😳", c.fila[0]?.hookText);
   dom.window.close();
 }
 
@@ -406,6 +424,7 @@ lote.ambiente.core = () => Object.assign({}, coreReal, {
   audio: async () => null,
   identificar: async (k, q, l, info) => ({ titulo: "Filme " + info.fileName, confianca: 95, cena: "cena", ganchos: ["Gancho " + info.fileName] }),
   procurarTmdb: async (k, ia) => ({ title: ia.titulo, original: ia.titulo, year: 2020, poster: "", kind: "movie", genres: [], overview: "" }),
+  gerarGancho: async () => ({ cena: "", ganchos: [] }),
   processar: async (f, i, fim, res, g, prog) => { prog(1); return new window.Blob([new Uint8Array(50)], { type: "video/mp4" }); },
   gerarLegenda: async (k, filme) => `**${filme.title}** é incrível`,
 });
