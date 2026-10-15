@@ -1,1 +1,0 @@
-sel=hi.length>4?[arr[0],...[0,1,2,3,4].map(n=>hi[Math.round(n*(hi.length-1)/4)])].filter(Boolean):arr.slice(0,6)

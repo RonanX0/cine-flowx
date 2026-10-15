@@ -117,7 +117,6 @@ function paginaTikTok(id, autor) {
   const dados = { __DEFAULT_SCOPE__: { "webapp.video-detail": { statusCode: 0, itemInfo: { itemStruct: item } } } };
   return `<html><script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">${JSON.stringify(dados)}</script></html>`;
 }
-let identificacoes = 0;
 const respostasIA = {
   normal: { titulo: "O Labirinto do Tempo", titulo_original: "Time Maze", ano: 2019, tipo: "movie", confianca: 92, atores: [], cena: "Ele percebe que a cerca não era para os animais", ganchos: ["Ele achou que a cerca era para os animais 😱"] },
   duvida: { titulo: "Talvez Este", titulo_original: "Maybe This", ano: 2010, tipo: "movie", confianca: 40, atores: [], cena: "cena", ganchos: ["gancho"] },
@@ -189,9 +188,9 @@ async function fetchFalso(url, opts = {}) {
     const texto = JSON.stringify(corpo.messages);
     pedidosIA.push(texto.slice(0, 200));
     let conteudo;
-    if (/especialista (?:mundial )?em identifica/.test(texto)) {
-      conteudo = JSON.stringify(/7400000000000000002/.test(texto) || identificacoes++ > 0 ? respostasIA.duvida : respostasIA.normal); /* o prompt atual já não leva o nome do ficheiro: o 2.º vídeo é o duvidoso */
-    } else if (/GANCHOS VIRAIS|texto de gancho/.test(texto)) {
+    if (/especialista mundial em identificação/.test(texto)) {
+      conteudo = JSON.stringify(/7400000000000000002/.test(texto) ? respostasIA.duvida : respostasIA.normal);
+    } else if (/GANCHOS VIRAIS/.test(texto)) {
       conteudo = JSON.stringify({ cena: "cena", ganchos: ["Gancho reserva 🔥"] });
     } else {
       conteudo = "QUER ASSISTIR A ESTE FILME? LINK NA BIO! 🎬\n\nEle achou que estava seguro.\n\nA cena que **muda tudo**.\n\n#Filme #Suspense";
@@ -245,7 +244,7 @@ const r1 = await trabalhador.ciclo();
 const segundos = ((Date.now() - t0) / 1000).toFixed(1);
 let cofre = await decifrar(nuvem.cofre, cfg.ENCRYPTION_KEY_B64);
 const links = Object.fromEntries(cofre.linksCelular.map((e) => [e.id, e]));
-const novo = cofre.queue.find((r) => r.id !== "reel_existente" && r.linkOrigem === "https://vm.tiktok.com/ZMok/");
+const novo = cofre.queue.find((r) => r.id !== "reel_existente");
 check(`trata os 3 links da nuvem (${segundos}s)`, r1.processados === 3, JSON.stringify(r1));
 check("o Reel entra na fila do cofre", !!novo, registos.join(" | "));
 if (novo) {
@@ -260,7 +259,7 @@ if (novo) {
 }
 check("link marcado como feito, com o Reel", links.lk_ok.estado === "feito" && novo && links.lk_ok.reelId === novo.id);
 check("o link para o PC fica intacto", links.lk_pc.estado === "pendente");
-check("pouca certeza → segue em frente e agenda o Reel", links.lk_duvida.estado === "feito" && cofre.queue.some((r) => r.id === links.lk_duvida.reelId && r.title === "Talvez Este"), JSON.stringify(cofre.queue.map((r) => [r.id, r.title, r.year])));
+check("pouca certeza → «revisar», sem Reel", links.lk_duvida.estado === "revisar" && /40%/.test(links.lk_duvida.erro || ""), links.lk_duvida.erro);
 check("vídeo apagado → «erro» com o motivo", links.lk_apagado.estado === "erro" && /não existe/.test(links.lk_apagado.erro || ""), links.lk_apagado.erro);
 check("o Reel existente continua lá", cofre.queue.some((r) => r.id === "reel_existente"));
 check("sinal de vida para o app («☁️ Servidor ligado»)", !!nuvem.claims[`cc_${cfg.VAULT_HASH}_servidor_nuvem`] && nuvem.claims[`cc_${cfg.VAULT_HASH}_servidor_nuvem`].owner === "servidor:teste");
@@ -269,7 +268,7 @@ check("a IA foi chamada pelo proxy do site", pedidosIA.length >= 2);
 /* ------------------------------------------------------------------ 4 */
 console.log("\n4. O vídeo que vai para o Instagram");
 const chaves = Object.keys(nuvem.videos);
-check("um vídeo enviado (só os links com erro não geram vídeo)", chaves.length === 2, String(chaves.length));
+check("um vídeo enviado (os links com erro não geram vídeo)", chaves.length === 1, String(chaves.length));
 if (chaves.length) {
   const final = path.join(tmp, "final.mp4");
   fs.writeFileSync(final, nuvem.videos[chaves[0]]);
@@ -312,7 +311,7 @@ console.log("\n6. «Agendar mesmo assim» depois de rever");
   await trabalhador.ciclo();
   const depois = await decifrar(nuvem.cofre, cfg.ENCRYPTION_KEY_B64);
   const ligado = depois.linksCelular.find((x) => x.id === "lk_duvida");
-  check("o servidor agenda o vídeo de pouca certeza (com ou sem «forçar»)", ligado.estado === "feito" && depois.queue.some((r) => r.id === ligado.reelId && r.title === "Talvez Este"), JSON.stringify(ligado));
+  check("o servidor agenda o vídeo de pouca certeza quando o utilizador manda", ligado.estado === "feito" && depois.queue.some((r) => r.id === ligado.reelId && r.title === "Talvez Este"), JSON.stringify(ligado));
 }
 
 /* ------------------------------------------------------------------ 7 */

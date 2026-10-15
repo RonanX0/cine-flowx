@@ -1,1 +1,0 @@
-sel=hi.length>3?[arr[0],hi[0],hi[Math.floor(hi.length/2)],hi[hi.length-1]].filter(Boolean):arr.slice(0,4)

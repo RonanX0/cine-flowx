@@ -1,1 +1,0 @@
-ano:k.ano,imdb_id:typeof k.imdb_id==="string"&&/^tt\d{7,9}$/i.test(k.imdb_id.trim())?k.imdb_id.trim().toLowerCase():void 0,tipo:

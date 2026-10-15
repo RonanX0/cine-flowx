@@ -1,1 +1,0 @@
-k=JSON.parse(m?m[0]:raw),C=Array.isArray(k.atores)

@@ -141,14 +141,6 @@ export function criarTrabalhador({ cfg, app, pastaDados, registo: guardaRegisto,
     cofre.queue = Array.isArray(cofre.queue) ? cofre.queue : [];
     const apagados = new Set(cofre.deletedReelIds || []);
     if (apagados.has(reel.id) || cofre.queue.some((r) => r.id === reel.id)) return false;
-    if (reel.linkOrigem || reel.caixaId) {
-      const jaTem = cofre.queue.some((r) => {
-        if (!r || (r.accountId || "acc_default") !== (reel.accountId || "acc_default")) return false;
-        if ((r.caixaTentativa || 0) !== (reel.caixaTentativa || 0)) return false;
-        return (reel.caixaId && r.caixaId === reel.caixaId) || (reel.linkOrigem && r.linkOrigem === reel.linkOrigem);
-      });
-      if (jaTem) return false;
-    }
     cofre.queue.push(reel);
     cofre.queue.sort((a, b) => String(a.scheduledAt).localeCompare(String(b.scheduledAt)));
     return true;
@@ -194,7 +186,7 @@ export function criarTrabalhador({ cfg, app, pastaDados, registo: guardaRegisto,
       const final = reel.videoBlob;
       const bytes = await fs.promises.readFile(final.caminho);
       const enviado = await enviarVideoR2(cfg, bytes, reel.videoFileName, { fetchFn });
-      const pronto = { ...reel, remoteVideoUrl: enviado.url, cloudProvider: "r2", videoSize: bytes.length, origem: "nuvem", linkOrigem: entrada.url, caixaId: entrada.id, caixaTentativa: entrada.tentativa || 0, updatedAt: agora() };
+      const pronto = { ...reel, remoteVideoUrl: enviado.url, cloudProvider: "r2", videoSize: bytes.length, origem: "nuvem", linkOrigem: entrada.url, updatedAt: agora() };
       delete pronto.videoBlob;
       // O horário foi escolhido com a fila lida no início; volta a escolher com a
       // fila mais recente para não ficar em cima de um Reel agendado entretanto.
