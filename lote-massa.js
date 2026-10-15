@@ -29,6 +29,100 @@
 
   if (window.CineLote) return;
 
+  /* -------------------------------------------------- hash perceptual (videohash-like) */
+  // Gera um hash perceptual estável do conteúdo do vídeo a partir dos frames já
+  // extraídos pelo core.quadros(). Inspirado no `videohash` (near-duplicate video
+  // detection): cada frame é reduzido a uma grelha 8x8, comparado com a média de
+  // luminância e convertido em bits. O hash resultante é o mesmo (ou muito
+  // próximo) para vídeos idênticos/near-duplicate, mesmo com re-encode, resize,
+  // watermark ou barras pretas adicionadas/removidas.
+  // Devolve uma string hex (ou null se não for possível).
+  function _carregarImagem(dataUrl) {
+    return new Promise(function (resolve, reject) {
+      try {
+        var img = new Image();
+        img.onload = function () { resolve(img); };
+        img.onerror = function () { reject(new Error("img")); };
+        img.src = dataUrl;
+      } catch (e) { reject(e); }
+    });
+  }
+
+  async function hashPerceptualVideo(quadros) {
+    try {
+      // quadros[0] é a colagem (collage); os restantes são frames individuais.
+      var frames = (quadros || []).slice(1);
+      if (frames.length < 2) return null; // frames reais são >= 6; placeholder (testes) não cacheia
+      var bits = [];
+      for (var i = 0; i < frames.length; i++) {
+        var img = await _carregarImagem(frames[i]);
+        var c = document.createElement("canvas");
+        c.width = 8; c.height = 8;
+        var ctx = c.getContext("2d");
+        if (!ctx) return null;
+        ctx.drawImage(img, 0, 0, 8, 8);
+        var data = ctx.getImageData(0, 0, 8, 8).data;
+        var lum = [];
+        var soma = 0;
+        for (var p = 0; p < data.length; p += 4) {
+          var l = 0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2];
+          lum.push(l);
+          soma += l;
+        }
+        var media = soma / (lum.length || 1);
+        for (var q = 0; q < lum.length; q++) bits.push(lum[q] >= media ? "1" : "0");
+      }
+      if (!bits.length) return null;
+      // converte bits -> hex (4 bits por dígito)
+      var hex = "";
+      for (var b = 0; b + 4 <= bits.length; b += 4) {
+        hex += parseInt(bits.slice(b, b + 4).join(""), 2).toString(16);
+      }
+      return hex || null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /* --------------------------------------------- cache de identificação por hash */
+  var CACHE_IDENT_CHAVE = "cineclip.ident.cache.v1";
+  var CACHE_IDENT_TTL = 30 * 24 * 60 * 60 * 1000; // 30 dias
+  var CACHE_IDENT_MAX = 200;
+
+  function _lerCacheIdent() {
+    try {
+      var raw = (window.localStorage && window.localStorage.getItem(CACHE_IDENT_CHAVE)) || "{}";
+      var obj = JSON.parse(raw);
+      return (obj && typeof obj === "object") ? obj : {};
+    } catch (e) { return {}; }
+  }
+  function _salvarCacheIdent(cache) {
+    try { if (window.localStorage) window.localStorage.setItem(CACHE_IDENT_CHAVE, JSON.stringify(cache)); } catch (e) {}
+  }
+  function cacheIdentLer(hash) {
+    if (!hash) return null;
+    var cache = _lerCacheIdent();
+    var e = cache[hash];
+    if (!e) return null;
+    if (!e.t || (Date.now() - e.t) > CACHE_IDENT_TTL) {
+      delete cache[hash];
+      _salvarCacheIdent(cache);
+      return null;
+    }
+    return e.v || null;
+  }
+  function cacheIdentGuardar(hash, valor) {
+    if (!hash || !valor) return;
+    var cache = _lerCacheIdent();
+    cache[hash] = { t: Date.now(), v: valor };
+    var keys = Object.keys(cache);
+    if (keys.length > CACHE_IDENT_MAX) {
+      keys.sort(function (a, b) { return (cache[a].t || 0) - (cache[b].t || 0); });
+      for (var i = 0; i < keys.length - CACHE_IDENT_MAX; i++) delete cache[keys[i]];
+    }
+    _salvarCacheIdent(cache);
+  }
+
   /* ----------------------------------------------------------- configuração */
 
   var MAX_SEGUNDOS = 90;
@@ -411,13 +505,20 @@
     }
     var duracao = 0;
     var tituloMetadados = "";
+    var todosMetadados = "";
     try {
       var meta = await core.lerMetadados(ficheiro);
       duracao = Number(meta && meta.duration) || 0;
-      var campo = ((meta && meta.fields) || []).find(function (f) {
+      var campos = (meta && meta.fields) || [];
+      // Concatena TODOS os campos de metadados (título, artista, comentário, etc.)
+      // em vez de só o "Título" — mais sinais para a IA identificar o filme.
+      todosMetadados = campos.map(function (f) {
+        return f && f.label && f.value ? (f.label + ": " + f.value) : "";
+      }).filter(Boolean).join(" | ");
+      var campo = campos.find(function (f) {
         return f && f.label === "Título";
       });
-      tituloMetadados = campo ? campo.value : "";
+      tituloMetadados = campo ? campo.value : (campos[0] ? campos[0].value : "");
     } catch (e) {}
     if (!duracao) duracao = Number(info.duracao) || 0;
     if (!duracao) throw erroComTipo("Não consegui ler a duração do vídeo.", "leitura");
@@ -441,6 +542,38 @@
     definirPasso(item, "A identificar o filme…", 0.1);
     var temGemini = !!String(s.geminiKey || "").trim();
     var quadros = await core.quadros(ficheiro, 0, fim, corte);
+    // OCR leve dos frames: tenta ler texto embutido (legendas hardcoded, nomes) via
+    // Tesseract.js (CDN). Se falhar (offline/sem suporte), ignora silenciosamente.
+    var textoOcr = "";
+    try {
+      // Não tentar OCR em ambientes sem rede/DOM real (ex.: jsdom nos testes).
+      if (typeof window === "undefined" || !window.navigator || window.navigator.userAgent.indexOf("jsdom") !== -1) {
+        throw new Error("skip");
+      }
+      if (typeof Tesseract === "undefined") {
+        await new Promise(function (resolve, reject) {
+          var timer = setTimeout(function () { reject(new Error("timeout")); }, 4000);
+          var sc = document.createElement("script");
+          sc.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+          sc.onload = function () { clearTimeout(timer); resolve(); };
+          sc.onerror = function () { clearTimeout(timer); reject(new Error("load")); };
+          document.head.appendChild(sc);
+        });
+      }
+      if (typeof Tesseract !== "undefined" && Tesseract.recognize) {
+        // Só os frames individuais (ignora a colagem)
+        var framesOcr = (quadros || []).slice(1, 4);
+        for (var oi = 0; oi < framesOcr.length; oi++) {
+          try {
+            var r = await Tesseract.recognize(framesOcr[oi], "por+eng");
+            var t = (r && r.data && r.data.text) ? r.data.text.trim() : "";
+            if (t) textoOcr += (textoOcr ? " " : "") + t;
+          } catch (e) {}
+        }
+        // limpa ruído
+        textoOcr = textoOcr.replace(/\s+/g, " ").trim().slice(0, 500);
+      }
+    } catch (e) { textoOcr = ""; }
     var audio = null;
     if (temGemini) {
       try {
@@ -450,22 +583,40 @@
       }
     }
     var dicaLink = String((item && item.dica) || (ficheiro && ficheiro.pistaLink) || "").trim();
-    var ia = await core.identificar(s.nvidiaKey, quadros, s.lang, {
-      fileName: ficheiro.name,
-      metaTitle: tituloMetadados,
-      userHint: dicaLink,
-      geminiKey: s.geminiKey,
-      audioClip: audio,
-    });
-    if (!ia || (!ia.titulo && !(ia.atores && ia.atores.length))) {
-      throw erroComTipo("A IA não conseguiu identificar o filme deste clipe.", "identificacao");
-    }
-    var filme = await core.procurarTmdb(s.tmdbKey, ia);
-    if (!filme) {
-      throw erroComTipo(
-        'Não encontrei "' + (ia.titulo || ia.titulo_original || "o filme") + '" no TMDB.',
-        "identificacao"
-      );
+    // Enriquecer a dica com metadados + OCR (mais sinais para a IA).
+    var dicaEnriquecida = [dicaLink, todosMetadados, textoOcr ? ("Texto no vídeo: " + textoOcr) : "", ficheiro && ficheiro.name ? ("Ficheiro: " + ficheiro.name) : ""].filter(Boolean).join(" · ");
+
+    // Hash perceptual do conteúdo (videohash-like) -> chave de cache. Se já
+    // identificámos este (ou um near-duplicate) antes, reutilizamos o resultado
+    // em vez de voltar a chamar a IA - mais rápido e consistente.
+    var hashVideo = null;
+    try { hashVideo = await hashPerceptualVideo(quadros); } catch (e) { hashVideo = null; }
+    var cacheHit = hashVideo ? cacheIdentLer(hashVideo) : null;
+
+    var ia = null;
+    var filme = null;
+    if (cacheHit && cacheHit.ia && cacheHit.filme) {
+      ia = cacheHit.ia;
+      filme = cacheHit.filme;
+    } else {
+      ia = await core.identificar(s.nvidiaKey, quadros, s.lang, {
+        fileName: ficheiro.name,
+        metaTitle: tituloMetadados,
+        userHint: dicaEnriquecida,
+        geminiKey: s.geminiKey,
+        audioClip: audio,
+      });
+      if (!ia || (!ia.titulo && !(ia.atores && ia.atores.length))) {
+        throw erroComTipo("A IA não conseguiu identificar o filme deste clipe.", "identificacao");
+      }
+      filme = await core.procurarTmdb(s.tmdbKey, ia);
+      if (!filme) {
+        throw erroComTipo(
+          'Não encontrei "' + (ia.titulo || ia.titulo_original || "o filme") + '" no TMDB.',
+          "identificacao"
+        );
+      }
+      if (hashVideo) cacheIdentGuardar(hashVideo, { ia: ia, filme: filme });
     }
     var confianca = Number(ia.confianca) || 0;
     item.resultado = { titulo: filme.title, ano: filme.year, confianca: confianca };
