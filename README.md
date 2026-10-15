@@ -1,6 +1,6 @@
 # CineClip 🎬
 
-Aplicação web **100% no navegador** que limpa metadados de vídeos, corta até 2:30, formata em **9:16** com texto de *hook* no topo, identifica o filme/série via **NVIDIA Vision + TMDB** e gera uma legenda pronta para publicar.
+Aplicação web **100% no navegador** que limpa metadados de vídeos, corta até 2:30, formata em **9:16** com texto de *hook* no topo, identifica o filme/série via **IA (Google Gemini, com NVIDIA Vision como reserva) + TMDB** e gera uma legenda pronta para publicar.
 
 ## Estrutura do Projeto
 
@@ -52,6 +52,20 @@ vez; o painel pode ser fechado (fica um atalho no canto) e o botão **Parar** in
 No Estúdio, **Gerar gancho pelo vídeo (IA)** propõe até três ganchos curtos e ligados à cena.
 A resposta é validada como texto de uma linha (até 64 caracteres); sugestões vazias, repetidas
 ou genéricas não substituem o que já está escrito no campo.
+
+### Como o filme é identificado
+
+1. **A IA analisa quadros e áudio.** Com chave Gemini, ele vai primeiro (até 6 quadros, o áudio
+   do clipe e pesquisa Google); a NVIDIA Vision só entra se não houver chave Gemini ou se a
+   confiança vier abaixo de 70 %. O prompt **não reconhece pessoas pelo rosto**: a obra é
+   deduzida de falas, texto na tela, nomes de personagens e contexto, e a IA responde com uma
+   confiança calibrada (90+ só com prova direta; abaixo de 40 deixa o título vazio).
+2. **O TMDB confirma** o título pelo identificador rápido (`identificador-rapido.js`): por
+   degraus, com cache, começando pelo IMDb ID quando a IA o informa.
+3. **O gancho é escrito depois**, com a obra já confirmada (título, ano, gêneros e sinopse do
+   TMDB) e com as imagens/áudio da cena. Cada uma das 3 opções usa uma estrutura diferente
+   (pergunta, contraste, tensão); a primeira é a que vai para o vídeo. Os ganchos que vêm da
+   identificação (escritos quando a obra ainda era um palpite) ficam só como reserva.
 
 - Se a IA tiver menos de 65 % de certeza do filme, o vídeo **não é agendado** e fica para
   rever (*Abrir no Estúdio*), a não ser que ligues *Agendar mesmo com pouca certeza*.

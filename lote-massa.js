@@ -1291,18 +1291,31 @@
     /* 3. Gancho ------------------------------------------------------------ */
     definirPasso(item, "A criar o gancho…", 0.2);
     var cena = ia.cena || "";
-    var gancho = (ia.ganchos || []).find(function (g) {
-      return g && String(g).trim();
-    });
-    if (!gancho) {
-      try {
-        var g = await comLimite(core.gerarGancho(s.nvidiaKey, quadros, s.lang, filme.title, s.geminiKey, audio), 60000);
-        gancho = ((g && g.ganchos) || []).find(function (x) {
-          return x && String(x).trim();
-        });
-        if (!cena && g && g.cena) cena = g.cena;
-      } catch (e) {}
-    }
+    var primeiroGancho = function (lista) {
+      return (lista || []).find(function (x) {
+        return x && String(x).trim();
+      });
+    };
+    /* O gancho é escrito com o filme JÁ confirmado no TMDB (título, ano, sinopse,
+       géneros). Os ganchos que vieram da identificação foram escritos quando a obra
+       ainda era só um palpite — ficam como reserva. */
+    var gancho;
+    try {
+      var g = await comLimite(
+        core.gerarGancho(
+          s.nvidiaKey,
+          quadros,
+          s.lang,
+          { titulo: filme.title, ano: filme.year, tipo: filme.kind, sinopse: filme.overview, generos: filme.genres },
+          s.geminiKey,
+          audio
+        ),
+        60000
+      );
+      gancho = primeiroGancho(g && g.ganchos);
+      if (!cena && g && g.cena) cena = g.cena;
+    } catch (e) {}
+    if (!gancho) gancho = primeiroGancho(ia.ganchos);
     gancho = String(gancho || s.overlayText || core.ganchoPadrao || "").trim();
     item.resultado.gancho = gancho;
 
@@ -1367,6 +1380,9 @@
       title: filme.title || base,
       originalTitle: filme.original,
       year: filme.year,
+      tmdbId: filme.tmdbId,
+      imdbId: filme.imdbId,
+      chave: filme.chave,
       poster: filme.poster,
       hookText: gancho,
       caption: core.limparLegenda(String(legenda)),
