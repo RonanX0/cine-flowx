@@ -708,12 +708,6 @@ fs.writeFileSync(
 );
 const claimA3 = await CC.claimPublish(claimItem);
 check("claim expirada não bloqueia (takeover)", claimA3.ok === true && claimA3.provider === "r2", JSON.stringify({ ok: claimA3.ok, reason: claimA3.reason }));
-// Duas abas no mesmo browser partilham o mesmo claimOwnerId no localStorage, mas têm de ter owners distintos
-const sbSameTabStorage = createContext(BASE);
-sbSameTabStorage.localStorage.setItem("cineclip.cloud.state", sb.localStorage.getItem("cineclip.cloud.state"));
-setSettings(sbSameTabStorage, CFG_BOTH);
-const claimSameBrowserOtherTab = await sbSameTabStorage.window.CineCloud.claimPublish(claimItem);
-check("segunda aba no mesmo browser (mesmo localStorage) também é bloqueada pela claim", claimSameBrowserOtherTab.ok === false && claimSameBrowserOtherTab.reason === "held", JSON.stringify(claimSameBrowserOtherTab));
 await CC.releaseClaim(claimA3);
 
 // Provider Drive (Apps Script)

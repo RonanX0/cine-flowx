@@ -1,1 +1,0 @@
-ganchos:Array.isArray(k.ganchos)?k.ganchos.map(T=>String(T).trim()).filter(Boolean):void 0

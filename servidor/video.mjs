@@ -24,35 +24,19 @@ const ffmpeg = () => process.env.CINECLIP_FFMPEG || "ffmpeg";
 const ffprobe = () => process.env.CINECLIP_FFPROBE || "ffprobe";
 
 /** Corre um comando e devolve stdout (Buffer). `aoLog` recebe o stderr linha a linha. */
-export function correr(cmd, args, { aoLog, entrada, timeoutMs = 120_000 } = {}) {
+export function correr(cmd, args, { aoLog, entrada } = {}) {
   return new Promise((resolve, reject) => {
     const p = spawn(cmd, args, { stdio: ["pipe", "pipe", "pipe"] });
     const partes = [];
     let erro = "";
-    let terminado = false;
-    const timer = timeoutMs > 0 ? setTimeout(() => {
-      if (terminado) return;
-      terminado = true;
-      try { p.kill("SIGKILL"); } catch {}
-      reject(new Error(`${path.basename(cmd)} excedeu o tempo limite (${Math.round(timeoutMs / 1000)}s).`));
-    }, timeoutMs) : null;
-    if (timer && timer.unref) timer.unref();
     p.stdout.on("data", (d) => partes.push(d));
     p.stderr.on("data", (d) => {
       const t = d.toString();
       erro = (erro + t).slice(-4000);
       if (aoLog) aoLog(t);
     });
-    p.on("error", (e) => {
-      if (terminado) return;
-      terminado = true;
-      if (timer) clearTimeout(timer);
-      reject(e);
-    });
+    p.on("error", reject);
     p.on("close", (codigo) => {
-      if (terminado) return;
-      terminado = true;
-      if (timer) clearTimeout(timer);
       if (codigo === 0) resolve(Buffer.concat(partes));
       else reject(new Error(`${path.basename(cmd)} terminou com código ${codigo}: ${erro.split("\n").filter(Boolean).slice(-3).join(" | ")}`));
     });
@@ -67,29 +51,17 @@ export async function pastaTemporaria(prefixo = "cineclip-") {
 
 /* -------------------------------------------------------------- leitura */
 
-const cacheSondar = new Map();
-
 /** Largura, altura (já com a rotação aplicada), duração e se há áudio. */
 export async function sondar(caminho) {
-  let chaveCache = "";
-  try {
-    const st = await fs.promises.stat(caminho);
-    chaveCache = `${caminho}:${st.size}:${st.mtimeMs}:${ffprobe()}:${ffmpeg()}`;
-    if (cacheSondar.has(chaveCache)) return cacheSondar.get(chaveCache);
-  } catch {}
   let saida;
   try {
     if (process.env.CINECLIP_FFPROBE === "nenhum") throw Object.assign(new Error("sem ffprobe"), { code: "ENOENT" });
     saida = await correr(ffprobe(), ["-v", "error", "-show_entries",
     "stream=codec_type,codec_name,width,height:stream_side_data=rotation:stream_tags=rotate:format=duration",
-    "-of", "json", caminho], { timeoutMs: 30_000 });
+    "-of", "json", caminho]);
   } catch (e) {
     // Sem ffprobe (ex.: Vercel, só com o ffmpeg-static): lê o mesmo do "ffmpeg -i".
-    if (e && e.code === "ENOENT") {
-      const info = await sondarComFfmpeg(caminho);
-      if (chaveCache) cacheSondar.set(chaveCache, info);
-      return info;
-    }
+    if (e && e.code === "ENOENT") return sondarComFfmpeg(caminho);
     throw e;
   }
   const j = JSON.parse(saida.toString());
@@ -99,9 +71,7 @@ export async function sondar(caminho) {
   let altura = Number(v.height) || 0;
   const rot = Math.abs(Number((v.side_data_list || []).find((d) => d.rotation != null)?.rotation ?? v.tags?.rotate ?? 0)) % 180;
   if (rot === 90) [largura, altura] = [altura, largura];
-  const info = { largura, altura, duracao: Number(j.format && j.format.duration) || 0, temAudio: !!a, codec: v.codec_name || "" };
-  if (chaveCache) cacheSondar.set(chaveCache, info);
-  return info;
+  return { largura, altura, duracao: Number(j.format && j.format.duration) || 0, temAudio: !!a, codec: v.codec_name || "" };
 }
 
 /** O mesmo que `sondar`, a partir do relatório do "ffmpeg -i" (quando não há ffprobe). */
@@ -128,27 +98,11 @@ function sondarComFfmpeg(caminho) {
   return new Promise((resolve, reject) => {
     const p = spawn(ffmpeg(), ["-hide_banner", "-i", caminho], { stdio: ["ignore", "ignore", "pipe"] });
     let texto = "";
-    let terminado = false;
-    const timer = setTimeout(() => {
-      if (terminado) return;
-      terminado = true;
-      try { p.kill("SIGKILL"); } catch {}
-      reject(new Error("ffmpeg -i excedeu o tempo limite (30s)."));
-    }, 30_000);
-    if (timer.unref) timer.unref();
     p.stderr.on("data", (d) => {
       texto += d.toString();
     });
-    p.on("error", (e) => {
-      if (terminado) return;
-      terminado = true;
-      clearTimeout(timer);
-      reject(e);
-    });
+    p.on("error", reject);
     p.on("close", () => {
-      if (terminado) return;
-      terminado = true;
-      clearTimeout(timer);
       const info = lerRelatorioFfmpeg(texto);
       if (!info.largura || !info.altura) {
         reject(new Error("Não consegui ler o vídeo: " + texto.split("\n").filter(Boolean).slice(-2).join(" | ")));

@@ -1,1 +1,0 @@
-,!Sn.titulo&&!((Be=Sn.atores)!=null&&Be.length))throw new Error("A IA não conseguiu identificar o clipe.");

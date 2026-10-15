@@ -14,7 +14,7 @@
  * Os vídeos são tratados um de cada vez (o FFmpeg do navegador só faz um de cada
  * vez). Se a IA não tiver certeza do filme (confiança < 65%), o vídeo não é
  * agendado — fica marcado para rever no Estúdio — a não ser que ligues a opção
- * "Agendar mesmo com pouca certeza" (hoje sempre ativo: nada trava por falta de certeza).
+ * "Agendar mesmo com pouca certeza".
  *
  * Este ficheiro é código legível de propósito: o resto do app vive num bundle
  * compilado. A ligação ao bundle são dois objetos que ele publica em `window`
@@ -57,14 +57,14 @@
       var bruto = window.localStorage.getItem(CHAVE_OPCOES);
       var o = bruto ? JSON.parse(bruto) : {};
       return {
-        agendarComPoucaCerteza: o.agendarComPoucaCerteza !== false,
+        agendarComPoucaCerteza: !!o.agendarComPoucaCerteza,
         aoPartilhar: o.aoPartilhar === "aqui" || o.aoPartilhar === "pc" || o.aoPartilhar === "nuvem" ? o.aoPartilhar : "perguntar",
         processarLinksDoCelular: typeof o.processarLinksDoCelular === "boolean" ? o.processarLinksDoCelular : !eCelular(),
         botaoColar: o.botaoColar !== false,
         avisarLinkCopiado: o.avisarLinkCopiado !== false,
       };
     } catch (e) {
-      return { agendarComPoucaCerteza: true, aoPartilhar: "perguntar", processarLinksDoCelular: !eCelular(), botaoColar: true, avisarLinkCopiado: true };
+      return { agendarComPoucaCerteza: false, aoPartilhar: "perguntar", processarLinksDoCelular: !eCelular(), botaoColar: true, avisarLinkCopiado: true };
     }
   }
 
@@ -104,738 +104,40 @@
     },
   };
 
-  function comLimite(promessa, ms, msg) {
-    return new Promise(function (resolve, reject) {
-      var t = setTimeout(function () {
-        reject(new Error(msg || "A operação demorou demasiado tempo."));
-      }, ms);
-      if (t && typeof t.unref === "function") t.unref();
-      Promise.resolve(promessa).then(
-        function (v) {
-          clearTimeout(t);
-          resolve(v);
-        },
-        function (e) {
-          clearTimeout(t);
-          reject(e);
-        }
-      );
-    });
-  }
-
-  /* ------------------------------------ leitor binário de cabeçalho de vídeo */
-  /*
-   * Lê largura, altura (com rotação aplicada), duração, codec e título diretamente
-   * dos bytes do container (MP4/MOV/M4V, WebM/MKV e AVI) usando File.slice().
-   * Demora poucos milissegundos e não depende do elemento <video> (que trava em
-   * abas em segundo plano ou devolve duration = Infinity) nem do download do
-   * MediaInfoModule.wasm a partir do unpkg.
-   */
-  async function lerCabecalhoVideo(ficheiro) {
-    var vazio = { largura: 0, altura: 0, duracao: 0, temAudio: null, codec: "", titulo: "" };
-    if (!ficheiro || typeof ficheiro.slice !== "function" || !(ficheiro.size > 16)) return vazio;
-    var tamanhoTotal = Number(ficheiro.size) || 0;
-
-    async function lerBytes(inicio, comp) {
-      var ini = Math.max(0, Math.min(tamanhoTotal, Math.floor(inicio)));
-      var fim = Math.max(ini, Math.min(tamanhoTotal, ini + Math.floor(comp)));
-      if (fim <= ini) return new Uint8Array(0);
-      var fatia = ficheiro.slice(ini, fim);
-      if (typeof fatia.arrayBuffer === "function") {
-        return new Uint8Array(await fatia.arrayBuffer());
-      }
-      return new Promise(function (res, rej) {
-        var fr = new FileReader();
-        fr.onload = function () {
-          res(fr.result instanceof ArrayBuffer ? new Uint8Array(fr.result) : new Uint8Array(0));
-        };
-        fr.onerror = function () {
-          rej(new Error("leitura"));
-        };
-        fr.readAsArrayBuffer(fatia);
-      });
-    }
-
-    function ascii(u8, pos, len) {
-      var s = "";
-      var lim = Math.min(u8.length, pos + len);
-      for (var i = pos; i < lim; i++) s += String.fromCharCode(u8[i]);
-      return s;
-    }
-
-    function utf8(u8, pos, len) {
-      var sub = u8.subarray(pos, Math.min(u8.length, pos + len));
-      try {
-        return new TextDecoder("utf-8").decode(sub).replace(/\0+$/g, "").trim();
-      } catch (e) {
-        return ascii(u8, pos, len).replace(/\0+$/g, "").trim();
-      }
-    }
-
-    function lerU64(dv, pos) {
-      var hi = dv.getUint32(pos);
-      var lo = dv.getUint32(pos + 4);
-      return hi * 4294967296 + lo;
-    }
-
-    try {
-      var cab = await lerBytes(0, Math.min(tamanhoTotal, 65536));
-      if (cab.length < 12) return vazio;
-      var dv0 = new DataView(cab.buffer, cab.byteOffset, cab.byteLength);
-
-      /* 1. WebM / MKV (EBML 0x1A 0x45 0xDF 0xA3) */
-      if (cab[0] === 0x1a && cab[1] === 0x45 && cab[2] === 0xdf && cab[3] === 0xa3) {
-        var bufEbml = cab.length < Math.min(tamanhoTotal, 262144)
-          ? await lerBytes(0, Math.min(tamanhoTotal, 262144))
-          : cab;
-        var resMkv = analisarEbml(bufEbml, utf8);
-        if (!resMkv.duracao && tamanhoTotal > 4096) {
-          var caudaMkv = await lerBytes(Math.max(0, tamanhoTotal - 262144), 262144);
-          var durCauda = estimarDuracaoClusterEbml(caudaMkv, resMkv._escala || 1000000);
-          if (durCauda > 0) resMkv.duracao = durCauda;
-        }
-        delete resMkv._escala;
-        return resMkv;
-      }
-
-      /* 2. AVI (RIFF....AVI ) */
-      if (ascii(cab, 0, 4) === "RIFF" && ascii(cab, 8, 4) === "AVI ") {
-        return analisarAvi(cab, dv0, ascii);
-      }
-
-      /* 3. MP4 / MOV / M4V (ISO BMFF) */
-      var tipo0 = ascii(cab, 4, 4);
-      if (/^(ftyp|moov|mdat|wide|free|skip|pnot|pict|styp|sidx|moof|uuid)$/.test(tipo0)) {
-        return await analisarIsoBmff(lerBytes, tamanhoTotal, ascii, utf8, lerU64);
-      }
-    } catch (e) {}
-    return vazio;
-  }
-
-  function analisarAvi(u8, dv, ascii) {
-    var res = { largura: 0, altura: 0, duracao: 0, temAudio: false, codec: "", titulo: "" };
-    for (var i = 12; i + 8 <= u8.length; ) {
-      var id = ascii(u8, i, 4);
-      var tam = dv.getUint32(i + 4, true);
-      if (id === "LIST" && i + 12 <= u8.length) {
-        i += 12;
-        continue;
-      }
-      if (id === "avih" && i + 8 + 40 <= u8.length) {
-        var usPorQuadro = dv.getUint32(i + 8, true);
-        var totalQuadros = dv.getUint32(i + 8 + 16, true);
-        var larg = dv.getUint32(i + 8 + 32, true);
-        var alt = dv.getUint32(i + 8 + 36, true);
-        if (larg > 0 && alt > 0) {
-          res.largura = larg;
-          res.altura = alt;
-        }
-        if (usPorQuadro > 0 && totalQuadros > 0) {
-          res.duracao = (usPorQuadro * totalQuadros) / 1e6;
-        }
-      } else if (id === "strh" && i + 8 + 32 <= u8.length) {
-        var fccType = ascii(u8, i + 8, 4);
-        var fccHandler = ascii(u8, i + 12, 4).trim().toLowerCase();
-        if (fccType === "vids") {
-          if (fccHandler && !res.codec) res.codec = fccHandler;
-          if (i + 8 + 36 <= u8.length && !res.duracao) {
-            var scale = dv.getUint32(i + 8 + 20, true);
-            var rate = dv.getUint32(i + 8 + 24, true);
-            var length = dv.getUint32(i + 8 + 32, true);
-            if (scale > 0 && rate > 0 && length > 0) res.duracao = (length * scale) / rate;
-          }
-        } else if (fccType === "auds") {
-          res.temAudio = true;
-        }
-      }
-      if (tam <= 0) break;
-      i += 8 + tam + (tam % 2);
-    }
-    return res;
-  }
-
-  function lerVintEbml(u8, pos, removerMascara) {
-    if (pos >= u8.length) return null;
-    var b0 = u8[pos];
-    if (b0 === 0) return null;
-    var len = 1;
-    var mask = 0x80;
-    while (len <= 8 && !(b0 & mask)) {
-      len++;
-      mask >>= 1;
-    }
-    if (len > 8 || pos + len > u8.length) return null;
-    var val = removerMascara ? (b0 & (mask - 1)) : b0;
-    var desconhecido = removerMascara && val === mask - 1;
-    for (var i = 1; i < len; i++) {
-      if (desconhecido && u8[pos + i] !== 0xff) desconhecido = false;
-      val = val * 256 + u8[pos + i];
-    }
-    return { valor: desconhecido ? -1 : val, bytes: len };
-  }
-
-  function lerUintEbml(u8, pos, len) {
-    var v = 0;
-    for (var i = 0; i < len && pos + i < u8.length; i++) v = v * 256 + u8[pos + i];
-    return v;
-  }
-
-  function lerFloatEbml(u8, pos, len) {
-    if (pos + len > u8.length) return 0;
-    var dv = new DataView(u8.buffer, u8.byteOffset + pos, len);
-    if (len === 4) return dv.getFloat32(0, false);
-    if (len === 8) return dv.getFloat64(0, false);
-    return 0;
-  }
-
-  function analisarEbml(u8, utf8) {
-    var res = { largura: 0, altura: 0, duracao: 0, temAudio: false, codec: "", titulo: "", _escala: 1000000 };
-    var escala = 1000000;
-    var durBruta = 0;
-
-    function percorrer(ini, fim, ctx) {
-      var pos = ini;
-      while (pos + 2 <= fim && pos + 2 <= u8.length) {
-        var idObj = lerVintEbml(u8, pos, false);
-        if (!idObj) break;
-        var szObj = lerVintEbml(u8, pos + idObj.bytes, true);
-        if (!szObj) break;
-        var hdr = idObj.bytes + szObj.bytes;
-        var dadosIni = pos + hdr;
-        var dadosFim = szObj.valor < 0 ? fim : Math.min(fim, dadosIni + szObj.valor);
-        var id = idObj.valor;
-        var tam = Math.max(0, dadosFim - dadosIni);
-
-        if (id === 0x18538067 || id === 0x1549a966 || id === 0x1654ae6b || id === 0xae || id === 0xe0) {
-          var subCtx = id === 0xae ? { tipo: 0, codec: "", larg: 0, alt: 0, dLarg: 0, dAlt: 0 } : ctx;
-          percorrer(dadosIni, dadosFim, subCtx);
-          if (id === 0xae && subCtx) {
-            if (subCtx.tipo === 1) {
-              if (!res.largura && (subCtx.larg || subCtx.dLarg)) res.largura = subCtx.larg || subCtx.dLarg;
-              if (!res.altura && (subCtx.alt || subCtx.dAlt)) res.altura = subCtx.alt || subCtx.dAlt;
-              if (subCtx.codec && !res.codec) res.codec = subCtx.codec.toLowerCase();
-            } else if (subCtx.tipo === 2) {
-              res.temAudio = true;
-            }
-          }
-        } else if (id === 0x2ad7b1 && tam > 0 && tam <= 8) {
-          escala = lerUintEbml(u8, dadosIni, tam) || 1000000;
-          res._escala = escala;
-        } else if (id === 0x4489 && (tam === 4 || tam === 8)) {
-          durBruta = lerFloatEbml(u8, dadosIni, tam);
-        } else if (id === 0x7ba9 && tam > 0 && tam < 512) {
-          res.titulo = utf8(u8, dadosIni, tam);
-        } else if (ctx && id === 0x83 && tam === 1) {
-          ctx.tipo = u8[dadosIni];
-        } else if (ctx && id === 0x86 && tam > 0 && tam < 128) {
-          ctx.codec = utf8(u8, dadosIni, tam);
-        } else if (ctx && id === 0xb0 && tam > 0 && tam <= 4) {
-          ctx.larg = lerUintEbml(u8, dadosIni, tam);
-        } else if (ctx && id === 0xba && tam > 0 && tam <= 4) {
-          ctx.alt = lerUintEbml(u8, dadosIni, tam);
-        } else if (ctx && id === 0x54b0 && tam > 0 && tam <= 4) {
-          ctx.dLarg = lerUintEbml(u8, dadosIni, tam);
-        } else if (ctx && id === 0x54ba && tam > 0 && tam <= 4) {
-          ctx.dAlt = lerUintEbml(u8, dadosIni, tam);
-        } else if (id === 0x1f43b675) {
-          break;
-        }
-        if (dadosFim <= pos) break;
-        pos = dadosFim;
-      }
-    }
-
-    percorrer(0, u8.length, null);
-    if (durBruta > 0 && escala > 0) {
-      res.duracao = (durBruta * escala) / 1e9;
-    }
-    return res;
-  }
-
-  function estimarDuracaoClusterEbml(u8, escala) {
-    var maxTc = 0;
-    for (var i = 0; i + 12 < u8.length; i++) {
-      if (u8[i] === 0x1f && u8[i + 1] === 0x43 && u8[i + 2] === 0xb6 && u8[i + 3] === 0x75) {
-        var sz = lerVintEbml(u8, i + 4, true);
-        if (!sz) continue;
-        var pos = i + 4 + sz.bytes;
-        var fim = sz.valor < 0 ? u8.length : Math.min(u8.length, pos + sz.valor);
-        var clusterTc = 0;
-        var maxRelTc = 0;
-        var passos = 0;
-        while (pos + 2 < fim && passos++ < 500) {
-          var idObj = lerVintEbml(u8, pos, false);
-          if (!idObj) break;
-          var sObj = lerVintEbml(u8, pos + idObj.bytes, true);
-          if (!sObj || sObj.valor < 0) break;
-          var dIni = pos + idObj.bytes + sObj.bytes;
-          var dFim = Math.min(fim, dIni + sObj.valor);
-          if (idObj.valor === 0xe7 && sObj.valor >= 1 && sObj.valor <= 8) {
-            clusterTc = lerUintEbml(u8, dIni, sObj.valor);
-          } else if ((idObj.valor === 0xa3 || idObj.valor === 0xa1) && dIni + 4 <= dFim) {
-            var trkVint = lerVintEbml(u8, dIni, true);
-            if (trkVint && dIni + trkVint.bytes + 2 <= dFim) {
-              var rel = (u8[dIni + trkVint.bytes] << 8) | u8[dIni + trkVint.bytes + 1];
-              if (rel & 0x8000) rel -= 0x10000;
-              if (rel > maxRelTc) maxRelTc = rel;
-            }
-          }
-          pos = dFim;
-        }
-        if (clusterTc + maxRelTc > maxTc) maxTc = clusterTc + maxRelTc;
-      }
-    }
-    return maxTc > 0 ? (maxTc * (escala || 1000000)) / 1e9 : 0;
-  }
-
-  async function analisarIsoBmff(lerBytes, tamanhoTotal, ascii, utf8, lerU64) {
-    var res = { largura: 0, altura: 0, duracao: 0, temAudio: false, codec: "", titulo: "" };
-    var moovPos = -1;
-    var moovTam = 0;
-    var sidxPos = -1;
-    var sidxTam = 0;
-    var temMoof = false;
-
-    var pos = 0;
-    for (var iter = 0; iter < 80 && pos + 8 <= tamanhoTotal; iter++) {
-      var hdr = await lerBytes(pos, 16);
-      if (hdr.length < 8) break;
-      var dv = new DataView(hdr.buffer, hdr.byteOffset, hdr.byteLength);
-      var tam = dv.getUint32(0);
-      var tipo = ascii(hdr, 4, 4);
-      var hLen = 8;
-      if (tam === 1) {
-        if (hdr.length < 16) break;
-        tam = lerU64(dv, 8);
-        hLen = 16;
-      } else if (tam === 0) {
-        tam = tamanhoTotal - pos;
-      }
-      if (tam < hLen || pos + tam > tamanhoTotal) break;
-      if (tipo === "moov") {
-        moovPos = pos + hLen;
-        moovTam = tam - hLen;
-        break;
-      } else if (tipo === "sidx" && sidxPos < 0) {
-        sidxPos = pos + hLen;
-        sidxTam = tam - hLen;
-      } else if (tipo === "moof") {
-        temMoof = true;
-      }
-      pos += tam;
-    }
-
-    // Caso o ficheiro tenha bytes extras ou mdat truncado, procura a assinatura "moov" no início e no fim
-    if (moovPos < 0) {
-      var janelas = [[0, Math.min(tamanhoTotal, 262144)]];
-      if (tamanhoTotal > 262144) {
-        janelas.push([Math.max(0, tamanhoTotal - 1048576), Math.min(tamanhoTotal, 1048576)]);
-      }
-      for (var j = 0; j < janelas.length && moovPos < 0; j++) {
-        var offJ = janelas[j][0];
-        var bufJ = await lerBytes(offJ, janelas[j][1]);
-        var dvJ = new DataView(bufJ.buffer, bufJ.byteOffset, bufJ.byteLength);
-        for (var k = 4; k + 8 <= bufJ.length; k++) {
-          if (bufJ[k] === 0x6d && bufJ[k + 1] === 0x6f && bufJ[k + 2] === 0x6f && bufJ[k + 3] === 0x76) {
-            var szCand = dvJ.getUint32(k - 4);
-            if (szCand >= 32 && szCand <= 16 * 1024 * 1024 && offJ + k - 4 + szCand <= tamanhoTotal) {
-              moovPos = offJ + k + 4;
-              moovTam = szCand - 8;
-              break;
-            }
-          }
-        }
-      }
-    }
-
-    if (moovPos < 0) return res;
-    var moovBuf = await lerBytes(moovPos, Math.min(moovTam, 16 * 1024 * 1024));
-    var moovDv = new DataView(moovBuf.buffer, moovBuf.byteOffset, moovBuf.byteLength);
-    var mvhdEscala = 0;
-    var mvhdDur = 0;
-    var mehdDur = 0;
-    var videoEscala = 0;
-    var padraoSampleDur = 0;
-
-    function caixasFilhas(buf, dv, ini, fim, fn) {
-      var p = ini;
-      while (p + 8 <= fim && p + 8 <= buf.length) {
-        var sz = dv.getUint32(p);
-        var tp = ascii(buf, p + 4, 4);
-        var hl = 8;
-        if (sz === 1) {
-          if (p + 16 > fim) break;
-          sz = lerU64(dv, p + 8);
-          hl = 16;
-        } else if (sz === 0) {
-          sz = fim - p;
-        }
-        if (sz < hl || p + sz > fim) break;
-        fn(tp, p + hl, p + sz);
-        p += sz;
-      }
-    }
-
-    caixasFilhas(moovBuf, moovDv, 0, moovBuf.length, function (tipo, ini, fim) {
-      if (tipo === "mvhd" && ini + 20 <= fim) {
-        var v = moovBuf[ini];
-        var esc = v === 1 ? (ini + 28 <= fim ? moovDv.getUint32(ini + 20) : 0) : moovDv.getUint32(ini + 12);
-        var dur = v === 1 ? (ini + 28 <= fim ? lerU64(moovDv, ini + 24) : 0) : moovDv.getUint32(ini + 16);
-        if (v === 0 && dur === 0xffffffff) dur = 0;
-        mvhdEscala = esc;
-        if (esc > 0 && dur > 0 && dur < 0xffffffffffff) mvhdDur = dur / esc;
-      } else if (tipo === "mvex") {
-        temMoof = true;
-        caixasFilhas(moovBuf, moovDv, ini, fim, function (tp2, i2, f2) {
-          if (tp2 === "mehd" && i2 + 8 <= f2) {
-            var v2 = moovBuf[i2];
-            var d2 = v2 === 1 ? (i2 + 12 <= f2 ? lerU64(moovDv, i2 + 4) : 0) : moovDv.getUint32(i2 + 4);
-            if (v2 === 0 && d2 === 0xffffffff) d2 = 0;
-            mehdDur = d2;
-          } else if (tp2 === "trex" && i2 + 20 <= f2) {
-            var defDur = moovDv.getUint32(i2 + 12);
-            if (defDur > 0 && !padraoSampleDur) padraoSampleDur = defDur;
-          }
-        });
-      } else if (tipo === "udta") {
-        for (var u = ini; u + 24 <= fim; u++) {
-          if (moovBuf[u + 4] === 0xa9 && moovBuf[u + 5] === 0x6e && moovBuf[u + 6] === 0x61 && moovBuf[u + 7] === 0x6d) {
-            var namSz = moovDv.getUint32(u);
-            if (namSz >= 24 && u + namSz <= fim && ascii(moovBuf, u + 12, 4) === "data") {
-              var dSz = moovDv.getUint32(u + 8);
-              if (dSz > 16 && u + 8 + dSz <= u + namSz) {
-                res.titulo = utf8(moovBuf, u + 24, dSz - 16);
-                break;
-              }
-            }
-          }
-        }
-      } else if (tipo === "trak") {
-        var trk = { hdlr: "", larg: 0, alt: 0, stsdLarg: 0, stsdAlt: 0, rot: false, escala: 0, dur: 0, sttsDur: 0, codec: "" };
-        caixasFilhas(moovBuf, moovDv, ini, fim, function (tpT, iT, fT) {
-          if (tpT === "tkhd") {
-            var vt = moovBuf[iT];
-            var base = iT + (vt === 1 ? 36 : 24);
-            if (base + 60 <= fT) {
-              var matA = moovDv.getInt32(base + 16);
-              var matB = moovDv.getInt32(base + 20);
-              var matC = moovDv.getInt32(base + 28);
-              var matD = moovDv.getInt32(base + 32);
-              if (matA === 0 && matD === 0 && (matB !== 0 || matC !== 0)) trk.rot = true;
-              trk.larg = Math.round(moovDv.getUint32(base + 52) / 65536);
-              trk.alt = Math.round(moovDv.getUint32(base + 56) / 65536);
-            }
-          } else if (tpT === "mdia") {
-            caixasFilhas(moovBuf, moovDv, iT, fT, function (tpM, iM, fM) {
-              if (tpM === "mdhd" && iM + 20 <= fM) {
-                var vm = moovBuf[iM];
-                trk.escala = vm === 1 ? (iM + 28 <= fM ? moovDv.getUint32(iM + 20) : 0) : moovDv.getUint32(iM + 12);
-                var dm = vm === 1 ? (iM + 28 <= fM ? lerU64(moovDv, iM + 24) : 0) : moovDv.getUint32(iM + 16);
-                if (vm === 0 && dm === 0xffffffff) dm = 0;
-                if (trk.escala > 0 && dm > 0 && dm < 0xffffffffffff) trk.dur = dm / trk.escala;
-              } else if (tpM === "hdlr" && iM + 12 <= fM) {
-                trk.hdlr = ascii(moovBuf, iM + 8, 4);
-              } else if (tpM === "minf") {
-                caixasFilhas(moovBuf, moovDv, iM, fM, function (tpI, iI, fI) {
-                  if (tpI === "stbl") {
-                    caixasFilhas(moovBuf, moovDv, iI, fI, function (tpS, iS, fS) {
-                      if (tpS === "stsd" && iS + 16 <= fS) {
-                        var fourcc = ascii(moovBuf, iS + 12, 4).trim().toLowerCase();
-                        trk.codec = fourcc;
-                        if (iS + 44 <= fS) {
-                          trk.stsdLarg = moovDv.getUint16(iS + 40);
-                          trk.stsdAlt = moovDv.getUint16(iS + 42);
-                        }
-                      } else if (tpS === "stts" && iS + 8 <= fS) {
-                        var nEnt = moovDv.getUint32(iS + 4);
-                        var soma = 0;
-                        for (var k = 0; k < nEnt && k < 50000 && iS + 8 + (k + 1) * 8 <= fS; k++) {
-                          soma += moovDv.getUint32(iS + 8 + k * 8) * moovDv.getUint32(iS + 12 + k * 8);
-                        }
-                        trk.sttsDur = soma;
-                      }
-                    });
-                  }
-                });
-              }
-            });
-          }
-        });
-
-        var ehVideo = trk.hdlr === "vide" || (!trk.hdlr && (trk.larg > 0 || trk.stsdLarg > 0));
-        var ehAudio = trk.hdlr === "soun";
-        if (ehVideo) {
-          var w = trk.larg || trk.stsdLarg || 0;
-          var h = trk.alt || trk.stsdAlt || 0;
-          if (trk.rot && w > 0 && h > 0) {
-            var tmp = w;
-            w = h;
-            h = tmp;
-          }
-          if (w > 0 && h > 0 && !res.largura) {
-            res.largura = w;
-            res.altura = h;
-          }
-          if (trk.codec && !res.codec) res.codec = trk.codec;
-          if (trk.escala > 0 && !videoEscala) videoEscala = trk.escala;
-          var dTrk = trk.dur || (trk.escala > 0 && trk.sttsDur > 0 ? trk.sttsDur / trk.escala : 0);
-          if (dTrk > res.duracao) res.duracao = dTrk;
-        } else if (ehAudio) {
-          res.temAudio = true;
-          var dAud = trk.dur || (trk.escala > 0 && trk.sttsDur > 0 ? trk.sttsDur / trk.escala : 0);
-          if (dAud > res.duracao) res.duracao = dAud;
-        }
-      }
-    });
-
-    if (!res.duracao && mvhdDur > 0) res.duracao = mvhdDur;
-    if (!res.duracao && mehdDur > 0 && mvhdEscala > 0) res.duracao = mehdDur / mvhdEscala;
-
-    if (!res.duracao && sidxPos > 0 && sidxTam >= 16) {
-      var sidxBuf = await lerBytes(sidxPos, Math.min(sidxTam, 65536));
-      if (sidxBuf.length >= 16) {
-        var sdv = new DataView(sidxBuf.buffer, sidxBuf.byteOffset, sidxBuf.byteLength);
-        var sv = sidxBuf[0];
-        var sEsc = sdv.getUint32(8);
-        var sOff = (sv === 0 ? 16 : 24) + 2;
-        if (sEsc > 0 && sOff + 2 <= sidxBuf.length) {
-          var refCnt = sdv.getUint16(sOff);
-          var somaSidx = 0;
-          for (var r = 0; r < refCnt && sOff + 2 + (r + 1) * 12 <= sidxBuf.length; r++) {
-            somaSidx += sdv.getUint32(sOff + 2 + r * 12 + 4);
-          }
-          if (somaSidx > 0) res.duracao = somaSidx / sEsc;
-        }
-      }
-    }
-
-    if (!res.duracao && temMoof && videoEscala > 0) {
-      var cauda = await lerBytes(Math.max(0, tamanhoTotal - 524288), 524288);
-      var cdv = new DataView(cauda.buffer, cauda.byteOffset, cauda.byteLength);
-      var maxFim = 0;
-      for (var c = 0; c + 16 <= cauda.length; c++) {
-        if (cauda[c + 4] === 0x74 && cauda[c + 5] === 0x72 && cauda[c + 6] === 0x61 && cauda[c + 7] === 0x66) {
-          var trafSz = cdv.getUint32(c);
-          if (trafSz >= 16 && c + trafSz <= cauda.length) {
-            var decTime = 0;
-            var defDur = padraoSampleDur;
-            var trunDur = 0;
-            caixasFilhas(cauda, cdv, c + 8, c + trafSz, function (tpF, iF, fF) {
-              if (tpF === "tfhd" && iF + 8 <= fF) {
-                var tfFlags = cdv.getUint32(iF) & 0xffffff;
-                var offH = iF + 8 + ((tfFlags & 1) ? 8 : 0) + ((tfFlags & 2) ? 4 : 0);
-                if ((tfFlags & 8) && offH + 4 <= fF) defDur = cdv.getUint32(offH);
-              } else if (tpF === "tfdt" && iF + 8 <= fF) {
-                var tv = cauda[iF];
-                decTime = tv === 1 ? (iF + 12 <= fF ? lerU64(cdv, iF + 4) : 0) : cdv.getUint32(iF + 4);
-              } else if (tpF === "trun" && iF + 8 <= fF) {
-                var trFlags = cdv.getUint32(iF) & 0xffffff;
-                var sCnt = cdv.getUint32(iF + 4);
-                var offR = iF + 8 + ((trFlags & 1) ? 4 : 0) + ((trFlags & 4) ? 4 : 0);
-                var passo = ((trFlags & 0x100) ? 4 : 0) + ((trFlags & 0x200) ? 4 : 0) + ((trFlags & 0x400) ? 4 : 0) + ((trFlags & 0x800) ? 4 : 0);
-                if ((trFlags & 0x100) && passo > 0) {
-                  for (var s = 0; s < sCnt && s < 10000 && offR + s * passo + 4 <= fF; s++) {
-                    trunDur += cdv.getUint32(offR + s * passo);
-                  }
-                } else if (defDur > 0) {
-                  trunDur += sCnt * defDur;
-                }
-              }
-            });
-            if (decTime + trunDur > maxFim) maxFim = decTime + trunDur;
-          }
-        }
-      }
-      if (maxFim > 0) res.duracao = maxFim / videoEscala;
-    }
-
-    return res;
-  }
-
-  /** Fallback de duração via Web Audio API (quando o container não traz duração no cabeçalho). */
-  async function lerDuracaoPorAudio(ficheiro) {
-    if (!ficheiro || !(ficheiro.size > 64) || ficheiro.size > 60 * 1024 * 1024) return 0;
-    var Ctx = window.AudioContext || window.webkitAudioContext;
-    if (!Ctx) return 0;
-    var ctx = null;
-    try {
-      ctx = new Ctx();
-      var ab = await comLimite(ficheiro.arrayBuffer(), 6000);
-      var buf = await new Promise(function (res, rej) {
-        var t = setTimeout(function () {
-          rej(new Error("timeout"));
-        }, 6000);
-        if (t && typeof t.unref === "function") t.unref();
-        ctx.decodeAudioData(
-          ab,
-          function (b) {
-            clearTimeout(t);
-            res(b);
-          },
-          function (e) {
-            clearTimeout(t);
-            rej(e);
-          }
-        );
-      });
-      return buf && Number.isFinite(buf.duration) && buf.duration > 0 ? buf.duration : 0;
-    } catch (e) {
-      return 0;
-    } finally {
-      try {
-        if (ctx && typeof ctx.close === "function") await ctx.close();
-      } catch (e2) {}
-    }
-  }
-
-  /** Dimensões e duração do vídeo, lidas por <video> + cabeçalho binário em paralelo. */
+  /** Dimensões e duração do vídeo, lidas por um <video> escondido. */
   function lerVideoNoNavegador(ficheiro) {
     return new Promise(function (resolve, reject) {
       var url = URL.createObjectURL(ficheiro);
       var video = document.createElement("video");
       var terminado = false;
-      var buscouInfinito = false;
-      var timerInfinito = null;
-      var timerRapido = null;
-      var cabInfo = { largura: 0, altura: 0, duracao: 0 };
-
-      var promCab = lerCabecalhoVideo(ficheiro)
-        .then(function (c) {
-          if (c) cabInfo = c;
-          return c || cabInfo;
-        })
-        .catch(function () {
-          return cabInfo;
-        });
-
-      function duracaoValida(d) {
-        return Number.isFinite(d) && d > 0 && d < 1e7 ? d : 0;
-      }
-
       function fim(erro, valor) {
         if (terminado) return;
         terminado = true;
         clearTimeout(limite);
-        if (timerInfinito) clearTimeout(timerInfinito);
-        if (timerRapido) clearTimeout(timerRapido);
         try {
-          video.onloadedmetadata = null;
-          video.onloadeddata = null;
-          video.oncanplay = null;
-          video.ondurationchange = null;
-          video.ontimeupdate = null;
-          video.onseeked = null;
-          video.onerror = null;
-          if (video.pause) video.pause();
           video.removeAttribute("src");
-          if (video.load) video.load();
-          if (video.parentNode) video.parentNode.removeChild(video);
+          video.load();
         } catch (e) {}
         URL.revokeObjectURL(url);
         if (erro) reject(erro);
         else resolve(valor);
       }
-
-      function concluirComVideo() {
-        var larg = video.videoWidth || cabInfo.largura || 0;
-        var alt = video.videoHeight || cabInfo.altura || 0;
-        var dur = duracaoValida(video.duration) || duracaoValida(cabInfo.duracao);
-        fim(null, { largura: larg, altura: alt, duracao: dur });
-      }
-
-      function aoCarregar() {
-        if (terminado) return;
-        var d = duracaoValida(video.duration);
-        if (d > 0) {
-          concluirComVideo();
-          return;
-        }
-        // Se o cabeçalho binário já tiver a duração, não precisa forçar seek no <video>
-        promCab.then(function (c) {
-          if (terminado) return;
-          if (duracaoValida(video.duration) > 0 || duracaoValida(c && c.duracao) > 0) {
-            concluirComVideo();
-            return;
-          }
-          // Workaround clássico HTML5 para WebM/MKV/streams com video.duration === Infinity/0
-          if (!buscouInfinito) {
-            buscouInfinito = true;
-            timerInfinito = setTimeout(function () {
-              try {
-                video.currentTime = 0;
-              } catch (e) {}
-              concluirComVideo();
-            }, 1500);
-            if (timerInfinito && typeof timerInfinito.unref === "function") timerInfinito.unref();
-            try {
-              video.currentTime = 1e101;
-            } catch (e) {
-              concluirComVideo();
-            }
-          }
-        });
-      }
-
-      function aoMudarTempoOuDuracao() {
-        if (terminado) return;
-        if (duracaoValida(video.duration) > 0) {
-          if (buscouInfinito) {
-            try {
-              video.currentTime = 0;
-            } catch (e) {}
-          }
-          concluirComVideo();
-        }
-      }
-
-      // Se o cabeçalho binário já leu dimensões e duração, não deixa o <video> prender mais de 2,5 s
-      promCab.then(function (c) {
-        if (terminado || !c || !c.largura || !c.altura || !c.duracao) return;
-        timerRapido = setTimeout(function () {
-          if (!terminado) {
-            fim(null, { largura: c.largura, altura: c.altura, duracao: c.duracao });
-          }
-        }, 2500);
-        if (timerRapido && typeof timerRapido.unref === "function") timerRapido.unref();
-      });
-
       var limite = setTimeout(function () {
-        promCab.then(function (c) {
-          if (c && (c.largura > 0 || c.duracao > 0)) {
-            fim(null, { largura: c.largura || 0, altura: c.altura || 0, duracao: c.duracao || 0 });
-          } else {
-            fim(new Error("O navegador demorou demasiado a abrir o vídeo."));
-          }
-        });
-      }, 15000);
-      if (limite && typeof limite.unref === "function") limite.unref();
-
-      video.preload = "auto";
+        fim(new Error("O navegador demorou demasiado a abrir o vídeo."));
+      }, 20000);
+      video.preload = "metadata";
       video.muted = true;
-      video.playsInline = true;
-      video.style.cssText = "position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0;pointer-events:none";
-      video.onloadedmetadata = aoCarregar;
-      video.onloadeddata = aoCarregar;
-      video.oncanplay = aoCarregar;
-      video.ondurationchange = aoMudarTempoOuDuracao;
-      video.ontimeupdate = aoMudarTempoOuDuracao;
-      video.onseeked = aoMudarTempoOuDuracao;
-      video.onerror = function () {
-        promCab.then(function (c) {
-          if (c && (c.largura > 0 || c.duracao > 0)) {
-            fim(null, { largura: c.largura || 0, altura: c.altura || 0, duracao: c.duracao || 0 });
-          } else {
-            fim(new Error("O navegador não consegue abrir este vídeo."));
-          }
+      video.onloadedmetadata = function () {
+        fim(null, {
+          largura: video.videoWidth || 0,
+          altura: video.videoHeight || 0,
+          duracao: Number.isFinite(video.duration) ? video.duration : 0,
         });
       };
-      try {
-        if (document.body) document.body.appendChild(video);
-      } catch (e) {}
+      video.onerror = function () {
+        fim(new Error("O navegador não consegue abrir este vídeo."));
+      };
       video.src = url;
-      try {
-        if (video.load) video.load();
-      } catch (e) {}
     });
   }
 
@@ -844,17 +146,11 @@
    * Devolve um File pronto a entrar no lote.
    */
   async function baixarLinkDoServidor(link, aoProgresso) {
-    var ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
     var r;
     try {
-      r = await comLimite(
-        fetch("/api/public/importar?url=" + encodeURIComponent(link), ctl ? { signal: ctl.signal } : undefined),
-        60000,
-        "O servidor demorou demasiado a responder ao link."
-      );
+      r = await fetch("/api/public/importar?url=" + encodeURIComponent(link));
     } catch (e) {
-      try { if (ctl) ctl.abort(); } catch (err) {}
-      throw new Error(e && /demasiado/.test(e.message) ? e.message : "Sem ligação ao servidor do CineClip.");
+      throw new Error("Sem ligação ao servidor do CineClip.");
     }
     if (!r.ok) {
       var msg = "";
@@ -867,22 +163,17 @@
     var total = Number(r.headers.get("content-length")) || 0;
     var partes = [];
     var recebidos = 0;
-    try {
-      if (r.body && r.body.getReader) {
-        var leitor = r.body.getReader();
-        for (;;) {
-          var passo = await comLimite(leitor.read(), 30000, "A transferência do vídeo parou de responder.");
-          if (passo.done) break;
-          partes.push(passo.value);
-          recebidos += passo.value.length;
-          if (aoProgresso) aoProgresso(recebidos, total);
-        }
-      } else {
-        partes.push(new Uint8Array(await comLimite(r.arrayBuffer(), 60000, "A transferência do vídeo demorou demasiado.")));
+    if (r.body && r.body.getReader) {
+      var leitor = r.body.getReader();
+      for (;;) {
+        var passo = await leitor.read();
+        if (passo.done) break;
+        partes.push(passo.value);
+        recebidos += passo.value.length;
+        if (aoProgresso) aoProgresso(recebidos, total);
       }
-    } catch (e) {
-      try { if (ctl) ctl.abort(); } catch (err) {}
-      throw e;
+    } else {
+      partes.push(new Uint8Array(await r.arrayBuffer()));
     }
     if (!recebidos && !partes.reduce(function (s, p) { return s + (p.length || p.byteLength || 0); }, 0)) {
       throw new Error("O vídeo veio vazio.");
@@ -895,12 +186,7 @@
       }
     };
     var nome = ler("X-Cineclip-Nome") || "video_importado.mp4";
-    var arq = new File(partes, nome, { type: "video/mp4" });
-    var durSrv = Number(ler("X-Cineclip-Duracao")) || 0;
-    var titSrv = ler("X-Cineclip-Titulo") || "";
-    if (durSrv > 0) arq._duracaoServidor = durSrv;
-    if (titSrv) arq._tituloServidor = titSrv;
-    return arq;
+    return new File(partes, nome, { type: "video/mp4" });
   }
 
   /** Links do TikTok/Kwai num texto colado (um por linha, sem repetidos). */
@@ -918,10 +204,8 @@
           return false;
         }
         var ok = /(^|\.)(tiktok\.com|kwai\.com|kw\.ai|kwai\.net|kwai-pro\.com)$/.test(host);
-        var chave = idDoLink(u);
-        if (!ok || vistos[u] || vistos[chave]) return false;
+        if (!ok || vistos[u]) return false;
         vistos[u] = true;
-        vistos[chave] = true;
         return true;
       });
   }
@@ -938,11 +222,6 @@
     var ok = 0;
     for (var i = 0; i < links.length; i++) {
       var link = links[i];
-      var chaveLink = idDoLink(link);
-      if (estado.itens.some(function (it) { return it.origem && idDoLink(it.origem) === chaveLink && it.estado !== "erro"; })) {
-        ok++;
-        continue;
-      }
       estado.links.estado = "A importar " + (i + 1) + "/" + links.length + "…";
       desenhar();
       try {
@@ -1025,22 +304,11 @@
     var entraram = 0;
     ficheiros.forEach(function (f) {
       if (!f) return;
-      var nomeF = f.name || "video.mp4";
-      var bytesF = f.size || 0;
-      var jaExiste = estado.itens.some(function (it) {
-        if (!it || !it.ficheiro) return false;
-        if (it.ficheiro === f) return true;
-        if (!it.origem && bytesF > 64 && it.nome === nomeF && it.bytes === bytesF && f.lastModified && it.ficheiro.lastModified === f.lastModified && (it.estado === "pendente" || it.estado === "a_processar")) {
-          return true;
-        }
-        return false;
-      });
-      if (jaExiste) return;
       var item = {
         id: proximoId++,
         ficheiro: f,
-        nome: nomeF,
-        bytes: bytesF,
+        nome: f.name || "video.mp4",
+        bytes: f.size || 0,
         estado: "pendente",
         passo: "",
         progresso: 0,
@@ -1098,23 +366,12 @@
     });
   }
 
-  function lerDefinicoesApp() {
-    var app = ambiente.app();
-    var s = (app && app.settings) || {};
-    if (s.nvidiaKey || s.geminiKey || s.tmdbKey) return s;
-    var guardadas = lerJson("cineclip.settings", null);
-    if (guardadas && (guardadas.nvidiaKey || guardadas.geminiKey || guardadas.tmdbKey)) {
-      return Object.assign({}, s, guardadas);
-    }
-    return s;
-  }
-
   /** O que falta configurar para o modo automático (null quando está tudo). */
   function faltaConfigurar() {
     var core = ambiente.core();
     var app = ambiente.app();
     if (!core || !app) return "O app ainda está a carregar. Tenta de novo dentro de alguns segundos.";
-    var s = lerDefinicoesApp();
+    var s = app.settings || {};
     var temIA = !!String(s.nvidiaKey || "").trim() || !!String(s.geminiKey || "").trim();
     if (!temIA) return "Adiciona a tua chave NVIDIA ou Google Gemini nas configurações — a IA identifica o filme e cria o gancho e a legenda.";
     if (!String(s.tmdbKey || "").trim()) return "Adiciona a tua chave TMDB nas configurações — é ela que confirma o filme e traz o pôster e a sinopse.";
@@ -1136,233 +393,120 @@
    */
   async function processarItem(item, conta) {
     var core = ambiente.core();
-    var s = lerDefinicoesApp();
+    var app = ambiente.app();
+    var s = app.settings || {};
     var ficheiro = item.ficheiro;
 
-    /* 1. Ler o vídeo (em paralelo: <video>, MediaInfo e cabeçalho binário) --- */
+    /* 1. Ler o vídeo ------------------------------------------------------ */
     definirPasso(item, "A ler o vídeo…", 0.02);
-    var info = { largura: 0, altura: 0, duracao: 0 };
-    var erroVideo = null;
-
-    var cabProm = lerCabecalhoVideo(ficheiro).catch(function () {
-      return { largura: 0, altura: 0, duracao: 0, temAudio: null, codec: "", titulo: "" };
-    });
-    var metaProm = core && typeof core.lerMetadados === "function"
-      ? comLimite(core.lerMetadados(ficheiro), 18000).catch(function () { return null; })
-      : Promise.resolve(null);
-    var videoProm = comLimite(ambiente.lerVideo(ficheiro), 20000, "O navegador demorou demasiado a abrir o vídeo.").then(
-      function (v) { return { ok: true, valor: v }; },
-      function (e) { return { ok: false, erro: e }; }
-    );
-
-    var lidos = await Promise.all([videoProm, metaProm, cabProm]);
-    var resVid = lidos[0];
-    var meta = lidos[1];
-    var cab = lidos[2] || {};
-
-    if (resVid.ok && resVid.valor) {
-      info = {
-        largura: Number(resVid.valor.largura) || 0,
-        altura: Number(resVid.valor.altura) || 0,
-        duracao: Number.isFinite(Number(resVid.valor.duracao)) && Number(resVid.valor.duracao) > 0 ? Number(resVid.valor.duracao) : 0,
-      };
-    } else if (resVid.erro) {
-      erroVideo = resVid.erro;
-    }
-
-    var duracao = (meta && Number.isFinite(Number(meta.duration)) && Number(meta.duration) > 0) ? Number(meta.duration) : 0;
-    if (!duracao && info.duracao > 0) duracao = info.duracao;
-    if (!duracao && cab.duracao > 0) duracao = Number(cab.duracao);
-    if (!duracao && ficheiro && ficheiro._duracaoServidor > 0) duracao = Number(ficheiro._duracaoServidor);
-
-    if ((!info.largura || !info.altura) && meta && meta.width > 0 && meta.height > 0) {
-      info = { largura: Number(meta.width), altura: Number(meta.height), duracao: info.duracao || duracao };
-    }
-    if ((!info.largura || !info.altura) && cab.largura > 0 && cab.altura > 0) {
-      info = { largura: Number(cab.largura), altura: Number(cab.altura), duracao: info.duracao || duracao };
-    }
-
-    var campo = ((meta && meta.fields) || []).find(function (f) {
-      return f && f.label === "Título";
-    });
-    var tituloMetadados = (campo && campo.value) || cab.titulo || (ficheiro && ficheiro._tituloServidor) || "";
-
-    // Se ainda faltar dimensão ou duração, sonda com o FFmpeg (quando disponível)
-    if ((!info.largura || !info.altura || !duracao) && core && typeof core.sondarVideo === "function") {
-      try {
-        var sonda = await comLimite(core.sondarVideo(ficheiro), 25000);
-        if (sonda) {
-          if ((!info.largura || !info.altura) && sonda.width > 0 && sonda.height > 0) {
-            info = { largura: Number(sonda.width), altura: Number(sonda.height), duracao: info.duracao || duracao || Number(sonda.duration) || 0 };
-          }
-          if (!duracao && Number.isFinite(Number(sonda.duration)) && Number(sonda.duration) > 0) {
-            duracao = Number(sonda.duration);
-          }
-        }
-      } catch (e) {}
-    }
-
-    // Fallback de duração via Web Audio API
-    if (!duracao) {
-      var durAudio = await lerDuracaoPorAudio(ficheiro);
-      if (durAudio > 0) duracao = durAudio;
-    }
-
-    // Se o <video> deu timeout (ex.: aba em segundo plano) num ficheiro válido, prossegue com dimensões padrão
-    if ((!info.largura || !info.altura) && erroVideo && /demorou demasiado/i.test(erroVideo.message || "") && (duracao > 0 || (ficheiro && ficheiro.size > 1024))) {
-      info = { largura: 1080, altura: 1920, duracao: duracao || MAX_SEGUNDOS };
-      erroVideo = null;
-    }
-
+    var info = await ambiente.lerVideo(ficheiro);
     if (!info.largura || !info.altura) {
-      if (erroVideo) throw erroVideo;
       throw erroComTipo(
         "O navegador abre o som mas não a imagem deste vídeo (codec H.265/HEVC, comum em vídeos baixados do TikTok). Converte-o para H.264 e volta a enviar.",
         "codec"
       );
     }
+    var duracao = 0;
+    var tituloMetadados = "";
+    try {
+      var meta = await core.lerMetadados(ficheiro);
+      duracao = Number(meta && meta.duration) || 0;
+      var campo = ((meta && meta.fields) || []).find(function (f) {
+        return f && f.label === "Título";
+      });
+      tituloMetadados = campo ? campo.value : "";
+    } catch (e) {}
     if (!duracao) duracao = Number(info.duracao) || 0;
-    if (!duracao && info.largura > 0 && info.altura > 0 && ficheiro && ficheiro.size > 0) {
-      // Vídeo válido cujo container não declarou a duração final (ex.: stream WebM/MP4):
-      // assume o limite máximo de 90 s (o FFmpeg encerra no fim real com -shortest).
-      duracao = MAX_SEGUNDOS;
-    }
     if (!duracao) throw erroComTipo("Não consegui ler a duração do vídeo.", "leitura");
     var fim = Math.min(MAX_SEGUNDOS, duracao);
     if (fim < 3) throw erroComTipo("O vídeo tem menos de 3 segundos (o Instagram não aceita).", "leitura");
 
     var corte = { top: 0, bottom: 0, vw: info.largura, vh: info.altura };
-    var videoAbriuNoNavegador = !!(resVid.ok && resVid.valor && resVid.valor.largura > 0);
-    if (videoAbriuNoNavegador) {
-      try {
-        var barras = await comLimite(core.detetarBarras(ficheiro, 0, fim), 25000);
-        if (barras && barras.vh) {
-          corte = {
-            top: barras.y,
-            bottom: barras.vh - barras.y - barras.h,
-            vw: info.largura,
-            vh: info.altura,
-          };
-        }
-      } catch (e) {}
-    }
+    try {
+      var barras = await core.detetarBarras(ficheiro, 0, fim);
+      if (barras && barras.vh) {
+        corte = {
+          top: barras.y,
+          bottom: barras.vh - barras.y - barras.h,
+          vw: info.largura,
+          vh: info.altura,
+        };
+      }
+    } catch (e) {}
 
-    /* 2. Identificar o filme (quadros + áudio em paralelo) --------------- */
+    /* 2. Identificar o filme --------------------------------------------- */
     definirPasso(item, "A identificar o filme…", 0.1);
     var temGemini = !!String(s.geminiKey || "").trim();
-    var promQuadros = comLimite(core.quadros(ficheiro, 0, fim, corte), 90000, "A extração de quadros do vídeo demorou demasiado.");
-    var promAudio = temGemini && typeof core.audio === "function"
-      ? comLimite(core.audio(ficheiro, 0, fim), 12000).catch(function () { return null; })
-      : Promise.resolve(null);
-    var parMidia = await Promise.all([promQuadros, promAudio]);
-    var quadros = parMidia[0];
-    var audio = parMidia[1];
-    /* Nada nesta etapa pode travar o vídeo: se a IA falhar, não achar o filme ou
-       tiver pouca certeza, segue com o melhor palpite (ou com o nome do ficheiro). */
-    var ia = null;
-    try {
-      ia = await comLimite(
-        core.identificar(s.nvidiaKey, quadros, s.lang, {
-          fileName: ficheiro.name,
-          metaTitle: tituloMetadados,
-          userHint: "",
-          geminiKey: s.geminiKey,
-          audioClip: audio,
-        }),
-        120000,
-        "A identificação do filme pela IA demorou demasiado."
-      );
-    } catch (e) {
-      if (e && (e.status === 401 || e.status === 403)) throw e; /* chave inválida: aí sim, avisa */
-      ia = null;
-    }
-    if (!ia || typeof ia !== "object") ia = {};
-    var temPista = !!(ia.titulo || ia.titulo_original || ia._pistaDireta || (ia.atores && ia.atores.length) || (ia.alternativas && ia.alternativas.length));
-    var filme = null;
-    if (temPista) {
+    var quadros = await core.quadros(ficheiro, 0, fim, corte);
+    var audio = null;
+    if (temGemini) {
       try {
-        filme = await comLimite(core.procurarTmdb(s.tmdbKey, ia), 30000, "A pesquisa no TMDB demorou demasiado.");
+        audio = await core.audio(ficheiro, 0, fim);
       } catch (e) {
-        filme = null;
+        audio = null;
       }
     }
-    if (!filme) filme = filmeProvisorio(ia, ficheiro, tituloMetadados);
-    var confianca = temPista ? Number(ia.confianca) || 0 : 0;
+    var ia = await core.identificar(s.nvidiaKey, quadros, s.lang, {
+      fileName: ficheiro.name,
+      metaTitle: tituloMetadados,
+      userHint: "",
+      geminiKey: s.geminiKey,
+      audioClip: audio,
+    });
+    if (!ia || (!ia.titulo && !(ia.atores && ia.atores.length))) {
+      throw erroComTipo("A IA não conseguiu identificar o filme deste clipe.", "identificacao");
+    }
+    var filme = await core.procurarTmdb(s.tmdbKey, ia);
+    if (!filme) {
+      throw erroComTipo(
+        'Não encontrei "' + (ia.titulo || ia.titulo_original || "o filme") + '" no TMDB.',
+        "identificacao"
+      );
+    }
+    var confianca = Number(ia.confianca) || 0;
     item.resultado = { titulo: filme.title, ano: filme.year, confianca: confianca };
+    if (confianca < CONFIANCA_MINIMA && !estado.opcoes.agendarComPoucaCerteza) {
+      throw erroComTipo(
+        'A IA acha que é "' + filme.title + (filme.year ? " (" + filme.year + ")" : "") + '", mas só com ' +
+          confianca + "% de certeza. Confere no Estúdio ou liga “Agendar mesmo com pouca certeza”.",
+        "revisar"
+      );
+    }
 
     /* 3. Gancho ------------------------------------------------------------ */
     definirPasso(item, "A criar o gancho…", 0.2);
     var cena = ia.cena || "";
-    var primeiroGancho = function (lista) {
-      return (lista || []).find(function (x) {
-        return x && String(x).trim();
-      });
-    };
-    /* O gancho é escrito com o filme JÁ confirmado no TMDB (título, ano, sinopse,
-       géneros). Os ganchos que vieram da identificação foram escritos quando a obra
-       ainda era só um palpite — ficam como reserva. */
-    var gancho;
-    try {
-      var g = await comLimite(
-        core.gerarGancho(
-          s.nvidiaKey,
-          quadros,
-          s.lang,
-          filme.provisorio
-            ? filme.title /* palpite fraco: o gancho trata como pista do ficheiro, não como obra confirmada */
-            : { titulo: filme.title, ano: filme.year, tipo: filme.kind, sinopse: filme.overview, generos: filme.genres },
-          s.geminiKey,
-          audio
-        ),
-        60000
-      );
-      gancho = primeiroGancho(g && g.ganchos);
-      if (!cena && g && g.cena) cena = g.cena;
-    } catch (e) {}
-    if (!gancho) gancho = primeiroGancho(ia.ganchos);
+    var gancho = (ia.ganchos || []).find(function (g) {
+      return g && String(g).trim();
+    });
+    if (!gancho) {
+      try {
+        var g = await core.gerarGancho(s.nvidiaKey, quadros, s.lang, filme.title, s.geminiKey, audio);
+        gancho = ((g && g.ganchos) || []).find(function (x) {
+          return x && String(x).trim();
+        });
+        if (!cena && g && g.cena) cena = g.cena;
+      } catch (e) {}
+    }
     gancho = String(gancho || s.overlayText || core.ganchoPadrao || "").trim();
     item.resultado.gancho = gancho;
 
     /* 4. Processar o vídeo -------------------------------------------------- */
     definirPasso(item, "A processar o vídeo… 0%", 0.25);
-    var blob;
-    try {
-      blob = await comLimite(
-        core.processar(ficheiro, 0, fim, s.resolution, gancho, function (fracao) {
-          var pct = Math.max(0, Math.min(1, Number(fracao) || 0));
-          definirPasso(item, "A processar o vídeo… " + Math.round(pct * 100) + "%", 0.25 + pct * 0.6);
-        }, corte),
-        240000,
-        "O processamento do vídeo (FFmpeg) demorou demasiado."
-      );
-    } catch (e) {
-      if (!estado.pararPedido && e && /demorou demasiado/.test(e.message) && core && typeof core.cancelarProcessamento === "function") {
-        try { core.cancelarProcessamento(); } catch (err) {}
-      }
-      throw e;
-    }
+    var blob = await core.processar(ficheiro, 0, fim, s.resolution, gancho, function (fracao) {
+      var pct = Math.max(0, Math.min(1, Number(fracao) || 0));
+      definirPasso(item, "A processar o vídeo… " + Math.round(pct * 100) + "%", 0.25 + pct * 0.6);
+    }, corte);
     if (!blob || !blob.size) throw erroComTipo("O FFmpeg não devolveu o vídeo processado.", "processamento");
 
     /* 5. Legenda ------------------------------------------------------------- */
     definirPasso(item, "A escrever a legenda…", 0.88);
-    var legenda = "";
-    try {
-      legenda = await comLimite(
-        core.gerarLegenda(s.nvidiaKey, filme, s.lang, {
-          cena: cena,
-          hookText: gancho,
-          geminiKey: s.geminiKey,
-        }),
-        90000,
-        "A criação da legenda pela IA demorou demasiado."
-      );
-    } catch (e) {
-      legenda = "";
-    }
-    if (!legenda || !String(legenda).trim()) {
-      /* sem legenda da IA, publica com o gancho e o título em vez de travar */
-      legenda = [gancho, filme.title ? "🎬 " + filme.title + (filme.year ? " (" + filme.year + ")" : "") : ""].filter(Boolean).join("\n\n");
-    }
+    var legenda = await core.gerarLegenda(s.nvidiaKey, filme, s.lang, {
+      cena: cena,
+      hookText: gancho,
+      geminiKey: s.geminiKey,
+    });
+    if (!legenda || !String(legenda).trim()) throw erroComTipo("A IA devolveu uma legenda vazia.", "legenda");
     try {
       core.guardarHistorico({ title: filme.title, year: filme.year, caption: legenda, date: ambiente.agora() });
     } catch (e) {}
@@ -1370,31 +514,18 @@
     /* 6. Agendar ------------------------------------------------------------- */
     definirPasso(item, "A agendar…", 0.95);
     var fila = await core.lerFila();
-    var chaveOrig = item.caixaId || (item.origem ? idDoLink(item.origem) : "");
-    var tentItem = item.caixaTentativa || 0;
-    var jaAgendado = chaveOrig
-      ? (fila || []).find(function (r) {
-          if (!r || r.status === "deleted" || (r.accountId || "acc_default") !== conta.id) return false;
-          var chR = r.caixaId || (r.linkOrigem ? idDoLink(r.linkOrigem) : "");
-          return chR === chaveOrig && (r.caixaTentativa || 0) === tentItem;
-        })
-      : null;
-    var horario = jaAgendado && jaAgendado.scheduledAt ? jaAgendado.scheduledAt : core.proximoHorario(fila, conta.dailySlots || [], conta.id);
+    var horario = core.proximoHorario(fila, conta.dailySlots || [], conta.id);
     var base = semExtensao(ficheiro.name);
     var agora = ambiente.agora();
     var reel = {
-      id: jaAgendado ? jaAgendado.id : "reel_" + agora + "_" + Math.random().toString(36).slice(2, 6),
+      id: "reel_" + agora + "_" + Math.random().toString(36).slice(2, 6),
       accountId: conta.id,
-      createdAt: jaAgendado ? jaAgendado.createdAt || agora : agora,
-      updatedAt: agora,
+      createdAt: agora,
       scheduledAt: horario,
-      status: jaAgendado && jaAgendado.status === "published" ? "published" : "scheduled",
+      status: "scheduled",
       title: filme.title || base,
       originalTitle: filme.original,
       year: filme.year,
-      tmdbId: filme.tmdbId,
-      imdbId: filme.imdbId,
-      chave: filme.chave,
       poster: filme.poster,
       hookText: gancho,
       caption: core.limparLegenda(String(legenda)),
@@ -1403,41 +534,10 @@
       videoSize: blob.size || 0,
       platforms: ["instagram"],
     };
-    if (item.origem) reel.linkOrigem = item.origem;
-    if (item.caixaId) {
-      reel.caixaId = item.caixaId;
-      reel.caixaTentativa = tentItem;
-    }
-    if (!jaAgendado) await core.guardarNaFila(reel);
+    await core.guardarNaFila(reel);
     item.resultado.horario = horario;
     item.resultado.reelId = reel.id;
     return reel;
-  }
-
-  /** Filme "de reserva" quando a IA/TMDB não deram nada: usa o palpite da IA ou o nome do ficheiro. */
-  function filmeProvisorio(ia, ficheiro, tituloMetadados) {
-    var alt = ia && ia.alternativas && ia.alternativas[0];
-    var nome = semExtensao((ficheiro && ficheiro.name) || "")
-      .replace(/_cineclip$/i, "")
-      .replace(/[_.]+/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-    var titulo =
-      (ia && (ia.titulo || ia.titulo_original)) ||
-      (alt && (alt.titulo || alt.titulo_original)) ||
-      String(tituloMetadados || "").trim() ||
-      nome ||
-      "Cena de filme";
-    return {
-      id: undefined,
-      kind: ia && ia.tipo === "tv" ? "tv" : "movie",
-      title: titulo,
-      original: (ia && ia.titulo_original) || titulo,
-      year: String((ia && ia.ano) || "").slice(0, 4),
-      overview: (ia && ia.cena) || "",
-      genres: [],
-      provisorio: true,
-    };
   }
 
   /* --------------------------------------------------------- o ciclo */
@@ -1620,7 +720,6 @@
         existente.contaId = contaId;
         existente.aparelho = meuAparelho();
         existente.atualizadoEm = agora;
-        delete caixaProcessados[id + ":" + (existente.tentativa || 0)];
         novos.push(existente);
         return;
       }
@@ -1628,7 +727,6 @@
       var entrada = { id: id, url: url, destino: destino, contaId: contaId, aparelho: meuAparelho(), estado: "pendente", criadoEm: agora, atualizadoEm: agora };
       // Partilhar outra vez um link já tratado é uma nova tentativa: ganha à antiga ao juntar com a nuvem.
       if (existente) entrada.tentativa = (existente.tentativa || 0) + 1;
-      delete caixaProcessados[id + ":" + (entrada.tentativa || 0)];
       lista.push(entrada);
       novos.push(entrada);
     });
@@ -1646,7 +744,6 @@
       e.estado = "pendente";
       e.erro = "";
       e.tentativa = (e.tentativa || 0) + 1;
-      delete caixaProcessados[id + ":" + (e.tentativa || 0)];
       e.forcar = !!(extra && extra.forcar);
       e.aparelho = meuAparelho();
       if (app && app.account && app.account.id) e.contaId = app.account.id;
@@ -1700,14 +797,9 @@
       return e.estado === "pendente" || (e.atualizadoEm || e.criadoEm || 0) >= limite;
     });
     gravarCaixa(lista);
-    setTimeout(function () {
-      verificarCaixa();
-      acordarNuvem(false);
-    }, 0);
+    setTimeout(verificarCaixa, 0);
     return lista;
   }
-
-  var caixaProcessados = {};
 
   /** Links que ESTE aparelho deve processar agora. */
   function entradasParaMim() {
@@ -1718,8 +810,7 @@
       if (it.caixaId) noLote[it.caixaId] = true;
     });
     return lerCaixa().filter(function (e) {
-      var chaveTent = e.id + ":" + (e.tentativa || 0);
-      if (e.estado !== "pendente" || noLote[e.id] || caixaProcessados[chaveTent]) return false;
+      if (e.estado !== "pendente" || noLote[e.id]) return false;
       if (e.destino === "aqui") return e.aparelho === eu;
       return e.destino === "pc" && processoPC;
     });
@@ -1740,9 +831,6 @@
     try {
       for (var i = 0; i < entradas.length; i++) {
         var e = entradas[i];
-        var chaveTent = e.id + ":" + (e.tentativa || 0);
-        if (caixaProcessados[chaveTent] || estado.itens.some(function (it) { return it.caixaId === e.id; })) continue;
-        caixaProcessados[chaveTent] = true;
         estado.links.estado = "📥 A importar link " + (i + 1) + "/" + entradas.length + " do celular…";
         desenhar();
         try {
@@ -1751,20 +839,18 @@
               (total ? Math.round((recebidos / total) * 100) + "%" : tamanho(recebidos));
             desenharEstadoLinks();
           });
-          var antesLen = estado.itens.length;
           adicionarFicheiros([ficheiro]);
-          var novo = estado.itens.length > antesLen ? estado.itens[estado.itens.length - 1] : null;
+          var novo = estado.itens[estado.itens.length - 1];
           if (novo) {
             novo.origem = e.url;
             novo.caixaId = e.id;
-            novo.caixaTentativa = e.tentativa || 0;
           }
         } catch (erro) {
           var msg = "Não importei este link: " + mensagemDeErro(erro, "falha desconhecida.");
           marcarEntrada(e.id, "erro", { erro: msg });
           estado.itens.push({
             id: proximoId++, ficheiro: null, nome: e.url, bytes: 0, estado: "erro", invalido: true,
-            passo: "", progresso: 0, erro: msg, resultado: null, origem: e.url, caixaId: e.id, caixaTentativa: e.tentativa || 0,
+            passo: "", progresso: 0, erro: msg, resultado: null, origem: e.url, caixaId: e.id,
           });
         }
       }
@@ -1930,7 +1016,7 @@
     var t0 = ambiente.agora();
     while (!(ambiente.core() && ambiente.app())) {
       if (ambiente.agora() - t0 > maxMs) return false;
-      await new Promise(function (r) { var t = setTimeout(r, 300); if (t && typeof t.unref === "function") t.unref(); });
+      await new Promise(function (r) { setTimeout(r, 300); });
     }
     return true;
   }
@@ -2238,7 +1324,7 @@
 
   function iniciarBotaoColar() {
     atualizarBotaoColar();
-    var iv = setInterval(atualizarBotaoColar, 1500); if (iv && typeof iv.unref === "function") iv.unref();
+    setInterval(atualizarBotaoColar, 1500);
     document.addEventListener("visibilitychange", function () {
       if (document.visibilityState === "visible") setTimeout(verificarLinkCopiado, 400);
     });
@@ -2648,7 +1734,16 @@
       ]),
     ]));
 
-    /* Sem opção de «agendar com pouca certeza»: o vídeo nunca fica parado à espera de certeza da IA. */
+    var caixa = el("input", { type: "checkbox", checked: estado.opcoes.agendarComPoucaCerteza || null });
+    caixa.addEventListener("change", function () {
+      estado.opcoes.agendarComPoucaCerteza = caixa.checked;
+      gravarOpcoes();
+    });
+    corpo.push(el("label", { className: "cl-opcao" }, [
+      caixa,
+      el("span", { text: "Agendar mesmo quando a IA tem pouca certeza do filme (abaixo de " + CONFIANCA_MINIMA + "%). Desligado, esses vídeos ficam para rever." }),
+    ]));
+
     corpo.push(desenharSecaoCelular());
 
     if (estado.itens.length) {
@@ -2786,8 +1881,6 @@
       servidorLigado: servidorLigado,
       verificarLinkCopiado: verificarLinkCopiado,
       atualizarBotaoColar: atualizarBotaoColar,
-      lerCabecalhoVideo: lerCabecalhoVideo,
-      lerDuracaoPorAudio: lerDuracaoPorAudio,
       iniciar: iniciar,
       parar: parar,
       processarItem: processarItem,

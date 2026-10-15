@@ -1,6 +1,6 @@
 # CineClip 🎬
 
-Aplicação web **100% no navegador** que limpa metadados de vídeos, corta até 2:30, formata em **9:16** com texto de *hook* no topo, identifica o filme/série via **IA (Google Gemini, com NVIDIA Vision como reserva) + TMDB** e gera uma legenda pronta para publicar.
+Aplicação web **100% no navegador** que limpa metadados de vídeos, corta até 2:30, formata em **9:16** com texto de *hook* no topo, identifica o filme/série via **NVIDIA Vision + TMDB** e gera uma legenda pronta para publicar.
 
 ## Estrutura do Projeto
 
@@ -8,7 +8,6 @@ Aplicação web **100% no navegador** que limpa metadados de vídeos, corta até
 - `app-pronto.html` e `404.html` — cópias do bundle principal (o `404.html` é o fallback do GitHub Pages)
 - `nuvem-duravel.js` — camada de armazenamento durável (`window.CineCloud`), carregada antes do app
 - `lote-massa.js` — upload em massa (`window.CineLote`), código legível fora do bundle
-- `tools/viral-hooks/viral-hooks.template.js` — prompt e sanitização dos ganchos; `npm run patch:viral` reaplica a alteração ao bundle
 - `apps-script/cineclip-cloud-drive.js` e `cloudflare/r2-worker.js` — backends do Google Drive e Cloudflare R2
 - `tools/` — servidor de preview, mocks, testes e ferramentas para reaplicar os patches do bundle
 - `tools/renovar-cloudflare.mjs` — renova o backend Cloudflare (`npm run cloudflare:renovar`):deploy + verificação do link `/v/:key`, das claims e do espaço no R2
@@ -48,24 +47,6 @@ abre um painel onde cada vídeo passa sozinho pelo fluxo todo: usa **até 90 s**
 identifica o filme com a IA + TMDB, cria o **gancho** e a **legenda** com IA, processa em 9:16
 e agenda o Reel no **próximo horário livre** da conta ativa. Os vídeos são tratados um de cada
 vez; o painel pode ser fechado (fica um atalho no canto) e o botão **Parar** interrompe o lote.
-
-No Estúdio, **Gerar gancho pelo vídeo (IA)** propõe até três ganchos curtos e ligados à cena.
-A resposta é validada como texto de uma linha (até 64 caracteres); sugestões vazias, repetidas
-ou genéricas não substituem o que já está escrito no campo.
-
-### Como o filme é identificado
-
-1. **A IA analisa quadros e áudio.** Com chave Gemini, ele vai primeiro (até 6 quadros, o áudio
-   do clipe e pesquisa Google); a NVIDIA Vision só entra se não houver chave Gemini ou se a
-   confiança vier abaixo de 70 %. O prompt **não reconhece pessoas pelo rosto**: a obra é
-   deduzida de falas, texto na tela, nomes de personagens e contexto, e a IA responde com uma
-   confiança calibrada (90+ só com prova direta; abaixo de 40 deixa o título vazio).
-2. **O TMDB confirma** o título pelo identificador rápido (`identificador-rapido.js`): por
-   degraus, com cache, começando pelo IMDb ID quando a IA o informa.
-3. **O gancho é escrito depois**, com a obra já confirmada (título, ano, gêneros e sinopse do
-   TMDB) e com as imagens/áudio da cena. Cada uma das 3 opções usa uma estrutura diferente
-   (pergunta, contraste, tensão); a primeira é a que vai para o vídeo. Os ganchos que vêm da
-   identificação (escritos quando a obra ainda era um palpite) ficam só como reserva.
 
 - Se a IA tiver menos de 65 % de certeza do filme, o vídeo **não é agendado** e fica para
   rever (*Abrir no Estúdio*), a não ser que ligues *Agendar mesmo com pouca certeza*.
@@ -126,16 +107,10 @@ em [`servidor/README.md`](servidor/README.md).
 ## 📅 Agendador (layout)
 
 A aba **Agendador** tem um layout próprio: resumo (na fila / próximo post / publicados /
-erros), abas **Fila · Conta e horários · Robô 24h · Nuvem / Duplicados**, cartão *Novo
-agendamento* com atalhos para os próximos horários livres, fila agrupada por dia com filtros
-e detalhes expansíveis (reagendar, mudar de conta, legenda, baixar, reenviar, remover com
-confirmação) e editor de horários diários em chips.
-
-Em **Nuvem / Duplicados** vês quantos vídeos estão guardados no Drive/R2, quais precisam de
-envio, links temporários e itens sem ficheiro local. Podes testar a ligação ou sincronizar a
-fila. A deteção de possíveis duplicados compara o link do vídeo ou nome + tamanho + título
-**na conta selecionada**; é apenas uma revisão, nunca apaga nada automaticamente, e protege
-itens já publicados.
+erros), abas **Fila · Conta e horários · Robô 24h**, cartão *Novo agendamento* com atalhos
+para os próximos horários livres, fila agrupada por dia com filtros e detalhes expansíveis
+(reagendar, mudar de conta, legenda, baixar, reenviar, remover com confirmação) e editor
+de horários diários em chips.
 
 **Ordenar a fila:** ordena por horário (mais cedo / mais tarde), título ou situação (erros
 primeiro), com busca por título/legenda. Em *Horário (mais cedo)* podes **arrastar** os
