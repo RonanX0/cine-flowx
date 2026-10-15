@@ -11,8 +11,29 @@
  *   5. gera a legenda com a IA;
  *   6. coloca o Reel na fila do Agendador no próximo horário livre da conta ativa.
  *
- * Os vídeos são tratados um de cada vez (o FFmpeg do navegador só faz um de cada
- * vez). Se a IA não tiver certeza do filme (confiança < 65%), o vídeo não é
+ * O FFmpeg do navegador só faz um vídeo de cada vez — mas a IA e a leitura do
+ * vídeo seguinte não precisam de o esperar. Por isso o lote trabalha em duas
+ * partes (ver "motor em duas fases"):
+ *
+ *   preparar  — ler o vídeo, identificar o filme (IA + TMDB), gancho e legenda;
+ *   finalizar — FFmpeg (9:16) e entrada na fila do Agendador.
+ *
+ * Enquanto o FFmpeg está a processar um vídeo, o lote já vai preparando o
+ * seguinte. É a diferença entre esperar a IA e o FFmpeg em fila indiana (soma
+ * dos tempos) e sobrepô-los (o maior dos dois, por vídeo).
+ *
+ * Além disso:
+ *   • cada tentativa fica gravada (item.feito): "Tentar de novo", o botão Parar
+ *     e um recarregamento da página não repetem a IA nem o FFmpeg já feitos;
+ *   • erros passageiros (rede, IA a 429/500, tempo esgotado) repetem-se sozinhos
+ *     até 3 tentativas, com espera entre elas; erros definitivos (H.265, pouco
+ *     certeza, formato) não gastam tentativas;
+ *   • a fila fica guardada no IndexedDB (vídeos incluídos) para o lote continuar
+ *     depois de recarregar a página — nos telemóveis isto acontece muito;
+ *   • o painel mostra o progresso do lote com tempo que falta e só redesenha o
+ *     que mudou, para não engasgar o browser durante o lote.
+ *
+ * Se a IA não tiver certeza do filme (confiança < 65%), o vídeo não é
  * agendado — fica marcado para rever no Estúdio — a não ser que ligues a opção
  * "Agendar mesmo com pouca certeza".
  *
@@ -37,6 +58,19 @@
   var CONFIANCA_MINIMA = 65;
   var CHAVE_OPCOES = "cineclip.lote.opcoes";
 
+  /** Tentativas por vídeo (a primeira + as repetições automáticas). */
+  var MAX_TENTATIVAS = 3;
+  /** Espera entre tentativas (ms) — sem rede, o 429/500 da IA costuma passar logo. */
+  var ESPERA_TENTATIVA = [1500, 5000];
+  /** Intervalo mínimo entre desenhos do painel (ms): o FFmpeg avisa muitas vezes por segundo. */
+  var INTERVALO_DESENHO = 200;
+  /** Máximo de bytes de vídeos originais guardados para retomar o lote (IndexedDB). */
+  var MAX_GUARDAR_BYTES = 900 * 1024 * 1024;
+  var BANCO = "cineclip.lote";
+  var LOJA_ESTADO = "itens";
+  var LOJA_FICHEIROS = "ficheiros";
+  var ESPERA_GUARDAR = 1200;
+
   /* ---------------------------------------------------------------- estado */
 
   var estado = {
@@ -44,10 +78,17 @@
     aCorrer: false,
     pararPedido: false,
     itemAtual: null,
+    /** Vídeo que está a ser preparado (IA/leitura) enquanto o FFmpeg trata do atual. */
+    itemAdiantado: null,
     conta: null,
     opcoes: lerOpcoes(),
     aberto: false,
     links: { texto: "", aImportar: false, estado: "" },
+    /** Quando o lote começou (para estimar o que falta) e quanto já demorou no total. */
+    iniciadoEm: 0,
+    duracaoUltimoLote: 0,
+    /** Marca de que a lista veio do IndexedDB (a página recarregou a meio do lote). */
+    retomado: false,
   };
 
   var proximoId = 1;
@@ -62,9 +103,11 @@
         processarLinksDoCelular: typeof o.processarLinksDoCelular === "boolean" ? o.processarLinksDoCelular : !eCelular(),
         botaoColar: o.botaoColar !== false,
         avisarLinkCopiado: o.avisarLinkCopiado !== false,
+        guardarFila: o.guardarFila !== false,
+        adiantar: o.adiantar !== false,
       };
     } catch (e) {
-      return { agendarComPoucaCerteza: false, aoPartilhar: "perguntar", processarLinksDoCelular: !eCelular(), botaoColar: true, avisarLinkCopiado: true };
+      return { agendarComPoucaCerteza: false, aoPartilhar: "perguntar", processarLinksDoCelular: !eCelular(), botaoColar: true, avisarLinkCopiado: true, guardarFila: true, adiantar: true };
     }
   }
 
@@ -1061,34 +1104,85 @@
       }
       estado.itens.push(item);
     });
+    agendarGuardar();
     desenhar();
     return entraram;
   }
 
+  /** O item que está a ser tratado (o atual ou o que está a ser adiantado). */
+  function emTrabalho(it) {
+    return it === estado.itemAtual || it === (estado.itemAdiantado && estado.itemAdiantado.item);
+  }
+
   function removerItem(id) {
     estado.itens = estado.itens.filter(function (it) {
-      return it.id !== id || it === estado.itemAtual;
+      if (it.id !== id) return true;
+      if (emTrabalho(it)) return true;
+      esquecerItem(it);
+      return false;
     });
+    agendarGuardar();
     desenhar();
   }
 
+  /**
+   * Põe um vídeo de volta na fila. O que já foi feito dele (filme identificado,
+   * gancho, legenda) é mantido: repetir não volta a gastar a IA.
+   */
   function repetirItem(id) {
     estado.itens.forEach(function (it) {
-      if (it.id === id && it !== estado.itemAtual && !it.invalido) {
+      if (it.id === id && !emTrabalho(it) && !it.invalido && !it.semFicheiro) {
         it.estado = "pendente";
         it.erro = "";
+        it.tipoErro = "";
         it.passo = "";
-        it.progresso = 0;
-        it.resultado = null;
+        it.tentativas = 0;
       }
     });
+    agendarGuardar();
+    desenhar();
+  }
+
+  /** Volta a pôr na fila todos os que falharam ou ficaram para rever. */
+  function repetirFalhados() {
+    var quantos = 0;
+    itensFalhados().forEach(function (it) {
+      if (emTrabalho(it)) return;
+      it.estado = "pendente";
+      it.erro = "";
+      it.tipoErro = "";
+      it.passo = "";
+      it.tentativas = 0;
+      quantos++;
+    });
+    avisar(
+      quantos
+        ? "🔁 " + quantos + " vídeo" + (quantos > 1 ? "s" : "") + " de volta à fila. Carrega em «Começar» — o que já estava feito não se repete."
+        : "Não há vídeos para repetir.",
+      quantos ? "info" : "erro"
+    );
+    agendarGuardar();
     desenhar();
   }
 
   function limparConcluidos() {
     estado.itens = estado.itens.filter(function (it) {
-      return it.estado !== "agendado";
+      if (it.estado !== "agendado") return true;
+      esquecerItem(it);
+      return false;
     });
+    agendarGuardar();
+    desenhar();
+  }
+
+  /** Tira da lista os que deram erro/ficaram para rever (e os ficheiros inválidos). */
+  function limparErros() {
+    estado.itens = estado.itens.filter(function (it) {
+      if (emTrabalho(it) || (it.estado !== "erro" && it.estado !== "revisar")) return true;
+      esquecerItem(it);
+      return false;
+    });
+    agendarGuardar();
     desenhar();
   }
 
@@ -1096,6 +1190,32 @@
     return estado.itens.filter(function (it) {
       return it.estado === "pendente";
     });
+  }
+
+  /** Escolher o vídeo outra vez para um item que ficou sem ficheiro (a página recarregou). */
+  function escolherFicheiroParaItem(item) {
+    var input = el("input", { type: "file", accept: ".mp4,.mov,.mkv,.webm,.avi,video/*", style: "display:none" });
+    input.addEventListener("change", function () {
+      var f = input.files && input.files[0];
+      input.remove();
+      if (!f) return;
+      item.ficheiro = f;
+      item.nome = f.name || item.nome;
+      item.bytes = f.size || 0;
+      item.semFicheiro = false;
+      item.invalido = false;
+      item.estado = "pendente";
+      item.erro = "";
+      item.passo = "";
+      item.progresso = 0;
+      item.feito = null; // é outro ficheiro: o que estava feito não serve
+      item.preparacao = null;
+      avisar("Vídeo escolhido outra vez. Carrega em «Começar».", "info");
+      agendarGuardar();
+      desenhar();
+    });
+    document.body.appendChild(input);
+    input.click();
   }
 
   function lerDefinicoesApp() {
@@ -1122,230 +1242,311 @@
     return null;
   }
 
-  /* ------------------------------------------------- processar um vídeo */
+  /* ------------------------------------------- o motor do lote (2 fases) */
 
-  function definirPasso(item, passo, progresso) {
+  /** Progresso do vídeo: cada passo ocupa uma fatia da barra. */
+  var FASES = {
+    ler: [0, 0.06],
+    barras: [0.06, 0.16],
+    identificar: [0.16, 0.36],
+    gancho: [0.36, 0.44],
+    legenda: [0.44, 0.52],
+    processar: [0.52, 0.97],
+    agendar: [0.97, 1],
+  };
+
+  function definirPasso(item, passo, fracao) {
     item.passo = passo;
-    if (typeof progresso === "number") item.progresso = progresso;
-    desenhar();
+    if (typeof fracao === "number") item.progresso = Math.max(0, Math.min(1, fracao));
+    // O FFmpeg avisa dezenas de vezes por segundo: o painel é atualizado com calma,
+    // senão o browser passa o tempo a redesenhar listas em vez de processar vídeo.
+    agendarDesenho();
   }
 
-  /**
-   * Leva um vídeo do ficheiro original até à fila do Agendador.
-   * Lança um erro (com `tipo`) quando não pode continuar.
+  /** Passo dentro de uma fase: `fracao` vai de 0 a 1 (ex.: 42% do FFmpeg). */
+  function fase(item, nome, fracao, texto) {
+    var f = FASES[nome] || [0, 1];
+    var dentro = typeof fracao === "number" ? Math.max(0, Math.min(1, fracao)) : null;
+    definirPasso(item, texto + (dentro ? " " + Math.round(dentro * 100) + "%" : ""), f[0] + (f[1] - f[0]) * (dentro || 0));
+  }
+
+  /* ------------------------------------------------------ preparar um vídeo */
+  /*
+   * Tudo o que o FFmpeg de render não faz: ler o vídeo, identificar o filme
+   * (IA + TMDB), gancho e legenda. É aqui que está quase todo o tempo de rede.
+   * Cada resultado fica em `item.feito`, por isso uma nova tentativa (ou um
+   * recarregamento da página) continua de onde parou em vez de repetir tudo.
    */
-  async function processarItem(item, conta) {
+  async function prepararItemAgora(item) {
     var core = ambiente.core();
     var s = lerDefinicoesApp();
     var ficheiro = item.ficheiro;
+    var feito = item.feito || (item.feito = {});
+    if (!ficheiro) throw erroComTipo("Escolhe outra vez este vídeo — a página recarregou antes de ele ser processado.", "ficheiro");
 
     /* 1. Ler o vídeo (em paralelo: <video>, MediaInfo e cabeçalho binário) --- */
-    definirPasso(item, "A ler o vídeo…", 0.02);
-    var info = { largura: 0, altura: 0, duracao: 0 };
-    var erroVideo = null;
+    if (!feito.video) {
+      fase(item, "ler", 0, "A ler o vídeo…");
+      var info = { largura: 0, altura: 0, duracao: 0 };
+      var erroVideo = null;
 
-    var cabProm = lerCabecalhoVideo(ficheiro).catch(function () {
-      return { largura: 0, altura: 0, duracao: 0, temAudio: null, codec: "", titulo: "" };
-    });
-    var metaProm = core && typeof core.lerMetadados === "function"
-      ? comLimite(core.lerMetadados(ficheiro), 18000).catch(function () { return null; })
-      : Promise.resolve(null);
-    var videoProm = comLimite(ambiente.lerVideo(ficheiro), 20000, "O navegador demorou demasiado a abrir o vídeo.").then(
-      function (v) { return { ok: true, valor: v }; },
-      function (e) { return { ok: false, erro: e }; }
-    );
-
-    var lidos = await Promise.all([videoProm, metaProm, cabProm]);
-    var resVid = lidos[0];
-    var meta = lidos[1];
-    var cab = lidos[2] || {};
-
-    if (resVid.ok && resVid.valor) {
-      info = {
-        largura: Number(resVid.valor.largura) || 0,
-        altura: Number(resVid.valor.altura) || 0,
-        duracao: Number.isFinite(Number(resVid.valor.duracao)) && Number(resVid.valor.duracao) > 0 ? Number(resVid.valor.duracao) : 0,
-      };
-    } else if (resVid.erro) {
-      erroVideo = resVid.erro;
-    }
-
-    var duracao = (meta && Number.isFinite(Number(meta.duration)) && Number(meta.duration) > 0) ? Number(meta.duration) : 0;
-    if (!duracao && info.duracao > 0) duracao = info.duracao;
-    if (!duracao && cab.duracao > 0) duracao = Number(cab.duracao);
-    if (!duracao && ficheiro && ficheiro._duracaoServidor > 0) duracao = Number(ficheiro._duracaoServidor);
-
-    if ((!info.largura || !info.altura) && meta && meta.width > 0 && meta.height > 0) {
-      info = { largura: Number(meta.width), altura: Number(meta.height), duracao: info.duracao || duracao };
-    }
-    if ((!info.largura || !info.altura) && cab.largura > 0 && cab.altura > 0) {
-      info = { largura: Number(cab.largura), altura: Number(cab.altura), duracao: info.duracao || duracao };
-    }
-
-    var campo = ((meta && meta.fields) || []).find(function (f) {
-      return f && f.label === "Título";
-    });
-    var tituloMetadados = (campo && campo.value) || cab.titulo || (ficheiro && ficheiro._tituloServidor) || "";
-
-    // Se ainda faltar dimensão ou duração, sonda com o FFmpeg (quando disponível)
-    if ((!info.largura || !info.altura || !duracao) && core && typeof core.sondarVideo === "function") {
-      try {
-        var sonda = await comLimite(core.sondarVideo(ficheiro), 25000);
-        if (sonda) {
-          if ((!info.largura || !info.altura) && sonda.width > 0 && sonda.height > 0) {
-            info = { largura: Number(sonda.width), altura: Number(sonda.height), duracao: info.duracao || duracao || Number(sonda.duration) || 0 };
-          }
-          if (!duracao && Number.isFinite(Number(sonda.duration)) && Number(sonda.duration) > 0) {
-            duracao = Number(sonda.duration);
-          }
-        }
-      } catch (e) {}
-    }
-
-    // Fallback de duração via Web Audio API
-    if (!duracao) {
-      var durAudio = await lerDuracaoPorAudio(ficheiro);
-      if (durAudio > 0) duracao = durAudio;
-    }
-
-    // Se o <video> deu timeout (ex.: aba em segundo plano) num ficheiro válido, prossegue com dimensões padrão
-    if ((!info.largura || !info.altura) && erroVideo && /demorou demasiado/i.test(erroVideo.message || "") && (duracao > 0 || (ficheiro && ficheiro.size > 1024))) {
-      info = { largura: 1080, altura: 1920, duracao: duracao || MAX_SEGUNDOS };
-      erroVideo = null;
-    }
-
-    if (!info.largura || !info.altura) {
-      if (erroVideo) throw erroVideo;
-      throw erroComTipo(
-        "O navegador abre o som mas não a imagem deste vídeo (codec H.265/HEVC, comum em vídeos baixados do TikTok). Converte-o para H.264 e volta a enviar.",
-        "codec"
+      var cabProm = lerCabecalhoVideo(ficheiro).catch(function () {
+        return { largura: 0, altura: 0, duracao: 0, temAudio: null, codec: "", titulo: "" };
+      });
+      var metaProm = core && typeof core.lerMetadados === "function"
+        ? comLimite(core.lerMetadados(ficheiro), 18000).catch(function () { return null; })
+        : Promise.resolve(null);
+      var videoProm = comLimite(ambiente.lerVideo(ficheiro), 20000, "O navegador demorou demasiado a abrir o vídeo.").then(
+        function (v) { return { ok: true, valor: v }; },
+        function (e) { return { ok: false, erro: e }; }
       );
-    }
-    if (!duracao) duracao = Number(info.duracao) || 0;
-    if (!duracao && info.largura > 0 && info.altura > 0 && ficheiro && ficheiro.size > 0) {
-      // Vídeo válido cujo container não declarou a duração final (ex.: stream WebM/MP4):
-      // assume o limite máximo de 90 s (o FFmpeg encerra no fim real com -shortest).
-      duracao = MAX_SEGUNDOS;
-    }
-    if (!duracao) throw erroComTipo("Não consegui ler a duração do vídeo.", "leitura");
-    var fim = Math.min(MAX_SEGUNDOS, duracao);
-    if (fim < 3) throw erroComTipo("O vídeo tem menos de 3 segundos (o Instagram não aceita).", "leitura");
 
-    var corte = { top: 0, bottom: 0, vw: info.largura, vh: info.altura };
-    var videoAbriuNoNavegador = !!(resVid.ok && resVid.valor && resVid.valor.largura > 0);
-    if (videoAbriuNoNavegador) {
-      try {
-        var barras = await comLimite(core.detetarBarras(ficheiro, 0, fim), 25000);
-        if (barras && barras.vh) {
-          corte = {
-            top: barras.y,
-            bottom: barras.vh - barras.y - barras.h,
-            vw: info.largura,
-            vh: info.altura,
-          };
-        }
-      } catch (e) {}
+      var lidos = await Promise.all([videoProm, metaProm, cabProm]);
+      var resVid = lidos[0];
+      var meta = lidos[1];
+      var cab = lidos[2] || {};
+
+      if (resVid.ok && resVid.valor) {
+        info = {
+          largura: Number(resVid.valor.largura) || 0,
+          altura: Number(resVid.valor.altura) || 0,
+          duracao: Number.isFinite(Number(resVid.valor.duracao)) && Number(resVid.valor.duracao) > 0 ? Number(resVid.valor.duracao) : 0,
+        };
+      } else if (resVid.erro) {
+        erroVideo = resVid.erro;
+      }
+
+      var duracao = (meta && Number.isFinite(Number(meta.duration)) && Number(meta.duration) > 0) ? Number(meta.duration) : 0;
+      if (!duracao && info.duracao > 0) duracao = info.duracao;
+      if (!duracao && cab.duracao > 0) duracao = Number(cab.duracao);
+      if (!duracao && ficheiro && ficheiro._duracaoServidor > 0) duracao = Number(ficheiro._duracaoServidor);
+
+      if ((!info.largura || !info.altura) && meta && meta.width > 0 && meta.height > 0) {
+        info = { largura: Number(meta.width), altura: Number(meta.height), duracao: info.duracao || duracao };
+      }
+      if ((!info.largura || !info.altura) && cab.largura > 0 && cab.altura > 0) {
+        info = { largura: Number(cab.largura), altura: Number(cab.altura), duracao: info.duracao || duracao };
+      }
+
+      var campo = ((meta && meta.fields) || []).find(function (f) {
+        return f && f.label === "Título";
+      });
+      var tituloMetadados = (campo && campo.value) || cab.titulo || (ficheiro && ficheiro._tituloServidor) || "";
+
+      // Se ainda faltar dimensão ou duração, sonda com o FFmpeg (quando disponível)
+      if ((!info.largura || !info.altura || !duracao) && core && typeof core.sondarVideo === "function") {
+        try {
+          var sonda = await comLimite(core.sondarVideo(ficheiro), 25000);
+          if (sonda) {
+            if ((!info.largura || !info.altura) && sonda.width > 0 && sonda.height > 0) {
+              info = { largura: Number(sonda.width), altura: Number(sonda.height), duracao: info.duracao || duracao || Number(sonda.duration) || 0 };
+            }
+            if (!duracao && Number.isFinite(Number(sonda.duration)) && Number(sonda.duration) > 0) {
+              duracao = Number(sonda.duration);
+            }
+          }
+        } catch (e) {}
+      }
+
+      // Fallback de duração via Web Audio API
+      if (!duracao) {
+        var durAudio = await lerDuracaoPorAudio(ficheiro);
+        if (durAudio > 0) duracao = durAudio;
+      }
+
+      // Se o <video> deu timeout (ex.: aba em segundo plano) num ficheiro válido, prossegue com dimensões padrão
+      if ((!info.largura || !info.altura) && erroVideo && /demorou demasiado/i.test(erroVideo.message || "") && (duracao > 0 || (ficheiro && ficheiro.size > 1024))) {
+        info = { largura: 1080, altura: 1920, duracao: duracao || MAX_SEGUNDOS };
+        erroVideo = null;
+      }
+
+      if (!info.largura || !info.altura) {
+        if (erroVideo) throw erroVideo;
+        throw erroComTipo(
+          "O navegador abre o som mas não a imagem deste vídeo (codec H.265/HEVC, comum em vídeos baixados do TikTok). Converte-o para H.264 e volta a enviar.",
+          "codec"
+        );
+      }
+      if (!duracao) duracao = Number(info.duracao) || 0;
+      if (!duracao && info.largura > 0 && info.altura > 0 && ficheiro && ficheiro.size > 0) {
+        // Vídeo válido cujo container não declarou a duração final (ex.: stream WebM/MP4):
+        // assume o limite máximo de 90 s (o FFmpeg encerra no fim real com -shortest).
+        duracao = MAX_SEGUNDOS;
+      }
+      if (!duracao) throw erroComTipo("Não consegui ler a duração do vídeo.", "leitura");
+      var fim = Math.min(MAX_SEGUNDOS, duracao);
+      if (fim < 3) throw erroComTipo("O vídeo tem menos de 3 segundos (o Instagram não aceita).", "leitura");
+
+      fase(item, "barras", 0, "A procurar as barras pretas…");
+      var corte = { top: 0, bottom: 0, vw: info.largura, vh: info.altura };
+      var videoAbriuNoNavegador = !!(resVid.ok && resVid.valor && resVid.valor.largura > 0);
+      if (videoAbriuNoNavegador) {
+        try {
+          var barras = await comLimite(core.detetarBarras(ficheiro, 0, fim), 25000);
+          if (barras && barras.vh) {
+            corte = {
+              top: barras.y,
+              bottom: barras.vh - barras.y - barras.h,
+              vw: info.largura,
+              vh: info.altura,
+            };
+          }
+        } catch (e) {}
+      }
+      feito.video = { largura: info.largura, altura: info.altura, duracao: duracao, fim: fim, corte: corte, tituloMetadados: tituloMetadados };
+      agendarGuardar();
     }
+    var video = feito.video;
 
     /* 2. Identificar o filme --------------------------------------------- */
-    definirPasso(item, "A identificar o filme…", 0.1);
-    var temGemini = !!String(s.geminiKey || "").trim();
-    var quadros = await comLimite(core.quadros(ficheiro, 0, fim, corte), 90000, "A extração de quadros do vídeo demorou demasiado.");
-    var audio = null;
-    if (temGemini) {
-      try {
-        audio = await comLimite(core.audio(ficheiro, 0, fim), 15000);
-      } catch (e) {
-        audio = null;
+    if (!feito.ia) {
+      fase(item, "identificar", 0, "A identificar o filme…");
+      var temGemini = !!String(s.geminiKey || "").trim();
+      var quadros = await comLimite(core.quadros(ficheiro, 0, video.fim, video.corte), 90000, "A extração de quadros do vídeo demorou demasiado.");
+      var audio = null;
+      if (temGemini) {
+        try {
+          audio = await comLimite(core.audio(ficheiro, 0, video.fim), 15000);
+        } catch (e) {
+          audio = null;
+        }
       }
-    }
-    var ia = await comLimite(
-      core.identificar(s.nvidiaKey, quadros, s.lang, {
-        fileName: ficheiro.name,
-        metaTitle: tituloMetadados,
-        userHint: "",
-        geminiKey: s.geminiKey,
-        audioClip: audio,
-      }),
-      120000,
-      "A identificação do filme pela IA demorou demasiado."
-    );
-    if (!ia || (!ia.titulo && !(ia.atores && ia.atores.length))) {
-      throw erroComTipo("A IA não conseguiu identificar o filme deste clipe.", "identificacao");
-    }
-    var filme = await comLimite(core.procurarTmdb(s.tmdbKey, ia), 30000, "A pesquisa no TMDB demorou demasiado.");
-    if (!filme) {
-      throw erroComTipo(
-        'Não encontrei "' + (ia.titulo || ia.titulo_original || "o filme") + '" no TMDB.',
-        "identificacao"
+      var ia = await comLimite(
+        core.identificar(s.nvidiaKey, quadros, s.lang, {
+          fileName: ficheiro.name,
+          metaTitle: video.tituloMetadados,
+          userHint: "",
+          geminiKey: s.geminiKey,
+          audioClip: audio,
+        }),
+        120000,
+        "A identificação do filme pela IA demorou demasiado."
       );
+      if (!ia || (!ia.titulo && !(ia.atores && ia.atores.length))) {
+        throw erroComTipo("A IA não conseguiu identificar o filme deste clipe.", "identificacao");
+      }
+      var filme = await comLimite(core.procurarTmdb(s.tmdbKey, ia), 30000, "A pesquisa no TMDB demorou demasiado.");
+      if (!filme) {
+        throw erroComTipo(
+          'Não encontrei "' + (ia.titulo || ia.titulo_original || "o filme") + '" no TMDB.',
+          "identificacao"
+        );
+      }
+      feito.ia = ia;
+      feito.filme = filme;
+      // Os quadros e o áudio só voltam a ser precisos se faltar o gancho: não os guardamos.
+      item.quadrosIA = quadros;
+      item.audioIA = audio;
+      var primeiro = (ia.ganchos || []).find(function (g) {
+        return g && String(g).trim();
+      });
+      if (primeiro) feito.gancho = String(primeiro).trim();
+      if (!feito.cena && ia.cena) feito.cena = ia.cena;
+      agendarGuardar();
     }
-    var confianca = Number(ia.confianca) || 0;
-    item.resultado = { titulo: filme.title, ano: filme.year, confianca: confianca };
+
+    var confianca = Number(feito.ia && feito.ia.confianca) || 0;
+    item.resultado = { titulo: feito.filme.title, ano: feito.filme.year, confianca: confianca };
+    // A verificação é feita em cada tentativa: ligar "Agendar mesmo com pouca certeza"
+    // e repetir passa a agendar sem gastar outra vez a IA.
     if (confianca < CONFIANCA_MINIMA && !estado.opcoes.agendarComPoucaCerteza) {
       throw erroComTipo(
-        'A IA acha que é "' + filme.title + (filme.year ? " (" + filme.year + ")" : "") + '", mas só com ' +
+        'A IA acha que é "' + feito.filme.title + (feito.filme.year ? " (" + feito.filme.year + ")" : "") + '", mas só com ' +
           confianca + "% de certeza. Confere no Estúdio ou liga “Agendar mesmo com pouca certeza”.",
         "revisar"
       );
     }
+    if (!feito.cena && feito.ia && feito.ia.cena) feito.cena = feito.ia.cena;
 
     /* 3. Gancho ------------------------------------------------------------ */
-    definirPasso(item, "A criar o gancho…", 0.2);
-    var cena = ia.cena || "";
-    var gancho = (ia.ganchos || []).find(function (g) {
-      return g && String(g).trim();
-    });
-    if (!gancho) {
-      try {
-        var g = await comLimite(core.gerarGancho(s.nvidiaKey, quadros, s.lang, filme.title, s.geminiKey, audio), 60000);
-        gancho = ((g && g.ganchos) || []).find(function (x) {
-          return x && String(x).trim();
-        });
-        if (!cena && g && g.cena) cena = g.cena;
-      } catch (e) {}
-    }
-    gancho = String(gancho || s.overlayText || core.ganchoPadrao || "").trim();
-    item.resultado.gancho = gancho;
-
-    /* 4. Processar o vídeo -------------------------------------------------- */
-    definirPasso(item, "A processar o vídeo… 0%", 0.25);
-    var blob;
-    try {
-      blob = await comLimite(
-        core.processar(ficheiro, 0, fim, s.resolution, gancho, function (fracao) {
-          var pct = Math.max(0, Math.min(1, Number(fracao) || 0));
-          definirPasso(item, "A processar o vídeo… " + Math.round(pct * 100) + "%", 0.25 + pct * 0.6);
-        }, corte),
-        240000,
-        "O processamento do vídeo (FFmpeg) demorou demasiado."
-      );
-    } catch (e) {
-      if (!estado.pararPedido && e && /demorou demasiado/.test(e.message) && core && typeof core.cancelarProcessamento === "function") {
-        try { core.cancelarProcessamento(); } catch (err) {}
+    if (!feito.gancho) {
+      fase(item, "gancho", 0, "A criar o gancho…");
+      if (item.quadrosIA && item.quadrosIA.length) {
+        try {
+          var g = await comLimite(
+            core.gerarGancho(s.nvidiaKey, item.quadrosIA, s.lang, feito.filme.title, s.geminiKey, item.audioIA),
+            60000
+          );
+          var escolhido = ((g && g.ganchos) || []).find(function (x) {
+            return x && String(x).trim();
+          });
+          if (escolhido) feito.gancho = String(escolhido).trim();
+          if (!feito.cena && g && g.cena) feito.cena = g.cena;
+        } catch (e) {}
       }
-      throw e;
+      if (!feito.gancho) feito.gancho = String(s.overlayText || core.ganchoPadrao || "").trim();
+      agendarGuardar();
     }
-    if (!blob || !blob.size) throw erroComTipo("O FFmpeg não devolveu o vídeo processado.", "processamento");
+    item.resultado.gancho = feito.gancho;
 
-    /* 5. Legenda ------------------------------------------------------------- */
-    definirPasso(item, "A escrever a legenda…", 0.88);
-    var legenda = await comLimite(
-      core.gerarLegenda(s.nvidiaKey, filme, s.lang, {
-        cena: cena,
-        hookText: gancho,
-        geminiKey: s.geminiKey,
-      }),
-      90000,
-      "A criação da legenda pela IA demorou demasiado."
-    );
-    if (!legenda || !String(legenda).trim()) throw erroComTipo("A IA devolveu uma legenda vazia.", "legenda");
-    try {
-      core.guardarHistorico({ title: filme.title, year: filme.year, caption: legenda, date: ambiente.agora() });
-    } catch (e) {}
+    /* 4. Legenda ----------------------------------------------------------- */
+    if (!feito.legenda) {
+      fase(item, "legenda", 0, "A escrever a legenda…");
+      var legenda = await comLimite(
+        core.gerarLegenda(s.nvidiaKey, feito.filme, s.lang, {
+          cena: feito.cena || "",
+          hookText: feito.gancho,
+          geminiKey: s.geminiKey,
+        }),
+        90000,
+        "A criação da legenda pela IA demorou demasiado."
+      );
+      if (!legenda || !String(legenda).trim()) throw erroComTipo("A IA devolveu uma legenda vazia.", "legenda");
+      feito.legenda = String(legenda);
+      try {
+        core.guardarHistorico({ title: feito.filme.title, year: feito.filme.year, caption: feito.legenda, date: ambiente.agora() });
+      } catch (e) {}
+      agendarGuardar();
+    }
+    return feito;
+  }
+
+  /** Reaproveita a preparação que já esteja a correr (adiantada) em vez de a repetir. */
+  function prepararItem(item) {
+    if (item.preparacao) return item.preparacao;
+    var p = prepararItemAgora(item);
+    item.preparacao = p;
+    var largar = function () {
+      if (item.preparacao === p) item.preparacao = null;
+    };
+    p.then(largar, largar);
+    return p;
+  }
+
+  /* ----------------------------------------------------- finalizar um vídeo */
+
+  /** FFmpeg (9:16, metadados limpos) e entrada na fila do Agendador. */
+  async function finalizarItem(item, conta) {
+    var core = ambiente.core();
+    var s = lerDefinicoesApp();
+    var ficheiro = item.ficheiro;
+    var feito = item.feito || {};
+    var video = feito.video || { fim: MAX_SEGUNDOS, corte: null };
+
+    /* 5. Processar o vídeo -------------------------------------------------- */
+    if (!feito.blob) {
+      fase(item, "processar", 0, "A processar o vídeo…");
+      var blob;
+      try {
+        blob = await comLimite(
+          core.processar(ficheiro, 0, video.fim, s.resolution, feito.gancho, function (fracao) {
+            fase(item, "processar", Math.max(0, Math.min(1, Number(fracao) || 0)), "A processar o vídeo…");
+          }, video.corte),
+          240000,
+          "O processamento do vídeo (FFmpeg) demorou demasiado."
+        );
+      } catch (e) {
+        if (!estado.pararPedido && e && /demorou demasiado/.test(e.message) && core && typeof core.cancelarProcessamento === "function") {
+          try { core.cancelarProcessamento(); } catch (err) {}
+        }
+        throw e;
+      }
+      if (!blob || !blob.size) throw erroComTipo("O FFmpeg não devolveu o vídeo processado.", "processamento");
+      feito.blob = blob;
+    }
 
     /* 6. Agendar ------------------------------------------------------------- */
-    definirPasso(item, "A agendar…", 0.95);
+    fase(item, "agendar", 0, "A agendar…");
     var fila = await core.lerFila();
     var chaveOrig = item.caixaId || (item.origem ? idDoLink(item.origem) : "");
     var tentItem = item.caixaTentativa || 0;
@@ -1357,7 +1558,7 @@
         })
       : null;
     var horario = jaAgendado && jaAgendado.scheduledAt ? jaAgendado.scheduledAt : core.proximoHorario(fila, conta.dailySlots || [], conta.id);
-    var base = semExtensao(ficheiro.name);
+    var base = semExtensao(ficheiro ? ficheiro.name : item.nome);
     var agora = ambiente.agora();
     var reel = {
       id: jaAgendado ? jaAgendado.id : "reel_" + agora + "_" + Math.random().toString(36).slice(2, 6),
@@ -1366,15 +1567,15 @@
       updatedAt: agora,
       scheduledAt: horario,
       status: jaAgendado && jaAgendado.status === "published" ? "published" : "scheduled",
-      title: filme.title || base,
-      originalTitle: filme.original,
-      year: filme.year,
-      poster: filme.poster,
-      hookText: gancho,
-      caption: core.limparLegenda(String(legenda)),
-      videoBlob: blob,
+      title: feito.filme.title || base,
+      originalTitle: feito.filme.original,
+      year: feito.filme.year,
+      poster: feito.filme.poster,
+      hookText: feito.gancho,
+      caption: core.limparLegenda(String(feito.legenda)),
+      videoBlob: feito.blob,
       videoFileName: base + "_cineclip.mp4",
-      videoSize: blob.size || 0,
+      videoSize: feito.blob.size || 0,
       platforms: ["instagram"],
     };
     if (item.origem) reel.linkOrigem = item.origem;
@@ -1383,9 +1584,96 @@
       reel.caixaTentativa = tentItem;
     }
     if (!jaAgendado) await core.guardarNaFila(reel);
+    item.resultado = item.resultado || {};
     item.resultado.horario = horario;
     item.resultado.reelId = reel.id;
     return reel;
+  }
+
+  /* ---------------------------------------------------------- o motor do lote */
+
+  /** Uma tentativa completa: preparar (ou reaproveitar o que foi adiantado) + FFmpeg + fila. */
+  async function correrItem(item) {
+    await prepararItem(item);
+    if (estado.pararPedido) return null;
+    adiantarProximo(); // enquanto o FFmpeg corre, o vídeo seguinte já avança
+    return finalizarItem(item, estado.conta);
+  }
+
+  /**
+   * Adianta a preparação do vídeo seguinte (IA, quadros, legenda) enquanto o FFmpeg
+   * do atual trabalha. O FFmpeg do navegador só faz um vídeo de cada vez, mas não
+   * precisa de bloquear a rede nem o resto do lote.
+   */
+  function adiantarProximo() {
+    if (estado.itemAdiantado || !estado.opcoes.adiantar) return;
+    var proximo = pendentes()[0];
+    if (!proximo) return;
+    var reg = { item: proximo, erro: null, promessa: null };
+    proximo.adiantado = true;
+    proximo.estado = "a_processar";
+    proximo.erro = "";
+    definirPasso(proximo, "Adiantado: a IA e a leitura deste vídeo já estão a correr…", 0);
+    reg.promessa = prepararItem(proximo).then(
+      function () {
+        reg.erro = null;
+        desenhar();
+      },
+      function (e) {
+        reg.erro = e;
+        desenhar();
+      }
+    );
+    estado.itemAdiantado = reg;
+    desenhar();
+  }
+
+  /** Próximo vídeo a tratar: o que já foi adiantado é o seguinte. */
+  function proximoDaFila() {
+    var adiantado = estado.itemAdiantado && estado.itemAdiantado.item;
+    if (adiantado && adiantado.estado === "a_processar") return adiantado;
+    return pendentes()[0] || null;
+  }
+
+  /** Vídeos por fazer (na fila ou já a serem adiantados). */
+  function porFazer() {
+    var lista = pendentes().slice();
+    var adiantado = estado.itemAdiantado && estado.itemAdiantado.item;
+    if (adiantado && adiantado.estado === "a_processar") lista.push(adiantado);
+    return lista;
+  }
+
+  /** Erros que voltam a dar o mesmo: não gastam uma tentativa automática. */
+  function semRepeticao(e) {
+    if (!e) return true;
+    if (e.tipo === "revisar" || e.tipo === "codec") return true;
+    var m = String(e.message || e || "");
+    return /Formato não suportado|demasiado grande|menos de 3 segundos|não encontrei .* no TMDB|Escolhe outra vez este vídeo|Adiciona a tua chave|Escolhe uma conta do Instagram/i.test(m);
+  }
+
+  function motivoDaEspera(e) {
+    var m = String((e && e.message) || "");
+    if (/429|demasiados pedidos|rate limit/i.test(m)) return "A IA pediu para abrandar";
+    if (/\b(5\d\d|400|401|403)\b/.test(m)) return "O servidor";
+    if (/demorou demasiado|timeout|parou de responder/i.test(m)) return "Tempo esgotado";
+    if (/rede|ligação|ligacao|network|fetch|Failed/i.test(m)) return "A rede";
+    return "Falha passageira";
+  }
+
+  /** Espera entre tentativas, interrompível pelo botão Parar. */
+  function esperar(ms) {
+    return new Promise(function (resolve) {
+      var t = setTimeout(resolve, ms);
+      if (t && typeof t.unref === "function") t.unref();
+      var vigia = setInterval(function () {
+        if (estado.pararPedido) {
+          clearTimeout(t);
+          clearInterval(vigia);
+          resolve();
+        }
+      }, 100);
+      if (vigia && typeof vigia.unref === "function") vigia.unref();
+    });
   }
 
   /* --------------------------------------------------------- o ciclo */
@@ -1413,60 +1701,115 @@
       desenhar();
       return;
     }
-    if (!pendentes().length) {
-      avisar("Adiciona vídeos primeiro.", "erro");
+    if (!proximoDaFila()) {
+      if (itensFalhados().length) {
+        avisar("A fila está vazia. Podes pôr os que falharam a tentar outra vez.", "info");
+        desenhar();
+      } else {
+        avisar("Adiciona vídeos primeiro.", "erro");
+      }
       return;
     }
     var app = ambiente.app();
     estado.conta = app.account;
     estado.aCorrer = true;
     estado.pararPedido = false;
+    estado.retomado = false;
+    estado.iniciadoEm = ambiente.agora();
     avisar("");
     desenhar();
     manterEcraLigado(true);
     var agendadosAntes = contar("agendado");
     try {
       var item;
-      while (!estado.pararPedido && (item = pendentes()[0])) {
+      while (!estado.pararPedido && (item = proximoDaFila())) {
+        if (estado.itemAdiantado && estado.itemAdiantado.item === item) estado.itemAdiantado = null;
         estado.itemAtual = item;
         item.estado = "a_processar";
         item.erro = "";
+        item.passo = item.passo || "A começar…";
+        if (!item.iniciadoEm) item.iniciadoEm = ambiente.agora();
         desenhar();
-        try {
-          await processarItem(item, estado.conta);
-          item.estado = "agendado";
-          item.passo = "";
-          item.progresso = 1;
-          if (item.caixaId) marcarEntrada(item.caixaId, "feito", { reelId: item.resultado && item.resultado.reelId });
-          pedirSincronizacao();
-        } catch (e) {
-          if (estado.pararPedido && e && e.tipo !== "codec") {
-            item.estado = "pendente";
-            item.passo = "";
-            item.progresso = 0;
-          } else {
-            item.estado = e && e.tipo === "revisar" ? "revisar" : "erro";
-            item.erro = mensagemDeErro(e, "Falha ao processar este vídeo.");
-            item.passo = "";
-            if (item.caixaId) {
-              marcarEntrada(item.caixaId, "erro", { erro: item.erro });
-              pedirSincronizacao();
-            }
+
+        var reel = null;
+        var erro = null;
+        for (var tentativa = item.tentativas || 0; tentativa < MAX_TENTATIVAS; tentativa++) {
+          if (estado.pararPedido) break;
+          try {
+            reel = await correrItem(item);
+            erro = null;
+            break;
+          } catch (e) {
+            erro = e;
+            if (estado.pararPedido || semRepeticao(e) || tentativa + 1 >= MAX_TENTATIVAS) break;
+            item.tentativas = tentativa + 1;
+            var espera = ESPERA_TENTATIVA[Math.min(tentativa, ESPERA_TENTATIVA.length - 1)];
+            definirPasso(
+              item,
+              "⚠️ " + motivoDaEspera(e) + " — nova tentativa em " + Math.ceil(espera / 1000) + " s (" +
+                (tentativa + 2) + " de " + MAX_TENTATIVAS + ")…"
+            );
+            desenhar();
+            await esperar(espera);
           }
         }
         estado.itemAtual = null;
+
+        if (estado.pararPedido) {
+          // Parado: o trabalho já feito fica guardado e o vídeo volta para a fila.
+          item.estado = "pendente";
+          item.passo = "";
+          item.erro = "";
+        } else if (reel) {
+          item.estado = "agendado";
+          item.passo = "";
+          item.progresso = 1;
+          item.terminadoEm = ambiente.agora();
+          item.duracaoMs = item.iniciadoEm ? item.terminadoEm - item.iniciadoEm : 0;
+          item.adiantado = false;
+          item.semFicheiro = false;
+          if (item.caixaId) marcarEntrada(item.caixaId, "feito", { reelId: item.resultado && item.resultado.reelId });
+          libertarItem(item);
+          pedirSincronizacao();
+        } else {
+          item.estado = erro && erro.tipo === "revisar" ? "revisar" : "erro";
+          item.tipoErro = erro && erro.tipo;
+          item.erro = mensagemDeErro(erro, "Falha ao processar este vídeo.");
+          item.passo = "";
+          item.progresso = 1;
+          item.adiantado = false;
+          if (item.caixaId) {
+            marcarEntrada(item.caixaId, "erro", { erro: item.erro });
+            pedirSincronizacao();
+          }
+        }
+        agendarGuardar();
         desenhar();
       }
     } finally {
       estado.aCorrer = false;
       estado.itemAtual = null;
+      // O vídeo adiantado volta para a fila com o trabalho já guardado.
+      var adiantado = estado.itemAdiantado;
+      estado.itemAdiantado = null;
+      if (adiantado && adiantado.item.estado === "a_processar") {
+        adiantado.item.estado = "pendente";
+        adiantado.item.passo = "";
+        adiantado.item.adiantado = false;
+      }
+      estado.duracaoUltimoLote = ambiente.agora() - estado.iniciadoEm;
       var feitos = estado.itens.filter(function (it) {
         return it.estado === "agendado";
       }).length;
-      if (estado.pararPedido) avisar("Lote parado. Os vídeos que faltam ficaram na lista.", "info");
-      else if (feitos) avisar("Lote concluído. Os Reels estão no Agendador e vão para a nuvem durável.", "ok");
+      if (estado.pararPedido) avisar("Lote parado. Os vídeos que faltam ficaram na lista — já não repetem o que estava feito.", "info");
+      else if (feitos) {
+        var r = resumoDoLote();
+        avisar("Lote concluído: " + feitos + " de " + estado.itens.length + " agendados em " + duracaoLegivel(estado.duracaoUltimoLote) + (r.falhados ? " · " + r.falhados + " para rever/erro" : "") + ".", "ok");
+      }
       estado.pararPedido = false;
       manterEcraLigado(false);
+      agendarGuardar();
+      guardarDadosDaFila();
       desenhar();
       avisarFimDoLote(feitos - agendadosAntes);
     }
@@ -1476,15 +1819,438 @@
   function parar() {
     if (!estado.aCorrer) return;
     estado.pararPedido = true;
+    guardarDadosDaFila();
     var core = ambiente.core();
     var item = estado.itemAtual;
-    // Se estiver a meio do FFmpeg, interrompe já; nas chamadas à IA espera que acabem.
-    if (item && /processar/.test(item.passo) && core && typeof core.cancelarProcessamento === "function") {
+    // Se estiver a meio do FFmpeg, interrompe já; nas chamadas à IA espera que acabem
+    // (e o vídeo seguinte, adiantado, também para).
+    if (item && /processar/.test(item.passo || "") && core && typeof core.cancelarProcessamento === "function") {
       try {
         core.cancelarProcessamento();
       } catch (e) {}
     }
     desenhar();
+  }
+
+  /* ------------------------------------------------- progresso do lote */
+
+  /** Fração feita de um vídeo (0 a 1). Um vídeo com erro conta como "tratado". */
+  function progressoDoItem(it) {
+    if (!it) return 0;
+    if (it.invalido) return 1;
+    if (it.estado === "agendado" || it.estado === "erro" || it.estado === "revisar") return 1;
+    return Math.max(0, Math.min(1, Number(it.progresso) || 0));
+  }
+
+  /** Onde vai o lote e quanto falta (estimativa pelo tempo já gasto). */
+  function resumoDoLote() {
+    var total = 0;
+    var soma = 0;
+    var agendados = 0;
+    var falhados = 0;
+    estado.itens.forEach(function (it) {
+      if (it.invalido) return;
+      total++;
+      soma += progressoDoItem(it);
+      if (it.estado === "agendado") agendados++;
+      else if (it.estado === "erro" || it.estado === "revisar") falhados++;
+    });
+    var fracao = total ? soma / total : 0;
+    var decorrido = estado.aCorrer && estado.iniciadoEm ? ambiente.agora() - estado.iniciadoEm : Number(estado.duracaoUltimoLote) || 0;
+    var falta = estado.aCorrer && fracao > 0.03 ? Math.max(0, decorrido / fracao - decorrido) : null;
+    return {
+      total: total,
+      agendados: agendados,
+      falhados: falhados,
+      concluidos: agendados + falhados,
+      fracao: fracao,
+      decorrido: decorrido,
+      falta: falta,
+    };
+  }
+
+  /** 92000 → "1 min 32 s" */
+  function duracaoLegivel(ms) {
+    var s = Math.max(0, Math.round((Number(ms) || 0) / 1000));
+    if (s < 60) return s + " s";
+    var m = Math.floor(s / 60);
+    if (m < 60) return m + " min" + (s % 60 >= 5 && m < 10 ? " " + (s % 60) + " s" : "");
+    var h = Math.floor(m / 60);
+    var resto = m % 60;
+    return h + " h" + (resto ? " " + resto + " min" : "");
+  }
+
+  /** Vídeos com erro ou para rever que podem mesmo ser repetidos. */
+  function itensFalhados() {
+    return estado.itens.filter(function (it) {
+      return !it.invalido && !it.semFicheiro && (it.estado === "erro" || it.estado === "revisar");
+    });
+  }
+
+  /** O Reel já tem o vídeo processado: o original e os dados da IA podem sair da memória. */
+  function libertarItem(it) {
+    esquecerItem(it);
+    it.feito = null;
+    it.quadrosIA = null;
+    it.audioIA = null;
+    it.ficheiro = null;
+  }
+
+  /* -------------------------------------------- 💾 a fila guardada (IndexedDB) */
+  /*
+   * Um lote de 10 filmes demora dezenas de minutos e um telemóvel recarrega a
+   * página com facilidade. A fila (e os vídeos escolhidos) fica guardada no
+   * IndexedDB; ao voltar, o painel diz que retomou o lote e o botão Começar
+   * continua de onde parou — sem repetir a IA nem o FFmpeg já feitos.
+   * Se o browser não deixar guardar (ou o vídeo for grande de mais), o lote
+   * funciona igual: só não sobrevive a um recarregamento.
+   */
+
+  var bancoPromessa = null;
+  var semBanco = false;
+  var idsGuardados = null;
+  var ficheirosGuardados = null;
+  var guardarJaAgendado = null;
+
+  function comBanco() {
+    if (semBanco) return Promise.resolve(null);
+    if (bancoPromessa) return bancoPromessa;
+    bancoPromessa = new Promise(function (resolve) {
+      function falhou() {
+        semBanco = true;
+        resolve(null);
+      }
+      try {
+        var idb = window.indexedDB || (typeof indexedDB !== "undefined" ? indexedDB : null);
+        if (!idb) return falhou();
+        var pedido = idb.open(BANCO, 1);
+        pedido.onupgradeneeded = function () {
+          var db = pedido.result;
+          try {
+            if (!db.objectStoreNames.contains(LOJA_ESTADO)) db.createObjectStore(LOJA_ESTADO, { keyPath: "id" });
+            if (!db.objectStoreNames.contains(LOJA_FICHEIROS)) db.createObjectStore(LOJA_FICHEIROS, { keyPath: "id" });
+          } catch (e) {}
+        };
+        pedido.onsuccess = function () {
+          resolve(pedido.result);
+        };
+        pedido.onerror = falhou;
+        pedido.onblocked = falhou;
+      } catch (e) {
+        falhou();
+      }
+    });
+    return bancoPromessa;
+  }
+
+  function chaveIdb(id) {
+    return typeof id === "string" && /^\d+$/.test(id) ? Number(id) : id;
+  }
+
+  function idbLerTudo(loja) {
+    return comBanco()
+      .then(function (db) {
+        if (!db) return [];
+        return new Promise(function (resolve) {
+          try {
+            var t = db.transaction(loja, "readonly");
+            var pedido = t.objectStore(loja).getAll();
+            pedido.onsuccess = function () {
+              resolve(Array.isArray(pedido.result) ? pedido.result : []);
+            };
+            pedido.onerror = function () {
+              resolve([]);
+            };
+            t.onabort = function () {
+              resolve([]);
+            };
+          } catch (e) {
+            resolve([]);
+          }
+        });
+      })
+      .catch(function () {
+        return [];
+      });
+  }
+
+  function idbGravar(loja, valor) {
+    return comBanco()
+      .then(function (db) {
+        if (!db) return false;
+        return new Promise(function (resolve) {
+          try {
+            var t = db.transaction(loja, "readwrite");
+            t.objectStore(loja).put(valor);
+            t.oncomplete = function () {
+              resolve(true);
+            };
+            t.onerror = function () {
+              resolve(false);
+            };
+            t.onabort = function () {
+              resolve(false);
+            };
+          } catch (e) {
+            resolve(false);
+          }
+        });
+      })
+      .catch(function () {
+        return false;
+      });
+  }
+
+  function idbApagar(loja, id) {
+    return comBanco()
+      .then(function (db) {
+        if (!db) return false;
+        return new Promise(function (resolve) {
+          try {
+            var t = db.transaction(loja, "readwrite");
+            t.objectStore(loja).delete(chaveIdb(id));
+            t.oncomplete = function () {
+              resolve(true);
+            };
+            t.onerror = function () {
+              resolve(false);
+            };
+            t.onabort = function () {
+              resolve(false);
+            };
+          } catch (e) {
+            resolve(false);
+          }
+        });
+      })
+      .catch(function () {
+        return false;
+      });
+  }
+
+  /** O que se guarda de um item: tudo menos os quadros/áudio da IA (grandes) e o vídeo processado. */
+  function registoDoItem(it, temFicheiro) {
+    var feito = it.feito
+      ? {
+          video: it.feito.video || null,
+          ia: it.feito.ia || null,
+          filme: it.feito.filme || null,
+          gancho: it.feito.gancho || "",
+          cena: it.feito.cena || "",
+          legenda: it.feito.legenda || "",
+        }
+      : null;
+    return {
+      id: it.id,
+      nome: it.nome,
+      bytes: it.bytes,
+      estado: it.estado === "a_processar" ? "pendente" : it.estado,
+      erro: it.erro || "",
+      resultado: it.resultado || null,
+      origem: it.origem || "",
+      caixaId: it.caixaId || "",
+      caixaTentativa: it.caixaTentativa || 0,
+      tentativas: it.tentativas || 0,
+      progresso: it.progresso || 0,
+      feito: feito,
+      temFicheiro: !!temFicheiro,
+      atualizadoEm: ambiente.agora(),
+    };
+  }
+
+  /** Apaga já os rastos de um item (agendado, removido) sem esperar pelo desenho do painel. */
+  function esquecerItem(it) {
+    if (!it) return;
+    try {
+      if (idsGuardados) delete idsGuardados[it.id];
+      if (ficheirosGuardados) delete ficheirosGuardados[it.id];
+      idbApagar(LOJA_ESTADO, it.id);
+      idbApagar(LOJA_FICHEIROS, it.id);
+    } catch (e) {}
+  }
+
+  /** Marca para guardar a fila (junta várias chamadas seguidas numa só escrita). */
+  function agendarGuardar() {
+    if (!estado.opcoes.guardarFila || guardarJaAgendado) return;
+    guardarJaAgendado = setTimeout(function () {
+      guardarJaAgendado = null;
+      guardarDadosDaFila();
+    }, ESPERA_GUARDAR);
+    if (guardarJaAgendado && typeof guardarJaAgendado.unref === "function") guardarJaAgendado.unref();
+  }
+
+  async function guardarDadosDaFila() {
+    try {
+      if (!estado.opcoes.guardarFila) return;
+      var db = await comBanco();
+      if (!db) return;
+      if (!idsGuardados) {
+        var guardados = await idbLerTudo(LOJA_ESTADO);
+        var ficheiros = await idbLerTudo(LOJA_FICHEIROS);
+        idsGuardados = {};
+        ficheirosGuardados = {};
+        guardados.forEach(function (r) {
+          if (r && r.id != null) idsGuardados[r.id] = true;
+        });
+        ficheiros.forEach(function (r) {
+          if (r && r.id != null) ficheirosGuardados[r.id] = true;
+        });
+      }
+      // 1) o que pertence à fila (e cabe no espaço que reservamos para isto)
+      var manter = {};
+      var total = 0;
+      estado.itens.forEach(function (it) {
+        if (!it.ficheiro || it.invalido || it.estado === "agendado") return;
+        if (total + (it.bytes || 0) > MAX_GUARDAR_BYTES) return;
+        total += it.bytes || 0;
+        manter[it.id] = it;
+      });
+      // 2) o que já saiu da fila desaparece do guardado
+      var aApagar = [];
+      Object.keys(idsGuardados).forEach(function (k) {
+        if (!manter[k]) aApagar.push(k);
+      });
+      Object.keys(ficheirosGuardados).forEach(function (k) {
+        if (!manter[k] && aApagar.indexOf(k) === -1) aApagar.push(k);
+      });
+      for (var i = 0; i < aApagar.length; i++) {
+        var k = aApagar[i];
+        if (idsGuardados[k]) {
+          delete idsGuardados[k];
+          await idbApagar(LOJA_ESTADO, k);
+        }
+        if (ficheirosGuardados[k]) {
+          delete ficheirosGuardados[k];
+          await idbApagar(LOJA_FICHEIROS, k);
+        }
+      }
+      // 3) o resto fica guardado (o vídeo só é escrito uma vez por item)
+      var lista = Object.keys(manter).map(function (k) {
+        return manter[k];
+      });
+      for (var j = 0; j < lista.length; j++) {
+        var it = lista[j];
+        if (!ficheirosGuardados[it.id]) {
+          // o servidor pode ter enviado duração/título com o vídeo (partilha do telemóvel):
+          // guardam-se também, para a retomada não os perder
+          var ok = await idbGravar(LOJA_FICHEIROS, {
+            id: it.id,
+            ficheiro: it.ficheiro,
+            nome: it.nome,
+            durServidor: Number(it.ficheiro._duracaoServidor) || 0,
+            titServidor: it.ficheiro._tituloServidor || "",
+          });
+          if (ok) ficheirosGuardados[it.id] = true;
+        }
+        await idbGravar(LOJA_ESTADO, registoDoItem(it, !!ficheirosGuardados[it.id]));
+        idsGuardados[it.id] = true;
+      }
+    } catch (e) {}
+  }
+
+  /** Esquece tudo o que estava guardado (opção desligada, lote limpo). */
+  function limparFilaGuardada() {
+    idsGuardados = {};
+    ficheirosGuardados = {};
+    return comBanco()
+      .then(function (db) {
+        if (!db) return false;
+        try {
+          var t = db.transaction([LOJA_ESTADO, LOJA_FICHEIROS], "readwrite");
+          t.objectStore(LOJA_ESTADO).clear();
+          t.objectStore(LOJA_FICHEIROS).clear();
+        } catch (e) {}
+        return true;
+      })
+      .catch(function () {
+        return false;
+      });
+  }
+
+  var restaurandoFila = null;
+
+  /** Traz de volta a fila do lote anterior (a página recarregou a meio). */
+  function restaurarFila() {
+    if (restaurandoFila) return restaurandoFila;
+    var p = restaurarFilaAgora();
+    restaurandoFila = p;
+    var largar = function () {
+      if (restaurandoFila === p) restaurandoFila = null;
+    };
+    p.then(largar, largar);
+    return p;
+  }
+
+  async function restaurarFilaAgora() {
+    if (estado.itens.length || !estado.opcoes.guardarFila) return 0;
+    try {
+      var registos = await idbLerTudo(LOJA_ESTADO);
+      if (!registos.length) return 0;
+      var ficheiros = await idbLerTudo(LOJA_FICHEIROS);
+      var mapa = {};
+      ficheiros.forEach(function (r) {
+        if (r && r.id != null) mapa[r.id] = r;
+      });
+      var voltaram = 0;
+      registos
+        .filter(function (r) {
+          return r && r.id != null && r.estado !== "agendado";
+        })
+        .sort(function (a, b) {
+          return (a.id || 0) - (b.id || 0);
+        })
+        .forEach(function (r) {
+          var f = mapa[r.id];
+          var volta = (f && f.ficheiro) || null;
+          var nomeGuardado = r.nome || (f && f.nome) || "video.mp4";
+          // Alguns navegadores devolvem o vídeo guardado como Blob sem nome: volta a
+          // ser um File com o nome que tinha (o MediaInfo e o FFmpeg usam a extensão).
+          if (volta && !volta.name && typeof File === "function") {
+            try {
+              volta = new File([volta], nomeGuardado, { type: volta.type || "video/mp4" });
+            } catch (e) {}
+          }
+          // duração/título que o servidor enviou com o vídeo (partilha do telemóvel)
+          if (volta) {
+            if (f && Number(f.durServidor) > 0) volta._duracaoServidor = Number(f.durServidor);
+            if (f && f.titServidor) volta._tituloServidor = String(f.titServidor);
+          }
+          var it = {
+            id: r.id,
+            ficheiro: volta,
+            nome: nomeGuardado,
+            bytes: Number(r.bytes) || 0,
+            estado: r.estado === "erro" || r.estado === "revisar" ? r.estado : "pendente",
+            passo: "",
+            progresso: Number(r.progresso) || 0,
+            erro: r.erro || "",
+            resultado: r.resultado || null,
+            feito: r.feito || null,
+            origem: r.origem || "",
+            caixaId: r.caixaId || "",
+            caixaTentativa: r.caixaTentativa || 0,
+            tentativas: Number(r.tentativas) || 0,
+            adiantado: false,
+            preparacao: null,
+          };
+          if (!it.ficheiro) {
+            it.semFicheiro = true;
+            it.estado = "erro";
+            it.erro = "A página recarregou a meio do lote e este vídeo não ficou guardado. Escolhe-o outra vez — o que já foi feito dele é mantido.";
+          }
+          estado.itens.push(it);
+          if (it.id >= proximoId) proximoId = it.id + 1;
+          voltaram++;
+        });
+      if (!voltaram) return 0;
+      estado.retomado = true;
+      avisar("📦 Retomei " + voltaram + " vídeo" + (voltaram > 1 ? "s" : "") + " do lote anterior. «Começar» continua de onde parou.", "info");
+      desenhar();
+      desenharPilula();
+      return voltaram;
+    } catch (e) {
+      return 0;
+    }
   }
 
   /* ----------------------------------------- 📱 compartilhar do celular */
@@ -1681,7 +2447,7 @@
     if (!ambiente.core() || !ambiente.app() || faltaConfigurar()) return;
     var entradas = entradasParaMim();
     if (!entradas.length) {
-      if (!estado.aCorrer && pendentes().some(function (it) { return it.caixaId; })) iniciar();
+      if (!estado.aCorrer && porFazer().some(function (it) { return it.caixaId; })) iniciar();
       return;
     }
     caixaOcupada = true;
@@ -1721,7 +2487,7 @@
       caixaOcupada = false;
       desenhar();
     }
-    if (!estado.aCorrer && pendentes().length) iniciar();
+    if (!estado.aCorrer && porFazer().length) iniciar();
   }
 
   /* -- ecrã ligado e aviso no fim -- */
@@ -2009,6 +2775,10 @@
     } catch (e) {}
     receberPartilha(window.location.href);
     iniciarBotaoColar();
+    // Lote que ficou a meio (a página recarregou): volta para a fila, com os vídeos.
+    setTimeout(function () {
+      restaurarFila();
+    }, 2500);
     // Links "aqui" que ficaram a meio (a página recarregou) e links mandados para o PC.
     aguardarApp(10 * 60 * 1000).then(function (ok) {
       if (ok) {
@@ -2202,6 +2972,11 @@
   var aviso = { texto: "", tipo: "" };
 
   function avisar(texto, tipo) {
+    if (!documentoVivo()) {
+      aviso.texto = texto || "";
+      aviso.tipo = tipo || "";
+      return;
+    }
     aviso = { texto: texto || "", tipo: tipo || "info" };
   }
 
@@ -2284,12 +3059,26 @@
     ".cl-acoes{display:flex;flex-wrap:wrap;gap:6px}",
     ".cl-rodape{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;padding:14px 20px;border-top:1px solid var(--border,rgba(255,255,255,.09))}",
     ".cl-resumo{font-size:13px;color:var(--muted-foreground,#a3a3ad)}",
+    ".cl-lote{display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--border,rgba(255,255,255,.09));border-radius:12px;background:var(--background,#141418)}",
+    ".cl-lote-texto{font-size:13px;font-weight:600}",
+    ".cl-lote-barra{height:8px;border-radius:999px;background:var(--muted,#2a2a31);overflow:hidden}",
+    ".cl-lote-barra > div{height:100%;background:linear-gradient(90deg,var(--primary,#e5484d),#f5a623);transition:width .3s}",
     ".cl-botoes{display:flex;flex-wrap:wrap;gap:8px}",
     ".cl-pilula{position:fixed;right:16px;bottom:84px;z-index:9989;background:var(--card,#1c1c22);color:var(--foreground,#f4f4f6);border:1px solid var(--primary,#e5484d);border-radius:999px;padding:10px 16px;font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.4);font-family:inherit}",
     "@media (max-width:560px){.cl-overlay{padding:0}.cl-painel{border-radius:0;min-height:100%}.cl-rodape{flex-direction:column;align-items:stretch}.cl-botoes .cl-btn{flex:1}}",
   ].join("\n");
 
+  /** A janela ainda existe? (a página pode ser fechada a meio de um lote) */
+  function documentoVivo() {
+    try {
+      return !!document && !!document.body;
+    } catch (e) {
+      return false;
+    }
+  }
+
   function garantirEstilo() {
+    if (!documentoVivo()) return;
     if (document.getElementById("cineclip-lote-css")) return;
     var st = document.createElement("style");
     st.id = "cineclip-lote-css";
@@ -2321,6 +3110,73 @@
     input.click();
   }
 
+  /* ----------------------------------------------- atualizar sem engasgar */
+
+  var desenhoAgendado = null;
+  var ultimoDesenho = 0;
+
+  /**
+   * Pedido de atualização do painel. Durante o FFmpeg chegam dezenas de avisos de
+   * progresso por segundo: em vez de reconstruir a lista toda a cada aviso (que é
+   * o que fazia o browser engasgar), junta-os e pinta só o que mudou 5x/segundo.
+   */
+  function agendarDesenho() {
+    if (desenhoAgendado) return;
+    var espera = Math.max(0, INTERVALO_DESENHO - (ambiente.agora() - ultimoDesenho));
+    desenhoAgendado = setTimeout(function () {
+      desenhoAgendado = null;
+      ultimoDesenho = ambiente.agora();
+      atualizarProgresso();
+    }, espera);
+    if (desenhoAgendado && typeof desenhoAgendado.unref === "function") desenhoAgendado.unref();
+  }
+
+  function textoDoPasso(it) {
+    var t = it.passo || "A começar…";
+    if (it.tentativas > 0 && it.estado === "a_processar") t += " · tentativa " + (it.tentativas + 1) + " de " + MAX_TENTATIVAS;
+    if (it.estado === "a_processar" && it.iniciadoEm) t += " · ⏱ " + duracaoLegivel(ambiente.agora() - it.iniciadoEm);
+    return t;
+  }
+
+  /** Só o que muda muitas vezes: barras, textos de progresso, resumo do lote e atalho. */
+  function atualizarProgresso() {
+    if (!documentoVivo()) return;
+    if (raiz && estado.aberto) {
+      estado.itens.forEach(function (it) {
+        var li = raiz.querySelector('.cl-item[data-item="' + it.id + '"]');
+        if (!li) return;
+        var barra = li.querySelector(".cl-barra > div");
+        if (barra) barra.style.width = Math.round((it.progresso || 0) * 100) + "%";
+        var det = li.querySelector('.cl-det[data-papel="passo"]');
+        if (det) det.textContent = textoDoPasso(it);
+      });
+      atualizarBanner();
+    }
+    desenharPilula();
+  }
+
+  function atualizarBanner() {
+    if (!documentoVivo()) return;
+    var alvo = raiz && raiz.querySelector(".cl-lote");
+    if (!alvo) return;
+    var r = resumoDoLote();
+    var texto = alvo.querySelector(".cl-lote-texto");
+    if (texto) texto.textContent = textoDoLote(r);
+    var barra = alvo.querySelector(".cl-lote-barra > div");
+    if (barra) barra.style.width = Math.round(r.fracao * 100) + "%";
+  }
+
+  function textoDoLote(r) {
+    var partes = [];
+    partes.push("📦 Lote: " + r.concluidos + " de " + r.total + " concluídos");
+    if (estado.aCorrer) partes.push(Math.round(r.fracao * 100) + "%");
+    if (r.falta != null) partes.push("faltam ~" + duracaoLegivel(r.falta));
+    else if (!estado.aCorrer && r.decorrido) partes.push("demorou " + duracaoLegivel(r.decorrido));
+    if (r.agendados) partes.push(r.agendados + " agendado" + (r.agendados > 1 ? "s" : ""));
+    if (r.falhados) partes.push(r.falhados + " para rever/erro");
+    return partes.join(" · ");
+  }
+
   function desenharItem(it) {
     var app = ambiente.app();
     var linha = el("div", { className: "cl-linha" }, [
@@ -2331,7 +3187,7 @@
     var partes = [linha];
 
     if (it.estado === "a_processar") {
-      partes.push(el("div", { className: "cl-det", text: it.passo || "A começar…" }));
+      partes.push(el("div", { className: "cl-det", "data-papel": "passo", text: textoDoPasso(it) }));
       partes.push(el("div", { className: "cl-barra" }, [el("div", { style: "width:" + Math.round((it.progresso || 0) * 100) + "%" })]));
     } else if (it.estado === "agendado" && it.resultado) {
       var r = it.resultado;
@@ -2341,20 +3197,27 @@
           text:
             "🎬 " + r.titulo + (r.ano ? " (" + r.ano + ")" : "") +
             " · 📅 " + horarioLegivel(r.horario) +
+            (it.duracaoMs ? " · ⏱ " + duracaoLegivel(it.duracaoMs) : "") +
+            (it.tentativas ? " · 🔁 à " + (it.tentativas + 1) + ".ª" : "") +
             (r.gancho ? " · “" + r.gancho + "”" : ""),
         })
       );
     } else if (it.estado === "erro" || it.estado === "revisar") {
       partes.push(el("div", { className: "cl-det " + it.estado, text: it.erro }));
+      if (it.tentativas > 1 && !it.semFicheiro) {
+        partes.push(el("div", { className: "cl-peso", text: "Tentado " + it.tentativas + " vez" + (it.tentativas > 1 ? "es" : "") + " — repetir mantém o que já foi feito." }));
+      }
     }
 
     var acoes = [];
-    if (!estado.aCorrer || it !== estado.itemAtual) {
-      if (it.estado === "erro" || it.estado === "revisar") {
+    if (!estado.aCorrer || !emTrabalho(it)) {
+      if (it.semFicheiro) {
+        acoes.push(el("button", { type: "button", className: "cl-btn cl-prim cl-mini", disabled: estado.aCorrer || null, onClick: function () { escolherFicheiroParaItem(it); } }, ["Escolher o vídeo"]));
+      } else if (it.estado === "erro" || it.estado === "revisar") {
         if (!it.invalido) {
           acoes.push(el("button", { type: "button", className: "cl-btn cl-sec cl-mini", disabled: estado.aCorrer || null, onClick: function () { repetirItem(it.id); } }, ["Tentar de novo"]));
         }
-        if (app && typeof app.abrirNoEstudio === "function" && !it.invalido) {
+        if (app && typeof app.abrirNoEstudio === "function" && !it.invalido && it.ficheiro) {
           acoes.push(el("button", { type: "button", className: "cl-btn cl-sec cl-mini", disabled: estado.aCorrer || null, onClick: function () { fechar(); app.abrirNoEstudio(it.ficheiro); } }, ["Abrir no Estúdio"]));
         }
       }
@@ -2363,7 +3226,7 @@
       }
     }
     if (acoes.length) partes.push(el("div", { className: "cl-acoes" }, acoes));
-    return el("li", { className: "cl-item", "data-estado": it.estado }, partes);
+    return el("li", { className: "cl-item", "data-estado": it.estado, "data-item": String(it.id) }, partes);
   }
 
   function desenharSecaoCelular() {
@@ -2513,12 +3376,13 @@
   }
 
   function desenhar() {
+    if (!documentoVivo()) return;
     desenharPilula();
     if (!raiz || !estado.aberto) return;
     var app = ambiente.app();
     var conta = (estado.aCorrer && estado.conta) || (app && app.account) || null;
     var falta = faltaConfigurar();
-    var nPend = contar("pendente");
+    var nPend = porFazer().length;
 
     var zona = el("div", {
       className: "cl-zona",
@@ -2548,14 +3412,25 @@
       el("span", { text: "Vários de uma vez · mp4, mov, mkv, webm ou avi · até 300 MB cada" }),
     ]);
 
-    var corpo = [
+    var corpo = [];
+    if (estado.itens.length) {
+      var r = resumoDoLote();
+      corpo.push(
+        el("div", { className: "cl-lote" }, [
+          el("div", { className: "cl-lote-texto", text: textoDoLote(r) }),
+          el("div", { className: "cl-lote-barra" }, [el("div", { style: "width:" + Math.round(r.fracao * 100) + "%" })]),
+        ])
+      );
+    }
+    corpo.push(
       el("p", {
         className: "cl-sub",
         text:
           "Para cada vídeo o app usa até 90 segundos, identifica o filme, cria o gancho e a legenda com IA e agenda o Reel no próximo horário livre" +
-          (conta && conta.name ? " de " + conta.name : "") + ". Um vídeo de cada vez. Podes fechar este painel e ver o Agendador enquanto isso, mas não processes outro vídeo no Estúdio até o lote acabar (o FFmpeg do navegador é só um).",
-      }),
-    ];
+          (conta && conta.name ? " de " + conta.name : "") + ". Enquanto o FFmpeg processa um vídeo, a IA do seguinte já vai avançando — podes fechar este painel e ver o Agendador, mas não processes outro vídeo no Estúdio até o lote acabar (o FFmpeg do navegador é só um)." +
+          (estado.retomado ? " Este lote foi retomado: os vídeos já identificados vão direto ao FFmpeg." : ""),
+      })
+    );
     if (falta && !estado.aCorrer) {
       var avisoFalta = el("div", { className: "cl-aviso erro" }, [falta]);
       if (app && typeof app.abrirConfiguracoes === "function" && /configura/.test(falta)) {
@@ -2606,6 +3481,16 @@
       el("span", { text: "Agendar mesmo quando a IA tem pouca certeza do filme (abaixo de " + CONFIANCA_MINIMA + "%). Desligado, esses vídeos ficam para rever." }),
     ]));
 
+    corpo.push(
+      opcaoSimples("adiantar", "Adiantar a IA e a leitura do vídeo seguinte enquanto o FFmpeg processa o atual (o lote acaba mais cedo).", null)
+    );
+    corpo.push(
+      opcaoSimples("guardarFila", "Guardar a fila (com os vídeos) para continuar o lote depois de recarregar a página.", function () {
+        if (estado.opcoes.guardarFila) agendarGuardar();
+        else limparFilaGuardada();
+      })
+    );
+
     corpo.push(desenharSecaoCelular());
 
     if (estado.itens.length) {
@@ -2622,6 +3507,13 @@
     }
 
     var botoes = [];
+    var falhados = itensFalhados();
+    if (falhados.length && !estado.aCorrer) {
+      botoes.push(el("button", { type: "button", className: "cl-btn cl-sec", onClick: repetirFalhados }, ["🔁 Tentar de novo os que falharam (" + falhados.length + ")"]));
+    }
+    if ((contar("erro") || contar("revisar")) && !estado.aCorrer) {
+      botoes.push(el("button", { type: "button", className: "cl-btn cl-sec", onClick: limparErros }, ["Limpar erros"]));
+    }
     if (contar("agendado") && !estado.aCorrer) {
       botoes.push(el("button", { type: "button", className: "cl-btn cl-sec", onClick: limparConcluidos }, ["Limpar agendados"]));
     }
@@ -2651,13 +3543,35 @@
       ]),
     ]);
 
+    // Quem está a escrever um link na caixa não pode perder o cursor só porque
+    // um vídeo mudou de estado.
+    var foco = null;
+    try {
+      var ativo = document.activeElement;
+      if (ativo && raiz.contains(ativo)) {
+        if (ativo.tagName === "TEXTAREA") foco = { caixa: true, inicio: ativo.selectionStart, fim: ativo.selectionEnd };
+        else if (ativo.getAttribute && ativo.getAttribute("aria-label")) foco = { etiqueta: ativo.getAttribute("aria-label") };
+      }
+    } catch (e) {}
+
     var rolagem = raiz.scrollTop;
     raiz.replaceChildren(painel);
     raiz.scrollTop = rolagem;
+    if (foco) {
+      try {
+        var novo = foco.caixa ? raiz.querySelector("textarea.cl-texto") : raiz.querySelector('[aria-label="' + foco.etiqueta + '"]');
+        if (novo) {
+          novo.focus();
+          if (foco.caixa && typeof novo.setSelectionRange === "function") novo.setSelectionRange(foco.inicio, foco.fim);
+        }
+      } catch (e) {}
+    }
   }
 
   function desenharPilula() {
-    var mostrar = estado.aCorrer && !estado.aberto;
+    if (!documentoVivo()) return;
+    var aEspera = porFazer().length;
+    var mostrar = (estado.aCorrer && !estado.aberto) || (estado.retomado && !estado.aberto && aEspera > 0);
     if (!mostrar) {
       if (pilula) {
         pilula.remove();
@@ -2669,11 +3583,16 @@
       pilula = el("button", { type: "button", className: "cl-pilula", onClick: function () { abrir(); } });
       document.body.appendChild(pilula);
     }
+    if (!estado.aCorrer) {
+      pilula.textContent = "📦 Lote retomado: " + aEspera + " vídeo" + (aEspera > 1 ? "s" : "") + " — abrir";
+      return;
+    }
+    var r = resumoDoLote();
     var feitos = estado.itens.filter(function (it) {
       return it.estado !== "pendente" && it.estado !== "a_processar";
     }).length;
     var total = feitos + contar("pendente") + contar("a_processar");
-    pilula.textContent = "📦 Upload em massa: " + Math.min(total, feitos + 1) + "/" + total + " — abrir";
+    pilula.textContent = "📦 Upload em massa: " + Math.min(total, feitos + 1) + "/" + total + " · " + Math.round(r.fracao * 100) + "% — abrir";
   }
 
   function aoTeclar(e) {
@@ -2691,6 +3610,9 @@
     if (!raiz.isConnected) document.body.appendChild(raiz);
     estado.aberto = true;
     atualizarBotaoColar();
+    restaurarFila().then(function (voltaram) {
+      if (voltaram) agendarGuardar();
+    });
     verificarServidor().then(function () {
       if (estado.aberto) desenhar();
     });
@@ -2706,6 +3628,12 @@
     if (raiz && raiz.isConnected) raiz.remove();
     desenhar();
   }
+
+  window.addEventListener("pagehide", function () {
+    try {
+      if (estado.aCorrer || porFazer().length) guardarDadosDaFila();
+    } catch (e) {}
+  });
 
   window.addEventListener("beforeunload", function (e) {
     if (!estado.aCorrer) return;
@@ -2747,10 +3675,33 @@
       lerDuracaoPorAudio: lerDuracaoPorAudio,
       iniciar: iniciar,
       parar: parar,
-      processarItem: processarItem,
+      prepararItem: prepararItem,
+      finalizarItem: finalizarItem,
+      correrItem: correrItem,
+      adiantarProximo: adiantarProximo,
+      proximoDaFila: proximoDaFila,
+      porFazer: porFazer,
+      repetirItem: repetirItem,
+      repetirFalhados: repetirFalhados,
+      limparErros: limparErros,
+      limparConcluidos: limparConcluidos,
+      removerItem: removerItem,
+      resumoDoLote: resumoDoLote,
+      progressoDoItem: progressoDoItem,
+      duracaoLegivel: duracaoLegivel,
+      semRepeticao: semRepeticao,
+      textoDoLote: textoDoLote,
+      restaurarFila: restaurarFila,
+      guardarDadosDaFila: guardarDadosDaFila,
+      limparFilaGuardada: limparFilaGuardada,
+      agendarDesenho: agendarDesenho,
+      atualizarProgresso: atualizarProgresso,
+      esquecerItem: esquecerItem,
       faltaConfigurar: faltaConfigurar,
       horarioLegivel: horarioLegivel,
       MAX_SEGUNDOS: MAX_SEGUNDOS,
+      MAX_TENTATIVAS: MAX_TENTATIVAS,
+      INTERVALO_DESENHO: INTERVALO_DESENHO,
       CONFIANCA_MINIMA: CONFIANCA_MINIMA,
     },
   };
