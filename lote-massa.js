@@ -1247,18 +1247,16 @@
       } catch (e) {}
     }
 
-    /* 2. Identificar o filme --------------------------------------------- */
+    /* 2. Identificar o filme (quadros + áudio em paralelo) --------------- */
     definirPasso(item, "A identificar o filme…", 0.1);
     var temGemini = !!String(s.geminiKey || "").trim();
-    var quadros = await comLimite(core.quadros(ficheiro, 0, fim, corte), 90000, "A extração de quadros do vídeo demorou demasiado.");
-    var audio = null;
-    if (temGemini) {
-      try {
-        audio = await comLimite(core.audio(ficheiro, 0, fim), 15000);
-      } catch (e) {
-        audio = null;
-      }
-    }
+    var promQuadros = comLimite(core.quadros(ficheiro, 0, fim, corte), 90000, "A extração de quadros do vídeo demorou demasiado.");
+    var promAudio = temGemini && typeof core.audio === "function"
+      ? comLimite(core.audio(ficheiro, 0, fim), 12000).catch(function () { return null; })
+      : Promise.resolve(null);
+    var parMidia = await Promise.all([promQuadros, promAudio]);
+    var quadros = parMidia[0];
+    var audio = parMidia[1];
     var ia = await comLimite(
       core.identificar(s.nvidiaKey, quadros, s.lang, {
         fileName: ficheiro.name,
@@ -1270,7 +1268,7 @@
       120000,
       "A identificação do filme pela IA demorou demasiado."
     );
-    if (!ia || (!ia.titulo && !(ia.atores && ia.atores.length))) {
+    if (!ia || (!ia.titulo && !ia.titulo_original && !ia._pistaDireta && !(ia.atores && ia.atores.length) && !(ia.alternativas && ia.alternativas.length))) {
       throw erroComTipo("A IA não conseguiu identificar o filme deste clipe.", "identificacao");
     }
     var filme = await comLimite(core.procurarTmdb(s.tmdbKey, ia), 30000, "A pesquisa no TMDB demorou demasiado.");
@@ -1281,13 +1279,7 @@
       );
     }
     var confianca = Number(ia.confianca) || 0;
-    item.resultado = {
-      titulo: filme.title,
-      ano: filme.year,
-      confianca: confianca,
-      tmdbId: filme.tmdbId || (filme.id !== undefined ? filme.kind + ":" + filme.id : undefined),
-      imdbId: filme.imdbId,
-    };
+    item.resultado = { titulo: filme.title, ano: filme.year, confianca: confianca };
     if (confianca < CONFIANCA_MINIMA && !estado.opcoes.agendarComPoucaCerteza) {
       throw erroComTipo(
         'A IA acha que é "' + filme.title + (filme.year ? " (" + filme.year + ")" : "") + '", mas só com ' +
@@ -1376,13 +1368,6 @@
       originalTitle: filme.original,
       year: filme.year,
       poster: filme.poster,
-      /* Identificadores canónicos: com eles o mesmo filme é reconhecido
-         mesmo que o título venha traduzido de outra forma, e dá para ligar
-         à página do filme. */
-      tmdbId: filme.tmdbId || (filme.id !== undefined ? filme.kind + ":" + filme.id : undefined),
-      imdbId: filme.imdbId,
-      kind: filme.kind,
-      chave: filme.chave || (filme.id !== undefined ? filme.kind + "-" + filme.id : undefined),
       hookText: gancho,
       caption: core.limparLegenda(String(legenda)),
       videoBlob: blob,
