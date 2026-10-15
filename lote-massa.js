@@ -186,7 +186,10 @@
       }
     };
     var nome = ler("X-Cineclip-Nome") || "video_importado.mp4";
-    return new File(partes, nome, { type: "video/mp4" });
+    var f = new File(partes, nome, { type: "video/mp4" });
+    var pista = ler("X-Cineclip-Pistas") || ler("X-Cineclip-Titulo") || "";
+    if (pista && !/^corte$/i.test(pista.trim())) f.pistaLink = pista.trim();
+    return f;
   }
 
   /** Links do TikTok/Kwai num texto colado (um por linha, sem repetidos). */
@@ -446,10 +449,11 @@
         audio = null;
       }
     }
+    var dicaLink = String((item && item.dica) || (ficheiro && ficheiro.pistaLink) || "").trim();
     var ia = await core.identificar(s.nvidiaKey, quadros, s.lang, {
       fileName: ficheiro.name,
       metaTitle: tituloMetadados,
-      userHint: "",
+      userHint: dicaLink,
       geminiKey: s.geminiKey,
       audioClip: audio,
     });

@@ -7,7 +7,7 @@
     "dev": "vite --host 0.0.0.0",
     "build": "node tools/build-static.mjs",
     "preview": "vite preview --host 0.0.0.0",
-    "test": "npm run nuvem:test && npm run worker:test && npm run robo:test && node tools/test-nvidia-proxy.mjs && node tools/test-ig-publish.mjs && node tools/test-agendador-publish.mjs && node tools/test-horarios.mjs && node tools/test-lote-massa.mjs && node tools/test-barras-pretas.mjs && node tools/test-importar-link.mjs && node tools/test-compartilhar.mjs && node tools/test-botao-colar.mjs && node tools/test-nuvem-app.mjs && node tools/test-servidor.mjs && node tools/test-build-cache.mjs",
+    "test": "npm run nuvem:test && npm run worker:test && npm run robo:test && node tools/test-nvidia-proxy.mjs && node tools/test-ig-publish.mjs && node tools/test-agendador-publish.mjs && node tools/test-horarios.mjs && node tools/test-lote-massa.mjs && node tools/test-barras-pretas.mjs && node tools/test-importar-link.mjs && node tools/test-compartilhar.mjs && node tools/test-botao-colar.mjs && node tools/test-nuvem-app.mjs && node tools/test-servidor.mjs && node tools/test-build-cache.mjs && node tools/test-vidscio-identificacao.mjs",
     "robo:test": "node tools/test-robo-24h.mjs",
     "build:test": "node tools/test-build-cache.mjs",
     "ig:test": "node tools/test-ig-publish.mjs",
@@ -37,7 +37,8 @@
     "cloudflare:logs": "npx wrangler tail --config cloudflare/wrangler.toml",
     "cloudflare:bucket": "npx wrangler r2 bucket create cineclip-reels",
     "cloudflare:test": "node tools/test-r2-worker.mjs",
-    "horarios:test": "node tools/test-horarios.mjs"
+    "horarios:test": "node tools/test-horarios.mjs",
+    "vidscio:test": "node tools/test-vidscio-identificacao.mjs"
   },
   "dependencies": {
     "@ffmpeg/ffmpeg": "^0.12.10",
