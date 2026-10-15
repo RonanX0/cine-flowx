@@ -1,0 +1,3 @@
+   - "tipo": "movie" para filme ou "tv" para série.
+   - "imdb_id": ID do IMDb no formato "tt1234567" (ex: "tt0111161" para "O Poderoso Chefão"). Escreve-o só se tiveres a certeza; se não souberes, omite o campo.
+

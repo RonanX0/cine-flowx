@@ -1,5 +1,6 @@
 /**
- * Arranca o CineClip (index.html + nuvem-duravel.js + lote-massa.js) num DOM
+ * Arranca o CineClip (index.html + nuvem-duravel.js + lote-massa.js + identificador-rapido.js
+ * + confirmacao-externa.js) num DOM
  * simulado (jsdom) para o servidor usar EXATAMENTE o mesmo código do site:
  *   • window.CineClipCore — identificar o filme, gancho, legenda, TMDB, horários;
  *   • window.CineLote._interno.processarItem — o fluxo do lote (90 s, regra de
@@ -49,6 +50,10 @@ export async function arrancarApp({ site = "https://cine-flowx.vercel.app", raiz
 
   window.eval(fs.readFileSync(path.join(raiz, "nuvem-duravel.js"), "utf8"));
   window.eval(fs.readFileSync(path.join(raiz, "lote-massa.js"), "utf8"));
+  // O identificador rápido tem de estar carregado antes do bundle: sem ele o
+  // app cai na resolução lenta do TMDB (~30 pedidos por filme).
+  window.eval(fs.readFileSync(path.join(raiz, "identificador-rapido.js"), "utf8"));
+  window.eval(fs.readFileSync(path.join(raiz, "confirmacao-externa.js"), "utf8"));
   window.eval(modulo);
 
   const inicio = Date.now();
