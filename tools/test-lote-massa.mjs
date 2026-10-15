@@ -12,6 +12,13 @@
  *           massa" abre o painel, escolher vários ficheiros abre o lote, e um lote
  *           com a IA/FFmpeg falsos grava os Reels na fila verdadeira (IndexedDB) nos
  *           horários livres certos.
+ * Parte C — o motor do lote: a IA do vídeo seguinte corre DURANTE o FFmpeg do atual
+ *           (e em fila indiana com a opção desligada), tentativas automáticas para
+ *           erros passageiros (e nenhuma para os definitivos), parar/continuar sem
+ *           repetir a IA, o painel que não se redesenha a cada aviso do FFmpeg, a
+ *           memória libertada depois de agendar e os botões de repetir/limpar.
+ * Parte D — a fila guardada (IndexedDB): a página nova retoma o lote, o vídeo já
+ *           preparado não volta a passar pela IA e o que foi agendado sai do guardado.
  *
  * Precisa de jsdom e fake-indexeddb (npm install --no-save jsdom fake-indexeddb);
  * sem eles, o teste é saltado.
@@ -423,6 +430,366 @@ check("a legenda é limpa pelo app (sem **)", doLote.every((r) => !r.caption.inc
 check("o vídeo processado fica guardado com o Reel", doLote.every((r) => r.videoBlob && r.videoSize === 50));
 
 dom.window.close();
+
+/* ======================================================================
+   Parte C — o motor do lote: pipeline, tentativas automáticas e retomada
+   ====================================================================== */
+
+console.log("\nC1. O lote adianta a IA do vídeo seguinte enquanto o FFmpeg processa o atual");
+{
+  const dom = novoDom();
+  const { window } = dom;
+  const ordem = [];
+  const fila = [];
+  let soltar = null;
+  const core = {
+    lerMetadados: async () => ({ duration: 60, fields: [] }),
+    detetarBarras: async () => null,
+    quadros: async () => ["q"],
+    audio: async () => null,
+    identificar: async (k, q, l, info) => {
+      ordem.push("identificar:" + info.fileName);
+      return { titulo: "Filme " + info.fileName, confianca: 95, cena: "c", ganchos: ["Gancho 😳"] };
+    },
+    procurarTmdb: async (k, ia) => ({ title: ia.titulo, year: 2024, poster: "", original: "", kind: "movie", genres: [], overview: "" }),
+    gerarGancho: async () => ({ ganchos: ["x"] }),
+    gerarLegenda: async () => "legenda",
+    limparLegenda: (t) => t,
+    proximoHorario: () => "2026-10-14T12:00",
+    guardarNaFila: async (r) => { fila.push(r); },
+    lerFila: async () => fila.slice(),
+    guardarHistorico: () => {},
+    ganchoPadrao: "padrão",
+    cancelarProcessamento: () => {},
+    processar: async (f, i, fim, res, g, prog) => {
+      prog(0.3);
+      ordem.push("processar:comeco:" + f.name);
+      if (f.name === "um.mp4") await new Promise((r) => { soltar = r; });
+      ordem.push("processar:fim:" + f.name);
+      prog(1);
+      return new window.Blob([new Uint8Array(10)], { type: "video/mp4" });
+    },
+  };
+  const lote = window.CineLote._interno;
+  lote.ambiente.core = () => core;
+  lote.ambiente.app = () => ({ settings: { nvidiaKey: "k", tmdbKey: "t", lang: "pt-BR", resolution: "720" }, account: { id: "acc", name: "@c", dailySlots: ["12:00"] } });
+  lote.ambiente.lerVideo = async () => ({ largura: 1920, altura: 1080, duracao: 60 });
+  lote.adicionarFicheiros([ficheiro(window, "um.mp4"), ficheiro(window, "dois.mp4")]);
+  const corrida = lote.iniciar();
+  await waitFor("FFmpeg do primeiro vídeo", () => ordem.includes("processar:comeco:um.mp4"));
+  check("o FFmpeg do 1.º vídeo começou", ordem.includes("processar:comeco:um.mp4"));
+  await waitFor("IA do segundo durante o FFmpeg do primeiro", () => ordem.includes("identificar:dois.mp4"));
+  check(
+    "a IA do 2.º vídeo correu ANTES de o FFmpeg do 1.º acabar",
+    ordem.indexOf("identificar:dois.mp4") >= 0 && ordem.indexOf("processar:fim:um.mp4") === -1,
+    ordem.join(" → ")
+  );
+  if (soltar) soltar();
+  await corrida;
+  check("os 2 Reels ficam agendados", fila.length === 2 && lote.estado.itens.every((it) => it.estado === "agendado"));
+  dom.window.close();
+}
+
+console.log("\nC2. Com «adiantar» desligado, o lote volta a ser em fila indiana");
+{
+  const dom = novoDom();
+  const { window } = dom;
+  const ordem = [];
+  const fila = [];
+  const core = {
+    lerMetadados: async () => ({ duration: 60, fields: [] }),
+    detetarBarras: async () => null,
+    quadros: async () => ["q"],
+    audio: async () => null,
+    identificar: async (k, q, l, info) => {
+      ordem.push("identificar:" + info.fileName);
+      return { titulo: "F " + info.fileName, confianca: 95, cena: "c", ganchos: ["G"] };
+    },
+    procurarTmdb: async (k, ia) => ({ title: ia.titulo, year: 2024, poster: "", original: "", kind: "movie", genres: [], overview: "" }),
+    gerarGancho: async () => ({ ganchos: ["x"] }),
+    gerarLegenda: async () => "legenda",
+    limparLegenda: (t) => t,
+    proximoHorario: () => "2026-10-14T12:00",
+    guardarNaFila: async (r) => { fila.push(r); },
+    lerFila: async () => fila.slice(),
+    guardarHistorico: () => {},
+    ganchoPadrao: "p",
+    cancelarProcessamento: () => {},
+    processar: async (f) => {
+      ordem.push("processar:" + f.name);
+      return new window.Blob([new Uint8Array(10)], { type: "video/mp4" });
+    },
+  };
+  const lote = window.CineLote._interno;
+  lote.estado.opcoes.adiantar = false;
+  lote.ambiente.core = () => core;
+  lote.ambiente.app = () => ({ settings: { nvidiaKey: "k", tmdbKey: "t" }, account: { id: "acc", name: "@c", dailySlots: ["12:00"] } });
+  lote.ambiente.lerVideo = async () => ({ largura: 1920, altura: 1080, duracao: 60 });
+  lote.adicionarFicheiros([ficheiro(window, "um.mp4"), ficheiro(window, "dois.mp4")]);
+  await lote.iniciar();
+  check(
+    "cada vídeo é identificado, processado e só depois se passa ao seguinte",
+    ordem.join(" ") === "identificar:um.mp4 processar:um.mp4 identificar:dois.mp4 processar:dois.mp4",
+    ordem.join(" → ")
+  );
+  dom.window.close();
+}
+
+/** Cenário mínimo com um core controlado pelo teste. */
+function cenarioFino(window, hooks = {}) {
+  const fila = [];
+  const chamadas = { identificar: 0, processar: 0, legenda: 0, identificados: [], capas: 0 };
+  const core = {
+    lerMetadados: async () => ({ duration: 60, fields: [] }),
+    detetarBarras: async () => null,
+    quadros: async () => ["q"],
+    audio: async () => null,
+    identificar: async (k, q, l, info) => {
+      chamadas.identificar++;
+      chamadas.identificados.push(info.fileName);
+      if (hooks.identificar) return hooks.identificar(chamadas.identificar, info);
+      return { titulo: "Filme " + info.fileName, confianca: 95, cena: "c", ganchos: ["Gancho 😳"] };
+    },
+    procurarTmdb: async (k, ia) => {
+      if (hooks.tmdb) return hooks.tmdb(ia);
+      return { title: ia.titulo, year: 2024, poster: "", original: "", kind: "movie", genres: [], overview: "" };
+    },
+    gerarGancho: async () => ({ ganchos: ["x"] }),
+    gerarLegenda: async () => {
+      chamadas.legenda++;
+      return "legenda";
+    },
+    limparLegenda: (t) => t,
+    proximoHorario: () => "2026-10-14T12:00",
+    guardarNaFila: async (r) => { fila.push(r); },
+    lerFila: async () => fila.slice(),
+    guardarHistorico: () => {},
+    ganchoPadrao: "p",
+    cancelarProcessamento: () => {},
+    processar: async (f, i, fim, res, g, prog) => {
+      chamadas.processar++;
+      if (hooks.processar) return hooks.processar(chamadas.processar, f, prog);
+      if (prog) prog(1);
+      return new window.Blob([new Uint8Array(10)], { type: "video/mp4" });
+    },
+  };
+  const lote = window.CineLote._interno;
+  lote.ambiente.core = () => core;
+  lote.ambiente.app = () => ({ settings: { nvidiaKey: "k", tmdbKey: "t", lang: "pt-BR", resolution: "720" }, account: { id: "acc", name: "@c", dailySlots: ["12:00"] } });
+  lote.ambiente.lerVideo = async () => ({ largura: 1920, altura: 1080, duracao: 60 });
+  return { lote, core, fila, chamadas };
+}
+
+console.log("\nC3. Erro passageiro (IA a 503) → repete sozinho e agenda");
+{
+  const dom = novoDom();
+  const c = cenarioFino(dom.window, {
+    identificar: (n, info) => {
+      if (n === 1) throw new Error("A NVIDIA devolveu 503 (serviço indisponível).");
+      return { titulo: "Filme " + info.fileName, confianca: 95, cena: "c", ganchos: ["Gancho 😳"] };
+    },
+  });
+  c.lote.adicionarFicheiros([ficheiro(dom.window, "um.mp4")]);
+  dom.window.CineLote.abrir();
+  const corrida = c.lote.iniciar();
+  await waitFor("a espera entre tentativas aparecer no painel", () => /nova tentativa em/.test(c.lote.estado.itens[0].passo || ""), 4000);
+  check("o painel explica que vai repetir e quanto falta", /nova tentativa em \d+ s \(2 de 3\)/.test(c.lote.estado.itens[0].passo), c.lote.estado.itens[0].passo);
+  check("não foi para erro", c.lote.estado.itens[0].estado === "a_processar");
+  await corrida;
+  check("tentou 2 vezes e agendou", c.chamadas.identificar === 2 && c.fila.length === 1 && c.lote.estado.itens[0].estado === "agendado", `identificar=${c.chamadas.identificar}`);
+  check("o painel diz que foi à 2.ª tentativa", /à 2\.ª/.test(dom.window.document.querySelector(".cl-item").textContent), dom.window.document.querySelector(".cl-item").textContent);
+  dom.window.close();
+}
+
+console.log("\nC4. Erro definitivo (não está no TMDB) → não gasta tentativas");
+{
+  const dom = novoDom();
+  const c = cenarioFino(dom.window, { tmdb: () => null });
+  c.lote.adicionarFicheiros([ficheiro(dom.window, "um.mp4")]);
+  await c.lote.iniciar();
+  check("só tentou uma vez", c.chamadas.identificar === 1 && c.chamadas.processar === 0);
+  check("fica com erro e explica porquê", c.lote.estado.itens[0].estado === "erro" && /no TMDB/.test(c.lote.estado.itens[0].erro), c.lote.estado.itens[0].erro);
+  dom.window.close();
+}
+
+console.log("\nC5. Parar a meio e voltar a começar não repete a IA nem o gancho");
+{
+  const dom = novoDom();
+  const { window } = dom;
+  const c = cenario(dom.window);
+  c.lote.adicionarFicheiros([ficheiro(window, "parar.mp4")]);
+  const primeira = c.lote.iniciar();
+  await waitFor("FFmpeg a correr", () => c.chamadas.processar.length === 1);
+  c.lote.parar();
+  await primeira;
+  const item = c.lote.estado.itens[0];
+  check("o vídeo volta para a fila com erro limpo", item.estado === "pendente" && item.erro === "");
+  check("o trabalho já feito ficou guardado (sem repetir a IA)", c.chamadas.identificar === 1 && !!item.feito && !!item.feito.ia && !!item.feito.legenda);
+
+  const segunda = c.lote.iniciar();
+  await waitFor("FFmpeg outra vez", () => c.chamadas.processar.length === 2);
+  c.liberar();
+  await segunda;
+  check("a IA não voltou a ser chamada", c.chamadas.identificar === 1, `identificar=${c.chamadas.identificar}`);
+  check("o FFmpeg correu outra vez só para o vídeo que faltava", c.chamadas.processar.length === 2);
+  check("o Reel acabou agendado", c.fila.length === 1 && item.estado === "agendado");
+  dom.window.close();
+}
+
+console.log("\nC6. O painel não é redesenhado a cada aviso do FFmpeg (mas a barra acompanha)");
+{
+  const dom = novoDom();
+  const { window } = dom;
+  const c = cenario(dom.window);
+  window.CineLote.abrir();
+  c.lote.adicionarFicheiros([ficheiro(window, "parar.mp4")]);
+  const corrida = c.lote.iniciar();
+  await waitFor("FFmpeg a correr", () => c.chamadas.processar.length === 1);
+  const lista = window.document.querySelector(".cl-lista");
+  const antesDesenhar = window.document.querySelectorAll(".cl-painel *").length;
+  for (let i = 1; i <= 40; i++) c.lote.atualizarProgresso();
+  await sleep(300);
+  check("a lista do painel é a mesma (não foi reconstruída)", window.document.querySelector(".cl-lista") === lista);
+  check("o painel não cresceu nem se repetiu", window.document.querySelectorAll(".cl-painel *").length === antesDesenhar);
+  const barra = window.document.querySelector(".cl-item .cl-barra > div");
+  check("a barra de progresso acompanha", !!barra && parseInt(barra.style.width, 10) >= 70, barra && barra.style.width);
+  const lote = window.document.querySelector(".cl-lote");
+  check("há um resumo do lote com a percentagem", !!lote && /Lote: \d+ de \d+/.test(lote.textContent) && /%/.test(lote.textContent), lote && lote.textContent);
+  c.liberar();
+  await corrida;
+  check("no fim o resumo mostra o tempo que demorou", /demorou|agendado/.test(window.document.querySelector(".cl-lote").textContent), window.document.querySelector(".cl-lote").textContent);
+  dom.window.close();
+}
+
+console.log("\nC7. Depois de agendado, o vídeo original sai da memória");
+{
+  const dom = novoDom();
+  const c = cenarioFino(dom.window);
+  c.lote.adicionarFicheiros([ficheiro(dom.window, "um.mp4")]);
+  await c.lote.iniciar();
+  const it = c.lote.estado.itens[0];
+  check("o item agendado já não guarda o ficheiro nem os dados da IA", it.estado === "agendado" && !it.ficheiro && !it.feito);
+  check("o Reel na fila continua com o vídeo processado", c.fila[0] && c.fila[0].videoBlob && c.fila[0].videoBlob.size === 10);
+  dom.window.close();
+}
+
+console.log("\nC8. «Tentar de novo os que falharam» e «Limpar erros»");
+{
+  const dom = novoDom();
+  const { window } = dom;
+  const c = cenarioFino(dom.window, { tmdb: () => null });
+  c.lote.adicionarFicheiros([ficheiro(window, "um.mp4"), ficheiro(window, "dois.mp4")]);
+  dom.window.CineLote.abrir();
+  await c.lote.iniciar();
+  const antesErro = window.document.querySelectorAll(".cl-item[data-estado=erro]").length;
+  check("os 2 ficam com erro", antesErro === 2, `${antesErro}`);
+  const botao = [...window.document.querySelectorAll("button")].find((b) => /Tentar de novo os que falharam \(2\)/.test(b.textContent));
+  check("aparece o botão para repetir todos", !!botao);
+  const botoesLimpar = [...window.document.querySelectorAll("button")].find((b) => b.textContent === "Limpar erros");
+  check("aparece o botão para limpar os erros", !!botoesLimpar);
+  botoesLimpar.click();
+  check("limpar erros esvazia a lista", c.lote.estado.itens.length === 0 && !window.document.querySelector(".cl-item"));
+  dom.window.close();
+}
+
+console.log("\nC9. Escrever um link na caixa não perde o cursor quando o painel se redesenha");
+{
+  const dom = novoDom();
+  const { window } = dom;
+  const c = cenario(dom.window);
+  window.CineLote.abrir();
+  const area = window.document.querySelector("textarea.cl-texto");
+  area.value = "https://vm.tiktok.com/ZMabc/";
+  area.dispatchEvent(new window.Event("input"));
+  area.focus();
+  area.setSelectionRange(5, 5);
+  c.lote.adicionarFicheiros([ficheiro(window, "longo.mp4")]); // redesenha o painel
+  const nova = window.document.querySelector("textarea.cl-texto");
+  check("a caixa dos links mantém o texto", nova.value === "https://vm.tiktok.com/ZMabc/", nova.value);
+  check("e o cursor volta onde estava", window.document.activeElement === nova, window.document.activeElement && window.document.activeElement.tagName);
+  dom.window.close();
+}
+
+/* ======================================================================
+   Parte D — a fila guardada: o lote sobrevive a um recarregamento
+   ====================================================================== */
+
+function novoDomBanco() {
+  const dom = new JSDOM("<!doctype html><html><head></head><body></body></html>", {
+    url: "http://localhost/",
+    runScripts: "outside-only",
+    pretendToBeVisual: true,
+  });
+  dom.window.URL.createObjectURL = () => "blob:stub";
+  dom.window.URL.revokeObjectURL = () => {};
+  dom.window.indexedDB = fakeIndexedDB;
+  dom.window.IDBKeyRange = IDBKeyRange;
+  dom.window.eval(LOTE);
+  return dom;
+}
+
+console.log("\nD1. Guardar a fila e retomá-la noutra página (sem repetir a IA)");
+{
+  const dom1 = novoDomBanco();
+  const c1 = cenarioFino(dom1.window);
+  await c1.lote.limparFilaGuardada();
+  c1.lote.adicionarFicheiros([ficheiro(dom1.window, "um.mp4"), ficheiro(dom1.window, "dois.mp4")]);
+  // Prepara (identifica, gancho, legenda) mas não agenda: é o que fica guardado.
+  await c1.lote.prepararItem(c1.lote.estado.itens[0]);
+  await c1.lote.guardarDadosDaFila();
+  check("o vídeo já preparado fica guardado com o que estava feito", !!c1.lote.estado.itens[0].feito && !!c1.lote.estado.itens[0].feito.ia);
+  dom1.window.close();
+
+  const dom2 = novoDomBanco();
+  const c2 = cenarioFino(dom2.window);
+  dom2.window.CineLote.abrir();
+  const voltaram = await c2.lote.restaurarFila();
+  check("a página nova retoma os 2 vídeos", voltaram === 2, `voltaram=${voltaram}`);
+  check("o filme identificado vem no lote", c2.lote.estado.itens[0].resultado && c2.lote.estado.itens[0].resultado.titulo === "Filme um.mp4");
+  check("e o gancho também", c2.lote.estado.itens[0].feito && c2.lote.estado.itens[0].feito.gancho === "Gancho 😳");
+  check("o painel avisa que retomou o lote", /Retomei 2 vídeos/.test(dom2.window.document.querySelector(".cl-aviso").textContent), dom2.window.document.querySelector(".cl-aviso").textContent);
+  const temFicheiro = !!c2.lote.estado.itens[0].ficheiro;
+  if (temFicheiro) {
+    await c2.lote.iniciar();
+    check(
+      "continuar identificou só o vídeo que faltava (não repetiu a IA do que já estava preparado)",
+      c2.chamadas.identificados.join(",") === "dois.mp4",
+      c2.chamadas.identificados.join(",")
+    );
+    check("a legenda do primeiro também não foi pedida outra vez", c2.chamadas.legenda === 1, `legendas=${c2.chamadas.legenda}`);
+    check("os 2 Reels ficam agendados", c2.fila.length === 2, `fila=${c2.fila.length}`);
+  } else {
+    check("sem o vídeo guardado, o item pede para escolher outra vez", c2.lote.estado.itens[0].semFicheiro === true);
+    c2.lote.estado.itens[0].ficheiro = ficheiro(dom2.window, "um.mp4");
+    c2.lote.estado.itens[0].semFicheiro = false;
+    c2.lote.estado.itens[0].estado = "pendente";
+    await c2.lote.iniciar();
+    check("depois de escolher, processa sem repetir a IA", c2.chamadas.identificados.join(",") === "dois.mp4" && c2.fila.length === 2, c2.chamadas.identificados.join(","));
+  }
+  await c2.lote.guardarDadosDaFila();
+  const restos = await c2.lote.restaurarFila();
+  check("os vídeos agendados saem do guardado", restos === 0, `restos=${restos}`);
+  await c2.lote.limparFilaGuardada();
+  dom2.window.close();
+}
+
+console.log("\nD2. Desligar «guardar a fila» limpa o que estava guardado");
+{
+  const dom = novoDomBanco();
+  const c = cenarioFino(dom.window);
+  await c.lote.limparFilaGuardada();
+  c.lote.adicionarFicheiros([ficheiro(dom.window, "um.mp4")]);
+  await c.lote.guardarDadosDaFila();
+  const antes = await c.lote.restaurarFila();
+  check("com a fila em memória não restaura nada", antes === 0);
+  await c.lote.limparFilaGuardada();
+  const dom2 = novoDomBanco();
+  const c2 = cenarioFino(dom2.window);
+  const depois = await c2.lote.restaurarFila();
+  check("depois de limpar, a página nova não tem nada para retomar", depois === 0);
+  dom.window.close();
+  dom2.window.close();
+}
 
 console.log("\n─────────────────────────────────────────────");
 if (fail) {

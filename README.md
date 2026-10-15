@@ -46,15 +46,54 @@ npm run preview
 No Estúdio, o botão **📦 Upload em massa** (ou escolher/arrastar vários vídeos de uma vez)
 abre um painel onde cada vídeo passa sozinho pelo fluxo todo: usa **até 90 s** do início,
 identifica o filme com a IA + TMDB, cria o **gancho** e a **legenda** com IA, processa em 9:16
-e agenda o Reel no **próximo horário livre** da conta ativa. Os vídeos são tratados um de cada
-vez; o painel pode ser fechado (fica um atalho no canto) e o botão **Parar** interrompe o lote.
+e agenda o Reel no **próximo horário livre** da conta ativa. O painel pode ser fechado (fica um
+atalho no canto) e o botão **Parar** interrompe o lote.
+
+**Como o lote trabalha (e porque é mais rápido).** Cada vídeo passa por duas fases:
+
+| fase | o que faz | onde corre |
+|------|-----------|------------|
+| **preparar** | ler o vídeo, identificar o filme (IA + TMDB), gancho e legenda | rede + `<video>` |
+| **finalizar** | FFmpeg 9:16 com metadados limpos e entrada na fila | FFmpeg (um de cada vez) |
+
+O FFmpeg do navegador só processa um vídeo de cada vez, mas não precisa de bloquear o resto:
+enquanto ele trabalha no vídeo atual, o lote **já vai preparando o seguinte** (IA, leitura e
+legenda). Em vez de somar os tempos, o vídeo passa a custar o **maior** dos dois — numa lista
+de 10 clipes isso é a diferença entre quase meia hora e alguns minutos. Podes desligar com
+*Adiantar a IA e a leitura do vídeo seguinte*.
+
+Cada fase fica gravada assim que termina. Isso dá três coisas:
+
+- **Repetir é barato.** *Tentar de novo* (e *🔁 Tentar de novo os que falharam (n)*, que põe
+  todos de volta na fila) continua a partir do último passo feito: não volta a chamar a IA se
+  o filme já foi identificado nem a processar de novo se já está pronto.
+- **Parar é parar.** O botão **Parar** devolve o vídeo à fila com o trabalho feito guardado —
+  voltar a começar não recomeça do zero. Se estiver a meio do FFmpeg, o vídeo é interrompido
+  na hora (se estiver na IA, deixa-a acabar).
+- **Recarregar não perde o lote.** A fila — vídeos incluídos — fica guardada no IndexedDB e,
+  ao voltar, o painel diz *“Retomei N vídeos do lote anterior”* (aparece o atalho no canto) e
+  o **Começar** segue de onde parou. Se um vídeo não tiver ficado guardado (grande de mais,
+  ou o browser não deixa), o item fica com o botão *Escolher o vídeo* e mantém o que já foi
+  feito dele. Desliga-se em *Guardar a fila (com os vídeos)…*.
+
+**Quando algo falha.** Erros passageiros (rede, IA a 429/500/503, tempo esgotado) repetem-se
+sozinhos **até 3 tentativas**, com espera entre elas e o motivo à vista no painel
+(“⚠️ A rede — nova tentativa em 2 s (2 de 3)…”). Erros definitivos (H.265, formato, filme
+desconhecido, pouca certeza) não gastam tentativas.
+
+**O que vês.** Barra de cada vídeo, fase atual com o tempo do vídeo (⏱), resumo do lote com
+percentagem e **tempo que falta estimado**, quantos já foram agendados e quantos ficaram para
+rever/erro. O painel só redesenha o que muda (5x/segundo no máximo) — durante o lote o
+browser continua utilizável e dá para escrever na caixa dos links sem perder o cursor.
 
 No Estúdio, **Gerar gancho pelo vídeo (IA)** propõe até três ganchos curtos e ligados à cena.
 A resposta é validada como texto de uma linha (até 64 caracteres); sugestões vazias, repetidas
 ou genéricas não substituem o que já está escrito no campo.
 
 - Se a IA tiver menos de 65 % de certeza do filme, o vídeo **não é agendado** e fica para
-  rever (*Abrir no Estúdio*), a não ser que ligues *Agendar mesmo com pouca certeza*.
+  rever (*Abrir no Estúdio*), a não ser que ligues *Agendar mesmo com pouca certeza* (a
+  verificação é feita em cada tentativa: ligar a opção e repetir agenda sem gastar outra vez
+  a IA).
 - Vídeos em **H.265/HEVC** (comuns nos downloads do TikTok) dão erro claro: o navegador não
   consegue ler a imagem. Converte-os para H.264 antes.
 - Precisa das chaves NVIDIA ou Gemini e TMDB nas configurações.

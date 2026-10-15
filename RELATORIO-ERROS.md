@@ -295,3 +295,31 @@ cena com outro filme famoso do mesmo ator ou alucinava obras incorretas.
 limpeza de consultas, filtros de atores, pontuação com vitória do filme correto sobre
 filme alheio do mesmo ator e integridade do bundle). Integrado ao `npm test`.
 
+## 10. 🟠 Processar filmes em lote estava "muito ruim" (2026-10-15)
+
+**Como se manifestava.** O upload em massa (`lote-massa.js`) fazia tudo em fila indiana:
+lia o vídeo → IA/TMDB → gancho → **FFmpeg** → legenda → fila, e só depois começava o vídeo
+seguinte. Como o FFmpeg do navegador é um só (`_ffSerial` no bundle), a espera era a **soma**
+dos tempos: num lote de 10 clipes, dezenas de minutos com o separador aberto — e qualquer
+falha passageira (rede, IA a 429/503, tempo esgotado) matava o vídeo na primeira tentativa.
+Fechar a página, recarregar ou carregar em **Parar** perdia tudo o que já estava feito.
+
+**Correções aplicadas em `lote-massa.js`** (sem tocar no bundle nem nos patches):
+
+| # | O que mudou | Onde |
+|---|-------------|------|
+| 1 | **Motor em duas fases com adiantamento**: `prepararItem` (ler, IA+TMDB, gancho, legenda) e `finalizarItem` (FFmpeg + fila). Enquanto o FFmpeg processa o vídeo atual, `adiantarProximo()` já prepara o seguinte. Cada vídeo passa a custar o *maior* dos dois tempos em vez da soma. Opção *Adiantar a IA…* para desligar. | `prepararItemAgora`, `finalizarItem`, `correrItem`, `adiantarProximo`, `prepararItem` |
+| 2 | **Tentativas automáticas**: erros passageiros (rede, 429/500/503, tempo esgotado) repetem-se até **3 tentativas** com espera (1,5 s / 5 s) e o motivo no painel; erros definitivos (H.265, formato, tamanho, filme desconhecido, pouca certeza) não gastam tentativas. | `semRepeticao`, `motivoDaEspera`, `esperar` |
+| 3 | **Retomada por fases (`item.feito`)**: cada fase fica gravada em `item.feito`. *Tentar de novo*, o botão Parar e um recarregamento continuam do último passo feito — sem repetir a IA, o gancho, a legenda ou o FFmpeg já concluídos. | `prepararItemAgora`, `repetirItem`, `repetirFalhados` |
+| 4 | **Parar é parar**: a meio do FFmpeg o vídeo é interrompido e volta à fila com o trabalho guardado; se estiver na IA, deixa-a acabar e não entra no FFmpeg. | `parar`, `correrItem` |
+| 5 | **Fila guardada no IndexedDB**: o estado da fila e os vídeos originais (até 900 MB, escrito uma vez por item) ficam em `cineclip.lote`; ao abrir, a página retoma o lote com *“Retomei N vídeos…”* e um atalho no canto. Item sem vídeo guardado ganha o botão *Escolher o vídeo* e mantém o que já estava feito. Desligável nas opções. | `comBanco`, `guardarDadosDaFila`, `restaurarFila`, `esquecerItem` |
+| 6 | **Painel que não engasga o browser**: o progresso do FFmpeg (dezenas de avisos por segundo) deixou de reconstruir a lista inteira — passa a juntar avisos e a pintar só barras/textos 5x/segundo. O cursor da caixa dos links sobrevive aos redesenhos. | `agendarDesenho`, `atualizarProgresso`, `desenhar` |
+| 7 | **Progresso a sério**: resumo do lote com percentagem e **tempo que falta estimado**, tempo por vídeo (⏱), tentativas, botões *🔁 Tentar de novo os que falharam (n)* e *Limpar erros*. | `resumoDoLote`, `duracaoLegivel`, `textoDoLote`, `desenharItem` |
+| 8 | **Memória**: um item agendado larga o vídeo original e os dados da IA (`libertarItem`) — o Reel na fila continua com o vídeo processado. | `libertarItem` |
+
+**Testes.** `tools/test-lote-massa.mjs` passou de 61 para **100 verificações** (as 61 antigas
+continuam a passar). As novas cobrem, com o FFmpeg/IA falsos: a IA do 2.º vídeo a correr durante
+o FFmpeg do 1.º (e a fila indiana com a opção desligada), o 503 repetido sozinho, o erro
+definitivo sem gastar tentativas, parar+continuar sem repetir a IA, a lista do painel que não é
+reconstruída, a memória libertada, os botões de repetir/limpar e — com IndexedDB falso — a
+retomada do lote numa página nova sem voltar a chamar a IA do vídeo já preparado.
