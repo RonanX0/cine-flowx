@@ -1,0 +1,1 @@
+generationConfig:{temperature:c?.1:.55,maxOutputTokens:Math.max(maxTok,4096),...(i?{}:{responseMimeType:"application/json"})}};i&&(p.tools=[{googleSearch:{}}]);
