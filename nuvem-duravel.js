@@ -530,13 +530,20 @@
         if (vigia) clearTimeout(vigia);
         vigia = null;
       }
+      var hiddenRearms = 0;
       function vigiar() {
         parar();
         if (enviado) return;
+        var waitMs = (typeof document !== "undefined" && document.hidden) ? Math.max(stallMs * 3, 180000) : stallMs;
         vigia = setTimeout(function () {
           if (enviado) return;
+          if (typeof document !== "undefined" && document.hidden && hiddenRearms < 2) {
+            hiddenRearms++;
+            vigiar();
+            return;
+          }
           parou = new Error(
-            "O envio parou: nenhum dado saiu em " + Math.round(stallMs / 1000) +
+            "O envio parou: nenhum dado saiu em " + Math.round(waitMs / 1000) +
               " s. A internet caiu ou está muito lenta — a tentar outra vez."
           );
           parou.code = "stalled";
@@ -544,7 +551,7 @@
           try {
             xhr.abort();
           } catch (e) {}
-        }, stallMs);
+        }, waitMs);
       }
       xhr.upload.onprogress = function (ev) {
         if (ev.lengthComputable && ev.loaded >= ev.total) enviado = true;

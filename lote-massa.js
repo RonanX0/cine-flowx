@@ -39,17 +39,44 @@
   // Devolve uma string hex (ou null se não for possível).
   function _carregarImagem(dataUrl) {
     return new Promise(function (resolve, reject) {
+      var terminado = false;
+      var timer = setTimeout(function () {
+        if (terminado) return;
+        terminado = true;
+        reject(new Error("timeout"));
+      }, 2500);
       try {
         var img = new Image();
-        img.onload = function () { resolve(img); };
-        img.onerror = function () { reject(new Error("img")); };
+        img.onload = function () {
+          if (terminado) return;
+          terminado = true;
+          clearTimeout(timer);
+          resolve(img);
+        };
+        img.onerror = function () {
+          if (terminado) return;
+          terminado = true;
+          clearTimeout(timer);
+          reject(new Error("img"));
+        };
         img.src = dataUrl;
-      } catch (e) { reject(e); }
+      } catch (e) {
+        if (!terminado) {
+          terminado = true;
+          clearTimeout(timer);
+          reject(e);
+        }
+      }
     });
   }
 
   async function hashPerceptualVideo(quadros) {
     try {
+      // Em ambientes simulados (jsdom no servidor da nuvem ou testes) new Image()
+      // não decodifica JPEGs nem dispara onload: salta logo sem bloquear o servidor.
+      if (typeof window === "undefined" || !window.navigator || /jsdom/i.test(String(window.navigator.userAgent || ""))) {
+        return null;
+      }
       // quadros[0] é a colagem (collage); os restantes são frames individuais.
       var frames = (quadros || []).slice(1);
       if (frames.length < 2) return null; // frames reais são >= 6; placeholder (testes) não cacheia
@@ -221,17 +248,23 @@
       }, 20000);
       video.preload = "metadata";
       video.muted = true;
-      video.onloadedmetadata = function () {
+      video.playsInline = true;
+      var pronto = function () {
         fim(null, {
           largura: video.videoWidth || 0,
           altura: video.videoHeight || 0,
           duracao: Number.isFinite(video.duration) ? video.duration : 0,
         });
       };
+      video.onloadedmetadata = pronto;
+      video.onloadeddata = pronto;
       video.onerror = function () {
         fim(new Error("O navegador não consegue abrir este vídeo."));
       };
       video.src = url;
+      try {
+        video.load();
+      } catch (e) {}
     });
   }
 
@@ -496,30 +529,49 @@
 
     /* 1. Ler o vídeo ------------------------------------------------------ */
     definirPasso(item, "A ler o vídeo…", 0.02);
-    var info = await ambiente.lerVideo(ficheiro);
-    if (!info.largura || !info.altura) {
-      throw erroComTipo(
-        "O navegador abre o som mas não a imagem deste vídeo (codec H.265/HEVC, comum em vídeos baixados do TikTok). Converte-o para H.264 e volta a enviar.",
-        "codec"
-      );
-    }
     var duracao = 0;
     var tituloMetadados = "";
     var todosMetadados = "";
+    var meta = null;
     try {
-      var meta = await core.lerMetadados(ficheiro);
+      meta = await core.lerMetadados(ficheiro);
       duracao = Number(meta && meta.duration) || 0;
       var campos = (meta && meta.fields) || [];
-      // Concatena TODOS os campos de metadados (título, artista, comentário, etc.)
-      // em vez de só o "Título" — mais sinais para a IA identificar o filme.
       todosMetadados = campos.map(function (f) {
-        return f && f.label && f.value ? (f.label + ": " + f.value) : "";
+        if (!f || !f.label || !f.value) return "";
+        if (/^(Encoder|Data)$/i.test(f.label)) return "";
+        return f.label + ": " + f.value;
       }).filter(Boolean).join(" | ");
       var campo = campos.find(function (f) {
         return f && f.label === "Título";
       });
       tituloMetadados = campo ? campo.value : (campos[0] ? campos[0].value : "");
     } catch (e) {}
+
+    var info = null;
+    var erroVideo = null;
+    try {
+      info = await ambiente.lerVideo(ficheiro);
+    } catch (e) {
+      erroVideo = e;
+      // Se a aba estava em segundo plano e o <video> falhou/expirou, usa as dimensões lidas pelo MediaInfo WASM.
+      if (meta && meta.width && meta.height) {
+        info = { largura: Number(meta.width) || 0, altura: Number(meta.height) || 0, duracao: duracao };
+      } else {
+        throw e;
+      }
+    }
+    var codecMeta = String((meta && meta.codec) || "");
+    var ehHevc = /(hevc|h265|hvc1|hev1|bytevc)/i.test(codecMeta);
+    if ((!info.largura || !info.altura) && !ehHevc && meta && meta.width && meta.height) {
+      info = { largura: Number(meta.width) || 0, altura: Number(meta.height) || 0, duracao: info.duracao || duracao };
+    }
+    if (!info.largura || !info.altura) {
+      throw erroComTipo(
+        "O navegador abre o som mas não a imagem deste vídeo (codec H.265/HEVC, comum em vídeos baixados do TikTok). Converte-o para H.264 e volta a enviar.",
+        "codec"
+      );
+    }
     if (!duracao) duracao = Number(info.duracao) || 0;
     if (!duracao) throw erroComTipo("Não consegui ler a duração do vídeo.", "leitura");
     var fim = Math.min(MAX_SEGUNDOS, duracao);
@@ -543,16 +595,20 @@
     var temGemini = !!String(s.geminiKey || "").trim();
     var quadros = await core.quadros(ficheiro, 0, fim, corte);
     // OCR leve dos frames: tenta ler texto embutido (legendas hardcoded, nomes) via
-    // Tesseract.js (CDN). Se falhar (offline/sem suporte), ignora silenciosamente.
+    // Tesseract.js (CDN), com timeout rigoroso e desativado em abas escondidas/jsdom.
     var textoOcr = "";
     try {
-      // Não tentar OCR em ambientes sem rede/DOM real (ex.: jsdom nos testes).
-      if (typeof window === "undefined" || !window.navigator || window.navigator.userAgent.indexOf("jsdom") !== -1) {
+      if (
+        typeof window === "undefined" ||
+        !window.navigator ||
+        /jsdom/i.test(String(window.navigator.userAgent || "")) ||
+        (typeof document !== "undefined" && document.hidden)
+      ) {
         throw new Error("skip");
       }
       if (typeof Tesseract === "undefined") {
         await new Promise(function (resolve, reject) {
-          var timer = setTimeout(function () { reject(new Error("timeout")); }, 4000);
+          var timer = setTimeout(function () { reject(new Error("timeout")); }, 3500);
           var sc = document.createElement("script");
           sc.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
           sc.onload = function () { clearTimeout(timer); resolve(); };
@@ -561,17 +617,22 @@
         });
       }
       if (typeof Tesseract !== "undefined" && Tesseract.recognize) {
-        // Só os frames individuais (ignora a colagem)
-        var framesOcr = (quadros || []).slice(1, 4);
-        for (var oi = 0; oi < framesOcr.length; oi++) {
-          try {
-            var r = await Tesseract.recognize(framesOcr[oi], "por+eng");
-            var t = (r && r.data && r.data.text) ? r.data.text.trim() : "";
-            if (t) textoOcr += (textoOcr ? " " : "") + t;
-          } catch (e) {}
-        }
-        // limpa ruído
-        textoOcr = textoOcr.replace(/\s+/g, " ").trim().slice(0, 500);
+        var framesOcr = (quadros || []).slice(1, 3);
+        var ocrPromessa = (async function () {
+          var acumulado = "";
+          for (var oi = 0; oi < framesOcr.length; oi++) {
+            try {
+              var r = await Tesseract.recognize(framesOcr[oi], "por+eng");
+              var t = (r && r.data && r.data.text) ? r.data.text.trim() : "";
+              if (t) acumulado += (acumulado ? " " : "") + t;
+            } catch (e) {}
+          }
+          return acumulado;
+        })();
+        var ocrLimite = new Promise(function (resolve) {
+          setTimeout(function () { resolve(""); }, 4500);
+        });
+        textoOcr = String((await Promise.race([ocrPromessa, ocrLimite])) || "").replace(/\s+/g, " ").trim().slice(0, 500);
       }
     } catch (e) { textoOcr = ""; }
     var audio = null;
@@ -583,12 +644,10 @@
       }
     }
     var dicaLink = String((item && item.dica) || (ficheiro && ficheiro.pistaLink) || "").trim();
-    // Enriquecer a dica com metadados + OCR (mais sinais para a IA).
-    var dicaEnriquecida = [dicaLink, todosMetadados, textoOcr ? ("Texto no vídeo: " + textoOcr) : "", ficheiro && ficheiro.name ? ("Ficheiro: " + ficheiro.name) : ""].filter(Boolean).join(" · ");
+    // Enriquecer a dica apenas com pistas reais (o fileName já vai em fileName e é limpo pelo motor de IA).
+    var dicaEnriquecida = [dicaLink, todosMetadados, textoOcr ? ("Texto no vídeo: " + textoOcr) : ""].filter(Boolean).join(" · ");
 
-    // Hash perceptual do conteúdo (videohash-like) -> chave de cache. Se já
-    // identificámos este (ou um near-duplicate) antes, reutilizamos o resultado
-    // em vez de voltar a chamar a IA - mais rápido e consistente.
+    // Hash perceptual do conteúdo (videohash-like) -> chave de cache.
     var hashVideo = null;
     try { hashVideo = await hashPerceptualVideo(quadros); } catch (e) { hashVideo = null; }
     var cacheHit = hashVideo ? cacheIdentLer(hashVideo) : null;
@@ -712,6 +771,16 @@
     } catch (e) {}
   }
 
+  /** Mantém a aba ativa no gestor de ciclo de vida do browser (Web Locks API) enquanto o lote corre. */
+  function comTravaDeSegundoPlano(fn) {
+    try {
+      if (typeof navigator !== "undefined" && navigator.locks && typeof navigator.locks.request === "function") {
+        return navigator.locks.request("cineclip_lote_ativo", fn);
+      }
+    } catch (e) {}
+    return fn();
+  }
+
   async function iniciar() {
     if (estado.aCorrer) return;
     var falta = faltaConfigurar();
@@ -732,51 +801,53 @@
     desenhar();
     manterEcraLigado(true);
     var agendadosAntes = contar("agendado");
-    try {
-      var item;
-      while (!estado.pararPedido && (item = pendentes()[0])) {
-        estado.itemAtual = item;
-        item.estado = "a_processar";
-        item.erro = "";
-        desenhar();
-        try {
-          await processarItem(item, estado.conta);
-          item.estado = "agendado";
-          item.passo = "";
-          item.progresso = 1;
-          if (item.caixaId) marcarEntrada(item.caixaId, "feito", { reelId: item.resultado && item.resultado.reelId });
-          pedirSincronizacao();
-        } catch (e) {
-          if (estado.pararPedido && e && e.tipo !== "codec") {
-            item.estado = "pendente";
+    await comTravaDeSegundoPlano(async function () {
+      try {
+        var item;
+        while (!estado.pararPedido && (item = pendentes()[0])) {
+          estado.itemAtual = item;
+          item.estado = "a_processar";
+          item.erro = "";
+          desenhar();
+          try {
+            await processarItem(item, estado.conta);
+            item.estado = "agendado";
             item.passo = "";
-            item.progresso = 0;
-          } else {
-            item.estado = e && e.tipo === "revisar" ? "revisar" : "erro";
-            item.erro = mensagemDeErro(e, "Falha ao processar este vídeo.");
-            item.passo = "";
-            if (item.caixaId) {
-              marcarEntrada(item.caixaId, "erro", { erro: item.erro });
-              pedirSincronizacao();
+            item.progresso = 1;
+            if (item.caixaId) marcarEntrada(item.caixaId, "feito", { reelId: item.resultado && item.resultado.reelId });
+            pedirSincronizacao();
+          } catch (e) {
+            if (estado.pararPedido && e && e.tipo !== "codec") {
+              item.estado = "pendente";
+              item.passo = "";
+              item.progresso = 0;
+            } else {
+              item.estado = e && e.tipo === "revisar" ? "revisar" : "erro";
+              item.erro = mensagemDeErro(e, "Falha ao processar este vídeo.");
+              item.passo = "";
+              if (item.caixaId) {
+                marcarEntrada(item.caixaId, "erro", { erro: item.erro });
+                pedirSincronizacao();
+              }
             }
           }
+          estado.itemAtual = null;
+          desenhar();
         }
+      } finally {
+        estado.aCorrer = false;
         estado.itemAtual = null;
+        var feitos = estado.itens.filter(function (it) {
+          return it.estado === "agendado";
+        }).length;
+        if (estado.pararPedido) avisar("Lote parado. Os vídeos que faltam ficaram na lista.", "info");
+        else if (feitos) avisar("Lote concluído. Os Reels estão no Agendador e vão para a nuvem durável.", "ok");
+        estado.pararPedido = false;
+        manterEcraLigado(false);
         desenhar();
+        avisarFimDoLote(feitos - agendadosAntes);
       }
-    } finally {
-      estado.aCorrer = false;
-      estado.itemAtual = null;
-      var feitos = estado.itens.filter(function (it) {
-        return it.estado === "agendado";
-      }).length;
-      if (estado.pararPedido) avisar("Lote parado. Os vídeos que faltam ficaram na lista.", "info");
-      else if (feitos) avisar("Lote concluído. Os Reels estão no Agendador e vão para a nuvem durável.", "ok");
-      estado.pararPedido = false;
-      manterEcraLigado(false);
-      desenhar();
-      avisarFimDoLote(feitos - agendadosAntes);
-    }
+    });
     await sincronizacao;
   }
 
@@ -798,7 +869,7 @@
   /*
    * Caixa de entrada de links. Cada link que chega pelo menu "Compartilhar" do
    * Android (ou que o celular manda para o PC) fica aqui até virar um Reel:
-   *   { id, url, destino: "aqui" | "pc", aparelho, estado: "pendente" | "feito" | "erro",
+   *   { id, url, destino: "aqui" | "pc" | "nuvem", aparelho, estado: "pendente" | "feito" | "erro",
    *     criadoEm, atualizadoEm, erro?, reelId? }
    * A caixa vive no localStorage e viaja no cofre da nuvem (campo `linksCelular`,
    * patch 31-links-cofre), por isso um link mandado do celular aparece no PC.
@@ -952,7 +1023,11 @@
       return e.estado === "pendente" || (e.atualizadoEm || e.criadoEm || 0) >= limite;
     });
     gravarCaixa(lista);
-    setTimeout(verificarCaixa, 0);
+    setTimeout(function () {
+      desenhar();
+      verificarCaixa();
+      acordarNuvem(false);
+    }, 0);
     return lista;
   }
 
@@ -977,6 +1052,11 @@
   async function verificarCaixa() {
     if (caixaOcupada || estado.links.aImportar) return;
     if (!ambiente.core() || !ambiente.app() || faltaConfigurar()) return;
+    // Se o Estúdio estiver ocupado a processar um vídeo no FFmpeg, aguarda para não colidir ao mudar de aba.
+    if (window.__CineClipBusy) {
+      setTimeout(verificarCaixa, 3000);
+      return;
+    }
     var entradas = entradasParaMim();
     if (!entradas.length) {
       if (!estado.aCorrer && pendentes().some(function (it) { return it.caixaId; })) iniciar();
@@ -1014,7 +1094,7 @@
       caixaOcupada = false;
       desenhar();
     }
-    if (!estado.aCorrer && pendentes().length) iniciar();
+    if (!estado.aCorrer && pendentes().length && !window.__CineClipBusy) iniciar();
   }
 
   /* -- ecrã ligado e aviso no fim -- */
@@ -1707,7 +1787,9 @@
       DRIVE_SCRIPT_URL: String(s.driveScriptUrl || "").trim(),
       DRIVE_TOKEN: String(s.driveToken || "").trim(),
     };
-    if (!cfg.R2_WORKER_URL || !cfg.R2_TOKEN) throw new Error("O servidor precisa do Cloudflare R2: configura-o nas definições primeiro.");
+    if ((!cfg.R2_WORKER_URL || !cfg.R2_TOKEN) && (!cfg.DRIVE_SCRIPT_URL || !cfg.DRIVE_TOKEN)) {
+      throw new Error("O servidor precisa do Cloudflare R2 (ou Google Drive): configura-o nas definições primeiro.");
+    }
     var json = JSON.stringify(cfg);
     var b64 = btoa(unescape(encodeURIComponent(json)));
     return "CINECLIP1:" + b64;
@@ -2015,6 +2097,8 @@
     /** Só para os testes (tools/test-lote-massa.mjs). */
     _interno: {
       ambiente: ambiente,
+      hashPerceptualVideo: hashPerceptualVideo,
+      lerVideoNoNavegador: lerVideoNoNavegador,
       estado: estado,
       adicionarFicheiros: adicionarFicheiros,
       importarLinks: importarLinks,
