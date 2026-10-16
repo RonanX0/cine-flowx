@@ -157,11 +157,10 @@ console.log("\n6. Os patches podem correr outra vez sem duplicar nada");
 {
   const dir = path.join(root, "tools", "patches");
   const nomes = fs.readdirSync(dir).filter((f) => f.endsWith(".find")).map((f) => f.slice(0, -5)).sort();
-  const ler = (n, ext) => {
-    const t = fs.readFileSync(path.join(dir, `${n}.${ext}`), "utf8");
-    return t.endsWith("\n") ? t.slice(0, -1) : t;
-  };
-  const presente = (n) => html.includes(ler(n, "replace"));
+  const norm = (s) => String(s || "").replace(/\r\n/g, "\n");
+  const htmlNorm = norm(html);
+  const ler = (n, ext) => norm(fs.readFileSync(path.join(dir, `${n}.${ext}`), "utf8")).replace(/\n$/, "");
+  const presente = (n) => htmlNorm.includes(ler(n, "replace"));
   const naoDetetados = nomes.filter((n) => !presente(n) && !nomes.some((m) => m > n && ler(m, "find").includes(ler(n, "replace")) && presente(m)));
   check("todos os patches são reconhecidos como aplicados", naoDetetados.length === 0, naoDetetados.join(", "));
   check("a camada de nuvem é carregada uma só vez", html.split('<script src="nuvem-duravel.js"></script>').length === 2);
