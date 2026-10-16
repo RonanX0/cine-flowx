@@ -108,6 +108,12 @@ const P = {
   // 🎬 Publicação de Reels à prova do erro 2207077: envio direto (resumable), link
   // verificado/renovado e repetição com container novo.
   "24-ig-2207077": between("async function mS(r){", "return await pS(u,String(x.id),f,a)}"),
+  // ⏱️ A NVIDIA (fila da API gratuita + modelos de visão) demora mais de 25 s com
+  // frequência; o proxy serverless espera 85 s, por isso o browser passa a esperar
+  // 90 s em vez de abortar aos 25 s com "Tempo esgotado ao contactar o NVIDIA".
+  "33-nvidia-timeout": "max_tokens:a?800:c})},25e3)",
+  // ⏱️ Mesmo problema no generateContent do Gemini (envia áudio/imagens inline).
+  "34-gemini-timeout": "body:JSON.stringify(p)},25e3)",
 };
 
 let failed = 0;
