@@ -703,16 +703,21 @@
       }
     } catch (e) {}
 
-    /* 2. Identificar o filme (quadros + áudio em paralelo, OCR nativo na IA) */
+    /* 2. Identificar o filme (quadros + áudio + vídeo em paralelo, OCR nativo na IA) */
     if (estado.pararPedido) throw erroComTipo("Lote parado.", "parado");
     definirPasso(item, "A identificar o filme…", 0.1);
     var temGemini = !!String(s.geminiKey || "").trim();
     var capturaParalela = await Promise.all([
       core.quadros(ficheiro, 0, fim, corte),
       temGemini ? Promise.resolve().then(function () { return core.audio(ficheiro, 0, fim); }).catch(function () { return null; }) : Promise.resolve(null),
+      temGemini && typeof core.videoParaIA === "function"
+        ? Promise.resolve().then(function () { return core.videoParaIA(ficheiro, 0, fim); }).catch(function () { return null; })
+        : Promise.resolve(null),
     ]);
     var quadros = capturaParalela[0];
     var audio = capturaParalela[1];
+    /* Vídeo para o Gemini "assistir" (File API) — null se o upload não for possível. */
+    var videoIA = capturaParalela[2] || null;
     var dicaLink = String((item && item.dica) || (ficheiro && ficheiro.pistaLink) || "").trim();
     var dicaEnriquecida = [dicaLink, todosMetadados].filter(Boolean).join(" · ");
 
@@ -747,6 +752,7 @@
         userHint: dicaEnriquecida,
         geminiKey: s.geminiKey,
         audioClip: audio,
+        video: videoIA,
       });
       if (!ia || (!ia.titulo && !(ia.atores && ia.atores.length))) {
         throw erroComTipo("A IA não conseguiu identificar o filme deste clipe.", "identificacao");
@@ -814,7 +820,7 @@
       .find(eGanchoValido);
     if (!gancho) {
       try {
-        var g = await core.gerarGancho(s.nvidiaKey, quadros, s.lang, filme.title, s.geminiKey, audio);
+        var g = await core.gerarGancho(s.nvidiaKey, quadros, s.lang, filme.title, s.geminiKey, audio, videoIA);
         gancho = ((g && g.ganchos) || [])
           .map(limparGancho)
           .find(eGanchoValido);

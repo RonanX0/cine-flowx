@@ -1,0 +1,1 @@
+Be=await Hm(S.nvidiaKey,F,S.lang,X.name.replace(/\.[^.]+$/,""),S.geminiKey,ue,{data:X,mimeType:(X&&X.type)||"video/mp4",ini:Y[0],fim:Y[1]});

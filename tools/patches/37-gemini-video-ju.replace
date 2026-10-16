@@ -1,0 +1,1 @@
+hasMedia=o.some(pt=>pt&&(pt.inline_data||pt.file_data))
