@@ -40,15 +40,17 @@ function check(name, condition, detail) {
 const root = path.resolve(import.meta.dirname, "..");
 
 const CONTA_TESTE = {
-  id: "acc_default",
-  name: "@conta.teste",
-  mode: "graph",
-  igUserId: "17841400000000000",
-  fbPageId: "",
-  metaAccessToken: "TOKEN-FALSO-DE-TESTE",
-  webhookUrl: "",
-  dailySlots: ["12:00"],
-  autoPilot: false,
+  id: "acc_cena_rapida",
+  name: "cena rápida",
+  mode: "webhook",
+  webhookUrl: "https://hook.us1.make.com/cena-rapida",
+  bgMode: "preto",
+  backgroundMode: "preto",
+  hookColor: "#FFFFFF",
+  hookTextColor: "#FFFFFF",
+  bgFill: "#000000",
+  dailySlots: ["09:00","12:00","15:00","18:00","21:00"],
+  autoPilot: true,
   shareToFeed: true,
 };
 
