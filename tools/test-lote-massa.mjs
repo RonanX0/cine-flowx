@@ -241,9 +241,11 @@ console.log("\nA5. Botão Parar a meio do FFmpeg");
   const dom = novoDom();
   const { window } = dom;
   const c = cenario(window);
+  /* O lote processa vários vídeos ao mesmo tempo (opção «simultâneos»);
+     este cenário trava o FFmpeg a meio, por isso força 1 vídeo de cada vez. */
+  c.lote.estado.opcoes.simultaneos = 1;
   window.CineLote.abrir();
   c.lote.adicionarFicheiros([ficheiro(window, "parar.mp4"), ficheiro(window, "depois.mp4")]);
-  c.lote.estado.opcoes.simultaneos = 1;
   const corrida = c.lote.iniciar();
   await waitFor("FFmpeg a correr", () => c.chamadas.processar.length === 1);
   const botaoParar = [...window.document.querySelectorAll("button")].find((b) => b.textContent === "Parar");
@@ -262,9 +264,10 @@ console.log("\nA6. Fechar o painel durante o lote");
   const dom = novoDom();
   const { window } = dom;
   const c = cenario(window);
+  /* Sequencial, como no A5: o 1.º vídeo trava no FFmpeg e o 2.º fica pendente. */
+  c.lote.estado.opcoes.simultaneos = 1;
   window.CineLote.abrir();
   c.lote.adicionarFicheiros([ficheiro(window, "parar.mp4"), ficheiro(window, "curto.mp4")]);
-  c.lote.estado.opcoes.simultaneos = 1;
   const corrida = c.lote.iniciar();
   await waitFor("FFmpeg a correr", () => c.chamadas.processar.length === 1);
   window.CineLote.fechar();

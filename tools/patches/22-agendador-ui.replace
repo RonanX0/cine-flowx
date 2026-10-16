@@ -257,7 +257,7 @@ const cc_composeEmpty = cc_h("div", { className: "cc-card cc-compose-empty" },
   cc_h(Ae, { variant: "outline", onClick: () => { var el = oe.current; el && el.click(); }, title: "Importar vídeo .mp4 ou pacote .cineclip.json" },
     d.jsx(T0, { className: "h-4 w-4" }), "Importar"),
 );
-const cc_compose = !(r && r.cleanBlob) ? cc_composeEmpty : cc_h("div", { className: "cc-card cc-compose" },
+const cc_compose = !(r && r.cleanBlob && window.__ccLastScheduledClip !== r.cleanBlob) ? cc_composeEmpty : cc_h("div", { className: "cc-card cc-compose" },
   cc_h("div", { className: "cc-compose-clip" },
     r && r.poster
       ? d.jsx("img", { src: r.poster, alt: "", className: "cc-poster cc-poster-lg" })

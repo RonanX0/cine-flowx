@@ -796,17 +796,28 @@
     /* 3. Gancho ------------------------------------------------------------ */
     definirPasso(item, "A criar o gancho…", 0.2);
     var cena = ia.cena || "";
+    /* A IA às vezes devolve "Gancho 1: texto" em vez de só o texto — limpa. */
+    var limparGancho =
+      typeof core.limparGancho === "function"
+        ? core.limparGancho
+        : function (t) {
+            return String(t == null ? "" : t).trim();
+          };
     function eGanchoValido(g) {
       var str = String(g || "").trim();
       if (!str || str.length < 8) return false;
       if (/^(gancho \d|opção \d|opcao \d|você precisa assistir|voce precisa assistir)/i.test(str)) return false;
       return true;
     }
-    var gancho = (ia.ganchos || []).find(eGanchoValido);
+    var gancho = (ia.ganchos || [])
+      .map(limparGancho)
+      .find(eGanchoValido);
     if (!gancho) {
       try {
         var g = await core.gerarGancho(s.nvidiaKey, quadros, s.lang, filme.title, s.geminiKey, audio);
-        gancho = ((g && g.ganchos) || []).find(eGanchoValido);
+        gancho = ((g && g.ganchos) || [])
+          .map(limparGancho)
+          .find(eGanchoValido);
         if (!cena && g && g.cena) cena = g.cena;
       } catch (e) {}
     }
