@@ -11,8 +11,8 @@
  *   5. gera a legenda com a IA;
  *   6. coloca o Reel na fila do Agendador no próximo horário livre da conta ativa.
  *
- * Os vídeos são tratados um de cada vez (o FFmpeg do navegador só faz um de cada
- * vez). Se a IA não tiver certeza do filme (confiança < 65%), o vídeo não é
+ * Os vídeos são tratados até 5 ao mesmo tempo (pool paralelo de Web Workers
+ * do FFmpeg + IA). Se a IA não tiver certeza do filme (confiança < 65%), o vídeo não é
  * agendado — fica marcado para rever no Estúdio — a não ser que ligues a opção
  * "Agendar mesmo com pouca certeza".
  *
@@ -153,6 +153,7 @@
   /* ----------------------------------------------------------- configuração */
 
   var MAX_SEGUNDOS = 90;
+  var MAX_SIMULTANEOS = 5;
   var MAX_BYTES = 300 * 1024 * 1024;
   var EXTENSOES = ["mp4", "mov", "mkv", "webm", "avi"];
   var CONFIANCA_MINIMA = 65;
@@ -165,6 +166,7 @@
     aCorrer: false,
     pararPedido: false,
     itemAtual: null,
+    itensAtivos: [],
     conta: null,
     opcoes: lerOpcoes(),
     aberto: false,
@@ -177,15 +179,17 @@
     try {
       var bruto = window.localStorage.getItem(CHAVE_OPCOES);
       var o = bruto ? JSON.parse(bruto) : {};
+      var sim = Number(o.simultaneos);
       return {
         agendarComPoucaCerteza: !!o.agendarComPoucaCerteza,
+        simultaneos: (sim >= 1 && sim <= MAX_SIMULTANEOS) ? Math.round(sim) : MAX_SIMULTANEOS,
         aoPartilhar: o.aoPartilhar === "aqui" || o.aoPartilhar === "pc" || o.aoPartilhar === "nuvem" ? o.aoPartilhar : "perguntar",
         processarLinksDoCelular: typeof o.processarLinksDoCelular === "boolean" ? o.processarLinksDoCelular : !eCelular(),
         botaoColar: o.botaoColar !== false,
         avisarLinkCopiado: o.avisarLinkCopiado !== false,
       };
     } catch (e) {
-      return { agendarComPoucaCerteza: false, aoPartilhar: "perguntar", processarLinksDoCelular: !eCelular(), botaoColar: true, avisarLinkCopiado: true };
+      return { agendarComPoucaCerteza: false, simultaneos: MAX_SIMULTANEOS, aoPartilhar: "perguntar", processarLinksDoCelular: !eCelular(), botaoColar: true, avisarLinkCopiado: true };
     }
   }
 
@@ -350,34 +354,59 @@
     }
     estado.links.aImportar = true;
     var ok = 0;
-    for (var i = 0; i < links.length; i++) {
-      var link = links[i];
-      estado.links.estado = "A importar " + (i + 1) + "/" + links.length + "…";
-      desenhar();
-      try {
-        var ficheiro = await ambiente.baixarLink(link, function (recebidos, total) {
-          estado.links.estado =
-            "A importar " + (i + 1) + "/" + links.length + "… " +
-            (total ? Math.round((recebidos / total) * 100) + "%" : tamanho(recebidos));
+    var concluidos = 0;
+    var resultados = new Array(links.length);
+    var proximoIdx = 0;
+    var limiteImp = Math.max(1, Math.min(MAX_SIMULTANEOS, Number(estado.opcoes && estado.opcoes.simultaneos) || MAX_SIMULTANEOS));
+    estado.links.estado = "A importar 1/" + links.length + "…";
+    desenhar();
+    async function trabalhadorImportacao() {
+      while (proximoIdx < links.length) {
+        var idx = proximoIdx++;
+        var link = links[idx];
+        try {
+          var ficheiro = await ambiente.baixarLink(link, function (recebidos, total) {
+            estado.links.estado =
+              "A importar " + Math.min(links.length, concluidos + 1) + "/" + links.length + "… " +
+              (total ? Math.round((recebidos / total) * 100) + "%" : tamanho(recebidos));
+            desenharEstadoLinks();
+          });
+          resultados[idx] = { ok: true, ficheiro: ficheiro, link: link };
+          ok++;
+        } catch (e) {
+          resultados[idx] = { ok: false, erro: e, link: link };
+        }
+        concluidos++;
+        if (concluidos < links.length) {
+          estado.links.estado = "A importar " + (concluidos + 1) + "/" + links.length + "…";
           desenharEstadoLinks();
-        });
-        adicionarFicheiros([ficheiro]);
+        }
+      }
+    }
+    var nTrabImp = Math.min(limiteImp, links.length);
+    var listaTrabImp = [];
+    for (var ti = 0; ti < nTrabImp; ti++) listaTrabImp.push(trabalhadorImportacao());
+    await Promise.all(listaTrabImp);
+    for (var ri = 0; ri < resultados.length; ri++) {
+      var resImp = resultados[ri];
+      if (!resImp) continue;
+      if (resImp.ok) {
+        adicionarFicheiros([resImp.ficheiro]);
         var novo = estado.itens[estado.itens.length - 1];
-        if (novo) novo.origem = link;
-        ok++;
-      } catch (e) {
+        if (novo) novo.origem = resImp.link;
+      } else {
         estado.itens.push({
           id: proximoId++,
           ficheiro: null,
-          nome: link,
+          nome: resImp.link,
           bytes: 0,
           estado: "erro",
           invalido: true,
           passo: "",
           progresso: 0,
-          erro: "Não importei este link: " + mensagemDeErro(e, "falha desconhecida."),
+          erro: "Não importei este link: " + mensagemDeErro(resImp.erro, "falha desconhecida."),
           resultado: null,
-          origem: link,
+          origem: resImp.link,
         });
       }
     }
@@ -463,16 +492,20 @@
     return entraram;
   }
 
+  function estaAtivo(it) {
+    return !!(it && (it.estado === "a_processar" || it === estado.itemAtual || (estado.itensAtivos && estado.itensAtivos.indexOf(it) !== -1)));
+  }
+
   function removerItem(id) {
     estado.itens = estado.itens.filter(function (it) {
-      return it.id !== id || it === estado.itemAtual;
+      return it.id !== id || estaAtivo(it);
     });
     desenhar();
   }
 
   function repetirItem(id) {
     estado.itens.forEach(function (it) {
-      if (it.id === id && it !== estado.itemAtual && !it.invalido) {
+      if (it.id === id && !estaAtivo(it) && !it.invalido) {
         it.estado = "pendente";
         it.erro = "";
         it.passo = "";
@@ -521,9 +554,13 @@
    * Leva um vídeo do ficheiro original até à fila do Agendador.
    * Lança um erro (com `tipo`) quando não pode continuar.
    */
-  async function processarItem(item, conta) {
-    var core = ambiente.core();
-    var app = ambiente.app();
+  async function processarItem(item, conta, ctx) {
+    var core = (ctx && ctx.core) || ambiente.core();
+    var app = (ctx && ctx.app) || ambiente.app();
+    var lerVideoFn = (ctx && ctx.lerVideo) || ambiente.lerVideo;
+    var permitirPoucaCerteza = (ctx && typeof ctx.agendarComPoucaCerteza === "boolean")
+      ? ctx.agendarComPoucaCerteza
+      : !!(estado.opcoes && estado.opcoes.agendarComPoucaCerteza);
     var s = app.settings || {};
     var ficheiro = item.ficheiro;
 
@@ -551,7 +588,7 @@
     var info = null;
     var erroVideo = null;
     try {
-      info = await ambiente.lerVideo(ficheiro);
+      info = await lerVideoFn(ficheiro);
     } catch (e) {
       erroVideo = e;
       // Se a aba estava em segundo plano e o <video> falhou/expirou, usa as dimensões lidas pelo MediaInfo WASM.
@@ -679,7 +716,7 @@
     }
     var confianca = Number(ia.confianca) || 0;
     item.resultado = { titulo: filme.title, ano: filme.year, confianca: confianca };
-    if (confianca < CONFIANCA_MINIMA && !estado.opcoes.agendarComPoucaCerteza) {
+    if (confianca < CONFIANCA_MINIMA && !permitirPoucaCerteza) {
       throw erroComTipo(
         'A IA acha que é "' + filme.title + (filme.year ? " (" + filme.year + ")" : "") + '", mas só com ' +
           confianca + "% de certeza. Confere no Estúdio ou liga “Agendar mesmo com pouca certeza”.",
@@ -725,38 +762,49 @@
       core.guardarHistorico({ title: filme.title, year: filme.year, caption: legenda, date: ambiente.agora() });
     } catch (e) {}
 
-    /* 6. Agendar ------------------------------------------------------------- */
+    /* 6. Agendar (serializado para que 5 vídeos simultâneos nunca escolham o mesmo horário) */
+    if (estado.pararPedido) throw erroComTipo("Lote parado.", "parado");
     definirPasso(item, "A agendar…", 0.95);
-    var fila = await core.lerFila();
-    var horario = core.proximoHorario(fila, conta.dailySlots || [], conta.id);
-    var base = semExtensao(ficheiro.name);
-    var agora = ambiente.agora();
-    var reel = {
-      id: "reel_" + agora + "_" + Math.random().toString(36).slice(2, 6),
-      accountId: conta.id,
-      createdAt: agora,
-      scheduledAt: horario,
-      status: "scheduled",
-      title: filme.title || base,
-      originalTitle: filme.original,
-      year: filme.year,
-      poster: filme.poster,
-      hookText: gancho,
-      caption: core.limparLegenda(String(legenda)),
-      videoBlob: blob,
-      videoFileName: base + "_cineclip.mp4",
-      videoSize: blob.size || 0,
-      platforms: ["instagram"],
-    };
-    await core.guardarNaFila(reel);
-    item.resultado.horario = horario;
-    item.resultado.reelId = reel.id;
-    return reel;
+    return await comTravaAgendar(async function () {
+      if (estado.pararPedido) throw erroComTipo("Lote parado.", "parado");
+      var fila = await core.lerFila();
+      var horario = core.proximoHorario(fila, conta.dailySlots || [], conta.id);
+      var base = semExtensao(ficheiro.name);
+      var agora = ambiente.agora();
+      var reel = {
+        id: "reel_" + agora + "_" + Math.random().toString(36).slice(2, 6),
+        accountId: conta.id,
+        createdAt: agora,
+        scheduledAt: horario,
+        status: "scheduled",
+        title: filme.title || base,
+        originalTitle: filme.original,
+        year: filme.year,
+        poster: filme.poster,
+        hookText: gancho,
+        caption: core.limparLegenda(String(legenda)),
+        videoBlob: blob,
+        videoFileName: base + "_cineclip.mp4",
+        videoSize: blob.size || 0,
+        platforms: ["instagram"],
+      };
+      await core.guardarNaFila(reel);
+      item.resultado.horario = horario;
+      item.resultado.reelId = reel.id;
+      return reel;
+    });
   }
 
   /* --------------------------------------------------------- o ciclo */
 
   var sincronizacao = Promise.resolve();
+  var travaAgendar = Promise.resolve();
+
+  function comTravaAgendar(fn) {
+    var p = travaAgendar.then(fn, fn);
+    travaAgendar = p.catch(function () {});
+    return p;
+  }
 
   function pedirSincronizacao() {
     var app = ambiente.app();
@@ -803,39 +851,59 @@
     var agendadosAntes = contar("agendado");
     await comTravaDeSegundoPlano(async function () {
       try {
-        var item;
-        while (!estado.pararPedido && (item = pendentes()[0])) {
-          estado.itemAtual = item;
-          item.estado = "a_processar";
-          item.erro = "";
-          desenhar();
-          try {
-            await processarItem(item, estado.conta);
-            item.estado = "agendado";
-            item.passo = "";
-            item.progresso = 1;
-            if (item.caixaId) marcarEntrada(item.caixaId, "feito", { reelId: item.resultado && item.resultado.reelId });
-            pedirSincronizacao();
-          } catch (e) {
-            if (estado.pararPedido && e && e.tipo !== "codec") {
-              item.estado = "pendente";
-              item.passo = "";
-              item.progresso = 0;
-            } else {
-              item.estado = e && e.tipo === "revisar" ? "revisar" : "erro";
-              item.erro = mensagemDeErro(e, "Falha ao processar este vídeo.");
-              item.passo = "";
-              if (item.caixaId) {
-                marcarEntrada(item.caixaId, "erro", { erro: item.erro });
+        var limite = Math.max(1, Math.min(MAX_SIMULTANEOS, Number(estado.opcoes && estado.opcoes.simultaneos) || MAX_SIMULTANEOS));
+        estado.itensAtivos = [];
+        async function trabalhador() {
+          var item;
+          while (!estado.pararPedido && (item = pendentes()[0])) {
+            item.estado = "a_processar";
+            item.erro = "";
+            estado.itensAtivos.push(item);
+            estado.itemAtual = estado.itensAtivos[0] || null;
+            desenhar();
+            try {
+              await processarItem(item, estado.conta);
+              if (estado.pararPedido) {
+                item.estado = "pendente";
+                item.passo = "";
+                item.progresso = 0;
+              } else {
+                item.estado = "agendado";
+                item.passo = "";
+                item.progresso = 1;
+                if (item.caixaId) marcarEntrada(item.caixaId, "feito", { reelId: item.resultado && item.resultado.reelId });
                 pedirSincronizacao();
               }
+            } catch (e) {
+              if ((estado.pararPedido || (e && e.tipo === "parado")) && (!e || e.tipo !== "codec")) {
+                item.estado = "pendente";
+                item.passo = "";
+                item.progresso = 0;
+              } else {
+                item.estado = e && e.tipo === "revisar" ? "revisar" : "erro";
+                item.erro = mensagemDeErro(e, "Falha ao processar este vídeo.");
+                item.passo = "";
+                if (item.caixaId) {
+                  marcarEntrada(item.caixaId, "erro", { erro: item.erro });
+                  pedirSincronizacao();
+                }
+              }
             }
+            var idx = estado.itensAtivos.indexOf(item);
+            if (idx !== -1) estado.itensAtivos.splice(idx, 1);
+            estado.itemAtual = estado.itensAtivos[0] || null;
+            desenhar();
           }
-          estado.itemAtual = null;
-          desenhar();
         }
+        var nTrabalhadores = Math.min(limite, pendentes().length);
+        var trabalhadores = [];
+        for (var w = 0; w < nTrabalhadores; w++) {
+          trabalhadores.push(trabalhador());
+        }
+        await Promise.all(trabalhadores);
       } finally {
         estado.aCorrer = false;
+        estado.itensAtivos = [];
         estado.itemAtual = null;
         var feitos = estado.itens.filter(function (it) {
           return it.estado === "agendado";
@@ -855,9 +923,10 @@
     if (!estado.aCorrer) return;
     estado.pararPedido = true;
     var core = ambiente.core();
-    var item = estado.itemAtual;
-    // Se estiver a meio do FFmpeg, interrompe já; nas chamadas à IA espera que acabem.
-    if (item && /processar/.test(item.passo) && core && typeof core.cancelarProcessamento === "function") {
+    var ativos = (estado.itensAtivos && estado.itensAtivos.length) ? estado.itensAtivos : (estado.itemAtual ? [estado.itemAtual] : []);
+    // Se algum dos vídeos ativos estiver a meio do FFmpeg, interrompe já; nas chamadas à IA espera que acabem.
+    var emFfmpeg = ativos.some(function (it) { return it && /processar/.test(it.passo); });
+    if (emFfmpeg && core && typeof core.cancelarProcessamento === "function") {
       try {
         core.cancelarProcessamento();
       } catch (e) {}
@@ -1722,7 +1791,7 @@
     }
 
     var acoes = [];
-    if (!estado.aCorrer || it !== estado.itemAtual) {
+    if (!estado.aCorrer || !estaAtivo(it)) {
       if (it.estado === "erro" || it.estado === "revisar") {
         if (!it.invalido) {
           acoes.push(el("button", { type: "button", className: "cl-btn cl-sec cl-mini", disabled: estado.aCorrer || null, onClick: function () { repetirItem(it.id); } }, ["Tentar de novo"]));
@@ -1928,7 +1997,7 @@
         className: "cl-sub",
         text:
           "Para cada vídeo o app usa até 90 segundos, identifica o filme, cria o gancho e a legenda com IA e agenda o Reel no próximo horário livre" +
-          (conta && conta.name ? " de " + conta.name : "") + ". Um vídeo de cada vez. Podes fechar este painel e ver o Agendador enquanto isso, mas não processes outro vídeo no Estúdio até o lote acabar (o FFmpeg do navegador é só um).",
+          (conta && conta.name ? " de " + conta.name : "") + ". Processa até " + (estado.opcoes.simultaneos || MAX_SIMULTANEOS) + " vídeos ao mesmo tempo. Podes fechar este painel e ver o Agendador enquanto isso.",
       }),
     ];
     if (falta && !estado.aCorrer) {
@@ -1971,6 +2040,21 @@
       ]),
     ]));
 
+    var seletorSim = el("select", { className: "cl-select", "aria-label": "Vídeos ao mesmo tempo" }, [1, 2, 3, 4, 5].map(function (n) {
+      return el("option", { value: String(n), text: n === 1 ? "1 vídeo de cada vez" : n + " vídeos ao mesmo tempo" + (n === 5 ? " (máximo)" : "") });
+    }));
+    seletorSim.value = String(estado.opcoes.simultaneos || MAX_SIMULTANEOS);
+    seletorSim.addEventListener("change", function () {
+      var v = Math.max(1, Math.min(MAX_SIMULTANEOS, Number(seletorSim.value) || MAX_SIMULTANEOS));
+      estado.opcoes.simultaneos = v;
+      gravarOpcoes();
+      desenhar();
+    });
+    corpo.push(el("label", { className: "cl-opcao" }, [
+      el("span", { text: "⚡ Processamento simultâneo:" }),
+      seletorSim,
+    ]));
+
     var caixa = el("input", { type: "checkbox", checked: estado.opcoes.agendarComPoucaCerteza || null });
     caixa.addEventListener("change", function () {
       estado.opcoes.agendarComPoucaCerteza = caixa.checked;
@@ -1990,6 +2074,7 @@
     var resumo = [];
     if (estado.itens.length) {
       resumo.push(estado.itens.length + " vídeo" + (estado.itens.length > 1 ? "s" : ""));
+      if (contar("a_processar")) resumo.push(contar("a_processar") + " a processar");
       if (contar("agendado")) resumo.push(contar("agendado") + " agendado" + (contar("agendado") > 1 ? "s" : ""));
       if (nPend) resumo.push(nPend + " na fila");
       if (contar("revisar")) resumo.push(contar("revisar") + " para rever");
@@ -2047,8 +2132,10 @@
     var feitos = estado.itens.filter(function (it) {
       return it.estado !== "pendente" && it.estado !== "a_processar";
     }).length;
-    var total = feitos + contar("pendente") + contar("a_processar");
-    pilula.textContent = "📦 Upload em massa: " + Math.min(total, feitos + 1) + "/" + total + " — abrir";
+    var ativos = contar("a_processar");
+    var total = feitos + contar("pendente") + ativos;
+    var mostrados = ativos > 0 ? Math.min(total, Math.max(1, feitos)) : Math.min(total, feitos + 1);
+    pilula.textContent = "📦 Upload em massa: " + mostrados + "/" + total + (ativos > 1 ? " (" + ativos + " simultâneos)" : "") + " — abrir";
   }
 
   function aoTeclar(e) {
@@ -2126,6 +2213,7 @@
       faltaConfigurar: faltaConfigurar,
       horarioLegivel: horarioLegivel,
       MAX_SEGUNDOS: MAX_SEGUNDOS,
+      MAX_SIMULTANEOS: MAX_SIMULTANEOS,
       CONFIANCA_MINIMA: CONFIANCA_MINIMA,
     },
   };
