@@ -128,7 +128,7 @@ function cenario(window, opcoes = {}) {
     guardarNaFila: async (reel) => { fila.push(reel); },
     lerFila: async () => fila.slice(),
     guardarHistorico: () => { chamadas.historico++; },
-    ganchoPadrao: "Você precisa assistir esse filme 😳",
+    ganchoPadrao: "O que acontece nessa cena deixou todo mundo em choque 😳",
   };
   const app = {
     settings: Object.assign({ nvidiaKey: "nv-key", geminiKey: "", tmdbKey: "tmdb-key", lang: "pt-BR", resolution: "720", overlayText: "Texto padrão" }, opcoes.settings || {}),
@@ -342,7 +342,7 @@ check("o Estúdio mostra o botão «📦 Upload em massa»", !!botaoLote);
 const nomesCore = ["lerMetadados", "detetarBarras", "quadros", "audio", "identificar", "procurarTmdb", "gerarGancho", "processar", "cancelarProcessamento", "gerarLegenda", "limparLegenda", "proximoHorario", "guardarNaFila", "lerFila", "guardarHistorico"];
 const coreReal = window.CineClipCore;
 check("window.CineClipCore expõe as 15 funções do bundle", !!coreReal && nomesCore.every((n) => typeof coreReal[n] === "function"), coreReal ? nomesCore.filter((n) => typeof coreReal[n] !== "function").join(",") : "sem CineClipCore");
-check("o gancho padrão vem das definições do app", coreReal && coreReal.ganchoPadrao === "Você precisa assistir esse filme 😳");
+check("o gancho padrão vem das definições do app", coreReal && coreReal.ganchoPadrao === "O que acontece nessa cena deixou todo mundo em choque 😳");
 const appReal = window.__CineClipApp;
 check("window.__CineClipApp tem a conta ativa", appReal && appReal.account && appReal.account.id === "acc_default", appReal && JSON.stringify(appReal.account && appReal.account.id));
 check("window.__CineClipApp tem as definições e as ações", appReal && appReal.settings && typeof appReal.sincronizar === "function" && typeof appReal.abrirNoEstudio === "function");

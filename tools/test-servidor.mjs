@@ -220,7 +220,7 @@ const primeiroHorario = app.core.proximoHorario([], CONTA.dailySlots, CONTA.id);
 nuvem.cofre = cifrar({
   version: 1,
   updatedAt: agora,
-  settings: { nvidiaKey: "nv-teste", geminiKey: "", tmdbKey: "tmdb-teste", lang: "pt-BR", resolution: "720", overlayText: "Você precisa assistir esse filme 😳", bold: true },
+  settings: { nvidiaKey: "nv-teste", geminiKey: "", tmdbKey: "tmdb-teste", lang: "pt-BR", resolution: "720", overlayText: "O que acontece nessa cena deixou todo mundo em choque 😳", bold: true },
   accounts: [{ id: "acc_outra", name: "@outra", dailySlots: ["09:00"] }, CONTA],
   activeAccountId: "acc_outra",
   queue: [{ id: "reel_existente", accountId: "acc_cena", status: "scheduled", scheduledAt: primeiroHorario, title: "Já agendado", createdAt: agora }],

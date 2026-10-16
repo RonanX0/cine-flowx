@@ -752,6 +752,29 @@
         throw erroComTipo("A IA não conseguiu identificar o filme deste clipe.", "identificacao");
       }
       filme = await core.procurarTmdb(s.tmdbKey, ia);
+      if (!filme && Array.isArray(ia.alternativas) && ia.alternativas.length) {
+        for (var altIdx = 0; altIdx < ia.alternativas.length; altIdx++) {
+          var altCand = ia.alternativas[altIdx];
+          if (altCand && (altCand.titulo || altCand.titulo_original)) {
+            try {
+              filme = await core.procurarTmdb(s.tmdbKey, {
+                titulo: altCand.titulo,
+                titulo_original: altCand.titulo_original,
+                ano: altCand.ano,
+                tipo: altCand.tipo,
+                confianca: 75
+              });
+              if (filme) {
+                ia.titulo = filme.title;
+                ia.titulo_original = filme.original;
+                ia.ano = filme.year;
+                ia.confianca = Math.max(ia.confianca || 0, 75);
+                break;
+              }
+            } catch (e) {}
+          }
+        }
+      }
       if (!filme) {
         throw erroComTipo(
           'Não encontrei "' + (ia.titulo || ia.titulo_original || "o filme") + '" no TMDB.',
@@ -780,23 +803,38 @@
         : function (t) {
             return String(t == null ? "" : t).trim();
           };
+    function eGanchoValido(g) {
+      var str = String(g || "").trim();
+      if (!str || str.length < 8) return false;
+      if (/^(gancho \d|opção \d|opcao \d|você precisa assistir|voce precisa assistir)/i.test(str)) return false;
+      return true;
+    }
     var gancho = (ia.ganchos || [])
       .map(limparGancho)
-      .find(function (g) {
-        return g && String(g).trim();
-      });
+      .find(eGanchoValido);
     if (!gancho) {
       try {
         var g = await core.gerarGancho(s.nvidiaKey, quadros, s.lang, filme.title, s.geminiKey, audio);
         gancho = ((g && g.ganchos) || [])
           .map(limparGancho)
-          .find(function (x) {
-            return x && String(x).trim();
-          });
+          .find(eGanchoValido);
         if (!cena && g && g.cena) cena = g.cena;
       } catch (e) {}
     }
-    gancho = String(gancho || s.overlayText || core.ganchoPadrao || "").trim();
+    if (!gancho) {
+      var poolVirais = [
+        "O que acontece nessa cena deixou todo mundo em choque 😳",
+        "Ele quebrou a única regra que nunca deveria ter quebrado 💀",
+        "A reação dele ao descobrir a verdade foi a pior possível 😨",
+        "A calma dele antes do caos começar é assustadora 🥶",
+        "Ninguém imaginava que isso iria acontecer nessa cena 😱",
+        "O momento exato em que tudo deu errado 🤯"
+      ];
+      var customOuPadrao = String(s.overlayText || core.ganchoPadrao || "").trim();
+      gancho = (customOuPadrao && !/você precisa assistir|voce precisa assistir/i.test(customOuPadrao))
+        ? customOuPadrao
+        : poolVirais[Math.floor(Math.random() * poolVirais.length)];
+    }
     item.resultado.gancho = gancho;
 
     /* 4. Processar o vídeo -------------------------------------------------- */
