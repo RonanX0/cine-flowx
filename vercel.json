@@ -23,6 +23,9 @@
     "api/public/importar.js": {
       "maxDuration": 60
     },
+    "api/public/nvidia.js": {
+      "maxDuration": 90
+    },
     "api/nuvem.js": {
       "maxDuration": 300,
       "includeFiles": "{index.html,nuvem-duravel.js,lote-massa.js,servidor/fontes/**,node_modules/ffmpeg-static/ffmpeg,node_modules/@napi-rs/canvas-linux-x64-gnu/**}"
