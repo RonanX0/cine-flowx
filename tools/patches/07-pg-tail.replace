@@ -1,7 +1,5 @@
-const D={version:1,updatedAt:Date.now(),settings:h,accounts:_,activeAccountId:k,queue:T,deletedReelIds:Array.from(C),history:v.length>0?v:(x==null?void 0:x.history)||[]};
+const D={version:1,updatedAt:Date.now(),settings:h,accounts:_,activeAccountId:k,queue:T,deletedReelIds:Array.from(C),history:v.length>0?v:(x==null?void 0:x.history)||[],/* ==CINECLIP-LINKS-CELULAR== links partilhados no celular (lote-massa.js) viajam no cofre */linksCelular:window.CineLote&&window.CineLote.mesclarLinks?window.CineLote.mesclarLinks(x&&x.linksCelular):(x&&x.linksCelular)||[]};
 // 1) PRIMEIRO envia os vídeos pendentes para a nuvem durável (aguardado, com progresso e erros visíveis).
-//    Antes o cofre era gravado sem o link e o upload corria em background sem await + catch{} vazio,
-//    por isso muitos Reels ficavam só no aparelho e nunca eram publicados pelo Robô 24h.
 const O=T.filter(K=>K.videoBlob&&(K.needsReupload||K.cloudError||!K.remoteVideoUrl)&&!CcUp.has(K.id)).slice(0,5),ie=O.length>0?"cineclip-cloud-upload":null;
 for(let K=0;K<O.length;K++){
 const H=O[K];
@@ -14,7 +12,9 @@ H.remoteVideoUrl=ne,H.cloudProvider=window.CineCloud?window.CineCloud.classifyUr
 const ms=(Be==null?void 0:Be.message)||"Falha ao enviar o vídeo para a nuvem";
 H.cloudError=ms,H.updatedAt=Date.now(),await Rn(H),je.error(`⚠️ "${H.title}" NÃO foi para a nuvem: ${ms}`,{id:ie||void 0})}finally{CcUp.delete(H.id)}}
 ie&&je.dismiss(ie);
-// 2) SÓ DEPOIS grava o cofre — já com os links da nuvem dentro.
-D.queue=T,D.updatedAt=Date.now();
+// 2) Relê sempre a fila local antes de gravar o cofre para incluir quaisquer Reels agendados entretanto.
+try{const p2=await Wr();for(const K of p2){if(C.has(K.id))continue;const H=S.get(K.id);if(!H){S.set(K.id,K),T.push(K)}else{const ne=K.updatedAt||K.createdAt||0,N=H.updatedAt||H.createdAt||0;if(ne>N)Object.assign(H,{...K,videoBlob:K.videoBlob||H.videoBlob,remoteVideoUrl:H.remoteVideoUrl||K.remoteVideoUrl})}}T.splice(0,T.length,...await _dedupFila(T))}catch{}try{if(O.length>0&&window.CineLote&&window.CineLote.mesclarLinks)D.linksCelular=window.CineLote.mesclarLinks(D.linksCelular)}catch{}
+// 3) SÓ DEPOIS grava o cofre — já com os links da nuvem e novos agendamentos dentro.
+D.deletedReelIds=Array.from(C),D.queue=T,D.updatedAt=Date.now();
 await Km(r,D);
 return D})().finally(()=>{Oa=null})),Oa}
