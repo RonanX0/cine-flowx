@@ -1,6 +1,6 @@
 # CineClip 🎬
 
-Aplicação web **100% no navegador** que limpa metadados de vídeos, corta até 2:30, formata em **9:16** com texto de *hook* no topo, identifica o filme/série via **NVIDIA Vision + TMDB** e gera uma legenda pronta para publicar.
+Aplicação web **100% no navegador** que limpa metadados de vídeos, corta até 2:30, formata em **9:16** com texto de *hook* no topo, identifica o filme/série via **NVIDIA Vision + TMDB** (ou com o Gemini a *assistir ao vídeo*) e gera uma legenda pronta para publicar.
 
 ## Estrutura do Projeto
 
@@ -53,6 +53,17 @@ vez; o painel pode ser fechado (fica um atalho no canto) e o botão **Parar** in
 - Vídeos em **H.265/HEVC** (comuns nos downloads do TikTok) dão erro claro: o navegador não
   consegue ler a imagem. Converte-os para H.264 antes.
 - Precisa das chaves NVIDIA ou Gemini e TMDB nas configurações.
+
+### 🎬 A IA assiste ao vídeo (Gemini File API)
+
+Quando há chave do **Google Gemini**, a identificação do filme e a criação do gancho passam a
+enviar o **vídeo em si** (File API: upload do ficheiro uma vez, até 2 GB) em vez de 6 frames +
+áudio soltos. O Gemini analisa a cena **em movimento e com áudio sincronizado** (amostragem
+~1 frame/s, com timestamps), o que melhora muito o reconhecimento de diálogo, legendas
+queimadas, atores e ação — só o intervalo escolhido (ex.: os primeiros 90 s) é contabilizado
+com `video_metadata`. O mesmo vídeo é reutilizado entre a identificação e o gancho (cache do
+upload). Se o upload falhar (CORS, rede, ficheiro gigante), o fluxo cai automaticamente para
+os frames + áudio como antes; o caminho NVIDIA continua a usar frames.
 
 ### 🔗 Importar do TikTok ou do Kwai
 

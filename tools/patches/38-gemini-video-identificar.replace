@@ -1,0 +1,8 @@
+  if(p)try{
+    const _=frames.length>=4?frames.slice(1):frames,k=[{text:f}];
+    const vp=i&&i.video?await _ccGeminiVideo(p,i.video):null;
+    if(vp){k.push(vp);k.push({text:"O vídeo anexado contém a cena COMPLETA (imagem + áudio sincronizados). Use o vídeo como fonte principal da análise."})}
+    else{for(const C of _){const S=cg(C);S&&k.push({inline_data:S})}
+    i!=null&&i.audioClip&&k.push({inline_data:{mime_type:i.audioClip.mimeType,data:i.audioClip.base64}})}
+    v=await ju(p,k,!1,!0),x="gemini",res1=_vsParseIA(v,x);
+  }catch(_){if(!g)throw _}
