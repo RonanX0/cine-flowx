@@ -81,6 +81,7 @@
       var frames = (quadros || []).slice(1);
       if (frames.length < 2) return null; // frames reais são >= 6; placeholder (testes) não cacheia
       var bits = [];
+      var framesValidos = 0;
       for (var i = 0; i < frames.length; i++) {
         var img = await _carregarImagem(frames[i]);
         var c = document.createElement("canvas");
@@ -91,24 +92,75 @@
         var data = ctx.getImageData(0, 0, 8, 8).data;
         var lum = [];
         var soma = 0;
+        var minL = 255;
+        var maxL = 0;
         for (var p = 0; p < data.length; p += 4) {
           var l = 0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2];
           lum.push(l);
           soma += l;
+          if (l < minL) minL = l;
+          if (l > maxL) maxL = l;
         }
+        if ((maxL - minL) < 8) continue;
+        framesValidos++;
         var media = soma / (lum.length || 1);
-        for (var q = 0; q < lum.length; q++) bits.push(lum[q] >= media ? "1" : "0");
+        for (var q = 0; q < lum.length; q++) bits.push(lum[q] > media ? "1" : "0");
       }
-      if (!bits.length) return null;
+      if (framesValidos < 3 || !bits.length) return null;
       // converte bits -> hex (4 bits por dígito)
       var hex = "";
       for (var b = 0; b + 4 <= bits.length; b += 4) {
         hex += parseInt(bits.slice(b, b + 4).join(""), 2).toString(16);
       }
-      return hex || null;
+      if (!hex || /^([0f])\1+$/i.test(hex)) return null;
+      return hex;
     } catch (e) {
       return null;
     }
+  }
+
+  /** Assinatura binária rápida (início + meio + fim + tamanho) para ficheiros reais (>32 KB). */
+  async function _assinaturaBinaria(ficheiro) {
+    try {
+      var tam = Number(ficheiro && ficheiro.size) || 0;
+      if (tam <= 32768 || typeof ficheiro.slice !== "function") return null;
+      var meio = Math.max(0, Math.floor(tam / 2) - 1024);
+      var fim = Math.max(0, tam - 2048);
+      var partes = await Promise.all([
+        ficheiro.slice(0, 2048).arrayBuffer(),
+        ficheiro.slice(meio, meio + 2048).arrayBuffer(),
+        ficheiro.slice(fim, tam).arrayBuffer(),
+      ]);
+      var h1 = 2166136261 >>> 0;
+      var h2 = 2166136261 >>> 0;
+      for (var p = 0; p < partes.length; p++) {
+        var u8 = new Uint8Array(partes[p]);
+        for (var i = 0; i < u8.length; i += 2) {
+          h1 = Math.imul(h1 ^ u8[i], 16777619) >>> 0;
+          if (i + 1 < u8.length) h2 = Math.imul(h2 ^ u8[i + 1], 16777619) >>> 0;
+        }
+      }
+      return "sig_" + tam.toString(36) + "_" + h1.toString(36) + "_" + h2.toString(36);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /** Compara dois hashes perceptuais hexadecimais (distância de Hamming <= 4 bits). */
+  function _hashesPerceptuaisIguais(a, b) {
+    if (!a || !b || typeof a !== "string" || typeof b !== "string") return false;
+    if (a === b) return true;
+    if (a.length !== b.length || a.length < 16) return false;
+    var diff = 0;
+    for (var i = 0; i < a.length; i++) {
+      var x = (parseInt(a[i], 16) ^ parseInt(b[i], 16)) & 15;
+      while (x) {
+        diff += x & 1;
+        x >>= 1;
+      }
+      if (diff > 4) return false;
+    }
+    return true;
   }
 
   /* --------------------------------------------- cache de identificação por hash */
@@ -247,9 +299,10 @@
         if (erro) reject(erro);
         else resolve(valor);
       }
+      var esperaMs = (typeof document !== "undefined" && document.hidden) ? 60000 : 20000;
       var limite = setTimeout(function () {
         fim(new Error("O navegador demorou demasiado a abrir o vídeo."));
-      }, 20000);
+      }, esperaMs);
       video.preload = "metadata";
       video.muted = true;
       video.playsInline = true;
@@ -338,8 +391,10 @@
           return false;
         }
         var ok = /(^|\.)(tiktok\.com|kwai\.com|kw\.ai|kwai\.net|kwai-pro\.com)$/.test(host);
-        if (!ok || vistos[u]) return false;
+        var chave = idDoLink(u);
+        if (!ok || vistos[u] || vistos[chave]) return false;
         vistos[u] = true;
+        vistos[chave] = true;
         return true;
       });
   }
@@ -387,14 +442,20 @@
     var listaTrabImp = [];
     for (var ti = 0; ti < nTrabImp; ti++) listaTrabImp.push(trabalhadorImportacao());
     await Promise.all(listaTrabImp);
+    var linksFalhados = [];
     for (var ri = 0; ri < resultados.length; ri++) {
       var resImp = resultados[ri];
       if (!resImp) continue;
       if (resImp.ok) {
+        resImp.ficheiro._origemLink = resImp.link;
+        var antes = estado.itens.length;
         adicionarFicheiros([resImp.ficheiro]);
-        var novo = estado.itens[estado.itens.length - 1];
-        if (novo) novo.origem = resImp.link;
+        if (estado.itens.length > antes) {
+          var novo = estado.itens[estado.itens.length - 1];
+          if (novo) novo.origem = resImp.link;
+        }
       } else {
+        linksFalhados.push(resImp.link);
         estado.itens.push({
           id: proximoId++,
           ficheiro: null,
@@ -411,7 +472,7 @@
       }
     }
     estado.links.aImportar = false;
-    estado.links.texto = ok === links.length ? "" : estado.links.texto;
+    estado.links.texto = linksFalhados.join("\n");
     estado.links.estado = ok + " de " + links.length + " vídeo" + (links.length > 1 ? "s" : "") + " importado" + (ok === 1 ? "" : "s") + ".";
     desenhar();
   }
@@ -463,11 +524,25 @@
     var entraram = 0;
     ficheiros.forEach(function (f) {
       if (!f) return;
+      var nomeF = f.name || "video.mp4";
+      var bytesF = f.size || 0;
+      var origF = f._origemLink || f.origem || "";
+      var caixaF = f._caixaId || f.caixaId || "";
+      var jaExiste = estado.itens.some(function (it) {
+        if (!it || (it.estado !== "pendente" && it.estado !== "a_processar")) return false;
+        if (caixaF && it.caixaId && it.caixaId === caixaF) return true;
+        if (origF && it.origem && idDoLink(it.origem) === idDoLink(origF)) return true;
+        if (bytesF > 0 && it.nome === nomeF && it.bytes === bytesF) return true;
+        return false;
+      });
+      if (jaExiste) return;
       var item = {
         id: proximoId++,
         ficheiro: f,
-        nome: f.name || "video.mp4",
-        bytes: f.size || 0,
+        nome: nomeF,
+        bytes: bytesF,
+        origem: origF || undefined,
+        caixaId: caixaF || undefined,
         estado: "pendente",
         passo: "",
         progresso: 0,
@@ -564,16 +639,24 @@
     var s = app.settings || {};
     var ficheiro = item.ficheiro;
 
-    /* 1. Ler o vídeo ------------------------------------------------------ */
+    /* 1. Ler o vídeo (metadados + dimensões em paralelo) ------------------- */
+    if (estado.pararPedido) throw erroComTipo("Lote parado.", "parado");
     definirPasso(item, "A ler o vídeo…", 0.02);
     var duracao = 0;
     var tituloMetadados = "";
     var todosMetadados = "";
     var meta = null;
-    try {
-      meta = await core.lerMetadados(ficheiro);
-      duracao = Number(meta && meta.duration) || 0;
-      var campos = (meta && meta.fields) || [];
+    var info = null;
+    var erroVideo = null;
+    var leituraParalela = await Promise.all([
+      Promise.resolve().then(function () { return core.lerMetadados(ficheiro); }).catch(function () { return null; }),
+      Promise.resolve().then(function () { return lerVideoFn(ficheiro); }).catch(function (e) { erroVideo = e; return null; }),
+    ]);
+    meta = leituraParalela[0];
+    info = leituraParalela[1];
+    if (meta) {
+      duracao = Number(meta.duration) || 0;
+      var campos = meta.fields || [];
       todosMetadados = campos.map(function (f) {
         if (!f || !f.label || !f.value) return "";
         if (/^(Encoder|Data)$/i.test(f.label)) return "";
@@ -583,19 +666,12 @@
         return f && f.label === "Título";
       });
       tituloMetadados = campo ? campo.value : (campos[0] ? campos[0].value : "");
-    } catch (e) {}
-
-    var info = null;
-    var erroVideo = null;
-    try {
-      info = await lerVideoFn(ficheiro);
-    } catch (e) {
-      erroVideo = e;
-      // Se a aba estava em segundo plano e o <video> falhou/expirou, usa as dimensões lidas pelo MediaInfo WASM.
+    }
+    if (!info) {
       if (meta && meta.width && meta.height) {
         info = { largura: Number(meta.width) || 0, altura: Number(meta.height) || 0, duracao: duracao };
       } else {
-        throw e;
+        throw erroVideo || new Error("O navegador não consegue abrir este vídeo.");
       }
     }
     var codecMeta = String((meta && meta.codec) || "");
@@ -627,66 +703,36 @@
       }
     } catch (e) {}
 
-    /* 2. Identificar o filme --------------------------------------------- */
+    /* 2. Identificar o filme (quadros + áudio em paralelo, OCR nativo na IA) */
+    if (estado.pararPedido) throw erroComTipo("Lote parado.", "parado");
     definirPasso(item, "A identificar o filme…", 0.1);
     var temGemini = !!String(s.geminiKey || "").trim();
-    var quadros = await core.quadros(ficheiro, 0, fim, corte);
-    // OCR leve dos frames: tenta ler texto embutido (legendas hardcoded, nomes) via
-    // Tesseract.js (CDN), com timeout rigoroso e desativado em abas escondidas/jsdom.
-    var textoOcr = "";
-    try {
-      if (
-        typeof window === "undefined" ||
-        !window.navigator ||
-        /jsdom/i.test(String(window.navigator.userAgent || "")) ||
-        (typeof document !== "undefined" && document.hidden)
-      ) {
-        throw new Error("skip");
-      }
-      if (typeof Tesseract === "undefined") {
-        await new Promise(function (resolve, reject) {
-          var timer = setTimeout(function () { reject(new Error("timeout")); }, 3500);
-          var sc = document.createElement("script");
-          sc.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
-          sc.onload = function () { clearTimeout(timer); resolve(); };
-          sc.onerror = function () { clearTimeout(timer); reject(new Error("load")); };
-          document.head.appendChild(sc);
-        });
-      }
-      if (typeof Tesseract !== "undefined" && Tesseract.recognize) {
-        var framesOcr = (quadros || []).slice(1, 3);
-        var ocrPromessa = (async function () {
-          var acumulado = "";
-          for (var oi = 0; oi < framesOcr.length; oi++) {
-            try {
-              var r = await Tesseract.recognize(framesOcr[oi], "por+eng");
-              var t = (r && r.data && r.data.text) ? r.data.text.trim() : "";
-              if (t) acumulado += (acumulado ? " " : "") + t;
-            } catch (e) {}
-          }
-          return acumulado;
-        })();
-        var ocrLimite = new Promise(function (resolve) {
-          setTimeout(function () { resolve(""); }, 4500);
-        });
-        textoOcr = String((await Promise.race([ocrPromessa, ocrLimite])) || "").replace(/\s+/g, " ").trim().slice(0, 500);
-      }
-    } catch (e) { textoOcr = ""; }
-    var audio = null;
-    if (temGemini) {
-      try {
-        audio = await core.audio(ficheiro, 0, fim);
-      } catch (e) {
-        audio = null;
-      }
-    }
+    var capturaParalela = await Promise.all([
+      core.quadros(ficheiro, 0, fim, corte),
+      temGemini ? Promise.resolve().then(function () { return core.audio(ficheiro, 0, fim); }).catch(function () { return null; }) : Promise.resolve(null),
+    ]);
+    var quadros = capturaParalela[0];
+    var audio = capturaParalela[1];
     var dicaLink = String((item && item.dica) || (ficheiro && ficheiro.pistaLink) || "").trim();
-    // Enriquecer a dica apenas com pistas reais (o fileName já vai em fileName e é limpo pelo motor de IA).
-    var dicaEnriquecida = [dicaLink, todosMetadados, textoOcr ? ("Texto no vídeo: " + textoOcr) : ""].filter(Boolean).join(" · ");
+    var dicaEnriquecida = [dicaLink, todosMetadados].filter(Boolean).join(" · ");
 
-    // Hash perceptual do conteúdo (videohash-like) -> chave de cache.
+    // Assinatura binária + Hash perceptual do conteúdo (videohash-like) -> chave de cache e anti-duplicado.
+    var fileSig = await _assinaturaBinaria(ficheiro);
     var hashVideo = null;
     try { hashVideo = await hashPerceptualVideo(quadros); } catch (e) { hashVideo = null; }
+    var baseNome = semExtensao(ficheiro.name);
+    var nomeGen = /^(video|reel|clip|clipe|download|input|output|in|out)$/i.test(baseNome);
+    function encontrarDuplicadoNaFila(filaLista) {
+      return (filaLista || []).find(function (r) {
+        if (!r || r.accountId !== conta.id || r.status === "error") return false;
+        if (item.caixaId && r.caixaId && r.caixaId === item.caixaId) return true;
+        if (item.origem && r.linkOrigem && idDoLink(r.linkOrigem) === idDoLink(item.origem)) return true;
+        if (fileSig && r.fileSig && r.fileSig === fileSig) return true;
+        if (hashVideo && r.videoHash && _hashesPerceptuaisIguais(r.videoHash, hashVideo)) return true;
+        if (!nomeGen && r.videoFileName === baseNome + "_cineclip.mp4" && item.bytes > 0 && r.sourceBytes === item.bytes) return true;
+        return false;
+      });
+    }
     var cacheHit = hashVideo ? cacheIdentLer(hashVideo) : null;
 
     var ia = null;
@@ -762,19 +808,48 @@
       core.guardarHistorico({ title: filme.title, year: filme.year, caption: legenda, date: ambiente.agora() });
     } catch (e) {}
 
-    /* 6. Agendar (serializado para que 5 vídeos simultâneos nunca escolham o mesmo horário) */
+    /* 6. Agendar (serializado, com timeout anti-bloqueio e espelho em memória) */
     if (estado.pararPedido) throw erroComTipo("Lote parado.", "parado");
     definirPasso(item, "A agendar…", 0.95);
     return await comTravaAgendar(async function () {
       if (estado.pararPedido) throw erroComTipo("Lote parado.", "parado");
-      var fila = await core.lerFila();
-      var horario = core.proximoHorario(fila, conta.dailySlots || [], conta.id);
+      var filaIdb = await _comTimeout(
+        Promise.resolve().then(function () { return core.lerFila(); }),
+        3500,
+        null
+      );
+      var mapaFila = {};
+      var baseLista = Array.isArray(filaIdb) ? filaIdb : reelsAgendadosSessao;
+      baseLista.concat(reelsAgendadosFallback).forEach(function (r) {
+        if (r && r.id) mapaFila[r.id] = r;
+      });
+      var fila = Object.keys(mapaFila).map(function (k) { return mapaFila[k]; });
+      var chaveItem = item && item.id ? ("lote_" + sessaoLoteId + "_" + item.id) : "";
+      var duplicado = fila.find(function (r) {
+        if (!r || r.accountId !== conta.id || r.status === "error") return false;
+        if (chaveItem && r._loteKey === chaveItem) return true;
+        if (item.caixaId && r.caixaId === item.caixaId && (r.caixaTentativa || 0) === (item.tentativa || 0) && r.status === "scheduled") return true;
+        return false;
+      });
+      if (duplicado) {
+        item.resultado.horario = duplicado.scheduledAt;
+        item.resultado.reelId = duplicado.id;
+        return duplicado;
+      }
+      var horario = _proximoHorarioSeguro(core, fila, conta.dailySlots || [], conta.id);
       var base = semExtensao(ficheiro.name);
       var agora = ambiente.agora();
+      var idDeterministico = item.caixaId
+        ? ("reel_" + conta.id + "_" + item.caixaId + (item.tentativa ? "_t" + item.tentativa : ""))
+        : ("reel_" + agora + "_" + (item.id || 0) + "_" + Math.random().toString(36).slice(2, 6));
+      var legendaLimpa = typeof core.limparLegenda === "function"
+        ? core.limparLegenda(String(legenda))
+        : String(legenda).replace(/\*\*(.+?)\*\*/g, "$1").trim();
       var reel = {
-        id: "reel_" + agora + "_" + Math.random().toString(36).slice(2, 6),
+        id: idDeterministico,
         accountId: conta.id,
         createdAt: agora,
+        updatedAt: agora,
         scheduledAt: horario,
         status: "scheduled",
         title: filme.title || base,
@@ -782,13 +857,38 @@
         year: filme.year,
         poster: filme.poster,
         hookText: gancho,
-        caption: core.limparLegenda(String(legenda)),
+        caption: legendaLimpa,
         videoBlob: blob,
         videoFileName: base + "_cineclip.mp4",
         videoSize: blob.size || 0,
+        sourceBytes: item.bytes || 0,
+        caixaId: item.caixaId || undefined,
+        caixaTentativa: item.tentativa || 0,
+        linkOrigem: item.origem || undefined,
+        videoHash: hashVideo || undefined,
+        fileSig: fileSig || undefined,
+        _loteKey: chaveItem || undefined,
         platforms: ["instagram"],
       };
-      await core.guardarNaFila(reel);
+      reelsAgendadosSessao.push(reel);
+      try {
+        if (typeof window !== "undefined" && window._ccMemQ && typeof window._ccMemQ.set === "function") {
+          window._ccMemQ.set(reel.id, reel);
+        }
+      } catch (e) {}
+      var guardou = await _comTimeout(
+        Promise.resolve().then(function () { return core.guardarNaFila(reel); }).then(function () { return true; }),
+        4000,
+        false
+      );
+      if (!guardou) {
+        reelsAgendadosFallback.push(reel);
+        try {
+          var reelLeve = Object.assign({}, reel);
+          delete reelLeve.videoBlob;
+          Promise.resolve().then(function () { return core.guardarNaFila(reelLeve); }).catch(function () {});
+        } catch (e) {}
+      }
       item.resultado.horario = horario;
       item.resultado.reelId = reel.id;
       return reel;
@@ -799,9 +899,95 @@
 
   var sincronizacao = Promise.resolve();
   var travaAgendar = Promise.resolve();
+  var sessaoLoteId = 1;
+  var reelsAgendadosSessao = [];
+  var reelsAgendadosFallback = [];
+
+  function _comTimeout(promessa, ms, valorFallback) {
+    return new Promise(function (resolve) {
+      var terminado = false;
+      var t = setTimeout(function () {
+        if (terminado) return;
+        terminado = true;
+        resolve(valorFallback);
+      }, ms);
+      Promise.resolve(promessa).then(
+        function (v) {
+          if (terminado) return;
+          terminado = true;
+          clearTimeout(t);
+          resolve(v);
+        },
+        function () {
+          if (terminado) return;
+          terminado = true;
+          clearTimeout(t);
+          resolve(valorFallback);
+        }
+      );
+    });
+  }
+
+  function _proximoHorarioSeguro(core, fila, slots, contaId) {
+    try {
+      if (core && typeof core.proximoHorario === "function") {
+        var h = core.proximoHorario(fila || [], Array.isArray(slots) && slots.length ? slots : ["12:00", "18:00", "21:30"], contaId);
+        if (h && typeof h === "string") return h;
+      }
+    } catch (e) {}
+    var listaSlots = (Array.isArray(slots) ? slots : []).map(function (s) { return String(s || "").trim(); }).filter(function (s) { return /^\d{1,2}:\d{2}$/.test(s); }).sort();
+    if (!listaSlots.length) listaSlots = ["12:00", "18:00", "21:30"];
+    var ocupados = {};
+    (fila || []).forEach(function (r) {
+      if (r && (!contaId || (r.accountId || "acc_default") === contaId) && (r.status === "scheduled" || r.status === "queued") && r.scheduledAt) {
+        ocupados[String(r.scheduledAt).slice(0, 16)] = true;
+      }
+    });
+    var baseAgora = new Date(ambiente.agora() + 10 * 60000);
+    for (var d = 0; d < 60; d++) {
+      var dia = new Date(baseAgora.getFullYear(), baseAgora.getMonth(), baseAgora.getDate() + d);
+      var yyyy = dia.getFullYear();
+      var mm = String(dia.getMonth() + 1).padStart(2, "0");
+      var dd = String(dia.getDate()).padStart(2, "0");
+      for (var si = 0; si < listaSlots.length; si++) {
+        var partes = listaSlots[si].split(":");
+        var hh = Number(partes[0]) || 12;
+        var mi = Number(partes[1]) || 0;
+        var cand = new Date(dia.getFullYear(), dia.getMonth(), dia.getDate(), hh, mi, 0, 0);
+        if (cand <= baseAgora) continue;
+        var chave = yyyy + "-" + mm + "-" + dd + "T" + String(hh).padStart(2, "0") + ":" + String(mi).padStart(2, "0");
+        if (!ocupados[chave]) return chave;
+      }
+    }
+    return new Date(ambiente.agora() + 3600000).toISOString().slice(0, 16);
+  }
 
   function comTravaAgendar(fn) {
-    var p = travaAgendar.then(fn, fn);
+    var executar = function () {
+      return new Promise(function (resolve, reject) {
+        var terminado = false;
+        var t = setTimeout(function () {
+          if (terminado) return;
+          terminado = true;
+          reject(new Error("Tempo esgotado ao agendar na fila local."));
+        }, 10000);
+        Promise.resolve().then(fn).then(
+          function (v) {
+            if (terminado) return;
+            terminado = true;
+            clearTimeout(t);
+            resolve(v);
+          },
+          function (e) {
+            if (terminado) return;
+            terminado = true;
+            clearTimeout(t);
+            reject(e);
+          }
+        );
+      });
+    };
+    var p = travaAgendar.then(executar, executar);
     travaAgendar = p.catch(function () {});
     return p;
   }
@@ -823,7 +1009,7 @@
   function comTravaDeSegundoPlano(fn) {
     try {
       if (typeof navigator !== "undefined" && navigator.locks && typeof navigator.locks.request === "function") {
-        return navigator.locks.request("cineclip_lote_ativo", fn);
+        return navigator.locks.request("cineclip_lote_ativo", { mode: "shared" }, fn);
       }
     } catch (e) {}
     return fn();
@@ -845,6 +1031,9 @@
     estado.conta = app.account;
     estado.aCorrer = true;
     estado.pararPedido = false;
+    sessaoLoteId++;
+    reelsAgendadosSessao = [];
+    reelsAgendadosFallback = [];
     avisar("");
     desenhar();
     manterEcraLigado(true);
@@ -871,6 +1060,7 @@
                 item.estado = "agendado";
                 item.passo = "";
                 item.progresso = 1;
+                desenhar();
                 if (item.caixaId) marcarEntrada(item.caixaId, "feito", { reelId: item.resultado && item.resultado.reelId });
                 pedirSincronizacao();
               }
@@ -916,7 +1106,7 @@
         avisarFimDoLote(feitos - agendadosAntes);
       }
     });
-    await sincronizacao;
+    await _comTimeout(sincronizacao, 4000, null);
   }
 
   function parar() {
@@ -1100,16 +1290,20 @@
     return lista;
   }
 
+  var caixaTratadaNestaSessao = {};
+
   /** Links que ESTE aparelho deve processar agora. */
   function entradasParaMim() {
     var eu = meuAparelho();
     var processoPC = estado.opcoes.processarLinksDoCelular;
     var noLote = {};
     estado.itens.forEach(function (it) {
-      if (it.caixaId) noLote[it.caixaId] = true;
+      if (it.caixaId && it.estado !== "erro") noLote[it.caixaId] = true;
+      if (it.origem && it.estado !== "erro") noLote[idDoLink(it.origem)] = true;
     });
     return lerCaixa().filter(function (e) {
-      if (e.estado !== "pendente" || noLote[e.id]) return false;
+      var chaveTentativa = e.id + ":" + (e.tentativa || 0);
+      if (e.estado !== "pendente" || noLote[e.id] || caixaTratadaNestaSessao[chaveTentativa]) return false;
       if (e.destino === "aqui") return e.aparelho === eu;
       return e.destino === "pc" && processoPC;
     });
@@ -1135,6 +1329,8 @@
     try {
       for (var i = 0; i < entradas.length; i++) {
         var e = entradas[i];
+        var chaveTentativa = e.id + ":" + (e.tentativa || 0);
+        caixaTratadaNestaSessao[chaveTentativa] = true;
         estado.links.estado = "📥 A importar link " + (i + 1) + "/" + entradas.length + " do celular…";
         desenhar();
         try {
@@ -1143,13 +1339,19 @@
               (total ? Math.round((recebidos / total) * 100) + "%" : tamanho(recebidos));
             desenharEstadoLinks();
           });
+          ficheiro._origemLink = e.url;
+          ficheiro._caixaId = e.id;
+          var antes = estado.itens.length;
           adicionarFicheiros([ficheiro]);
-          var novo = estado.itens[estado.itens.length - 1];
-          if (novo) {
-            novo.origem = e.url;
-            novo.caixaId = e.id;
+          if (estado.itens.length > antes) {
+            var novo = estado.itens[estado.itens.length - 1];
+            if (novo) {
+              novo.origem = e.url;
+              novo.caixaId = e.id;
+            }
           }
         } catch (erro) {
+          delete caixaTratadaNestaSessao[chaveTentativa];
           var msg = "Não importei este link: " + mensagemDeErro(erro, "falha desconhecida.");
           marcarEntrada(e.id, "erro", { erro: msg });
           estado.itens.push({
