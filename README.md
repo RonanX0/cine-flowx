@@ -8,6 +8,7 @@ Aplicação web **100% no navegador** que limpa metadados de vídeos, corta até
 - `app-pronto.html` e `404.html` — cópias do bundle principal (o `404.html` é o fallback do GitHub Pages)
 - `nuvem-duravel.js` — camada de armazenamento durável (`window.CineCloud`), carregada antes do app
 - `lote-massa.js` — upload em massa (`window.CineLote`), código legível fora do bundle
+- `agendamento-rapido.js` — aba «⚡ Rápido» (`window.CineRapido`): agenda em lote vídeos já editados, sem edição — só legenda e capa
 - `apps-script/cineclip-cloud-drive.js` e `cloudflare/r2-worker.js` — backends do Google Drive e Cloudflare R2
 - `tools/` — servidor de preview, mocks, testes e ferramentas para reaplicar os patches do bundle
 - `tools/renovar-cloudflare.mjs` — renova o backend Cloudflare (`npm run cloudflare:renovar`):deploy + verificação do link `/v/:key`, das claims e do espaço no R2
@@ -96,6 +97,44 @@ celular*. Testes: `npm run compartilhar:test`.
 O código está em `lote-massa.js` (legível, fora do bundle). A ligação ao bundle é o patch
 `27-lote-ponte` (expõe `window.CineClipCore` e `window.__CineClipApp`); os patches `26` e
 `28` carregam o script e mudam a área de upload. Testes: `npm run lote:test`.
+
+## ⚡ Agendamento rápido (sem edição)
+
+Quando os vídeos **já estão editados** (CapCut, Premiere, o Estúdio…) e só falta pô-los na
+fila, usa a aba **⚡ Rápido**: juntas os ficheiros e o app agenda-os em lote sem lhes tocar.
+Ao contrário do upload em massa, **o FFmpeg nunca é chamado** — o ficheiro original entra
+no Agendador tal e qual, sem corte, sem reconversão para 9:16 e sem texto por cima. Por
+isso não demora, não gasta o motor de vídeo (~30 MB) e não arrisca o erro 2207077 à
+procura de um re-encode melhor. Por vídeo o app faz só isto:
+
+1. lê a duração e as dimensões (um `<video>` escondido);
+2. **legenda** — escrita pela IA quando há filme identificado, ou pelo teu modelo;
+3. **capa** — o pôster oficial do TMDB, que segue como `cover_url` na publicação;
+4. agenda no **próximo horário livre** da conta ativa.
+
+Opções do painel:
+
+- **🔎 Identificar o filme com a IA** (ligado por omissão) — é o que dá a legenda e a capa.
+  Desligada, agenda sem gastar uma única chamada: o título sai do nome do ficheiro e a
+  legenda sai do **modelo** do painel (`{titulo}`, `{ano}`, `{nome}`). Sem chaves de
+  IA/TMDB não precisas de configurar nada — basta desligar esta opção.
+- **🖼 Usar o pôster do TMDB como capa do Reel** — a imagem que o Instagram mostra na grelha.
+- **Agendar mesmo com pouca certeza** — abaixo de 65 % de certeza o vídeo fica para rever e
+  ganha o botão *Agendar mesmo assim*.
+- **Vídeos ao mesmo tempo** — até 4 em paralelo.
+- A **legenda de cada vídeo** é editável na lista, mesmo depois de agendado: a alteração é
+  gravada na fila e segue para a nuvem.
+
+Dois avisos que não bloqueiam: se o vídeo **não estiver em 9:16** o item fica assinalado
+(este modo não edita, por isso o Instagram é que decide) e vídeos com **menos de 3 s** dão
+erro. O Reel fica marcado com `semEdicao: true` para se saber de onde veio.
+
+O código está em `agendamento-rapido.js` (legível, fora do bundle). Usa a mesma ponte do
+lote (`window.CineClipCore` / `window.__CineClipApp`, patch `27-lote-ponte`) e partilha com
+ele o cache de identificação, para o mesmo vídeo não gastar duas chamadas à IA. Os patches
+`35`–`38` carregam o script, acrescentam a aba e criam o ponto de montagem; as âncoras
+vivem em `tools/build-rapido-patch.mjs` (regenera com `npm run patch:rapido`).
+Testes: `npm run rapido:test`.
 
 ## ☁️ Processar na nuvem (servidor)
 

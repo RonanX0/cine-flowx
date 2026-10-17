@@ -42,7 +42,7 @@ const appPath = path.join(root, "index.html");
 const PAGINAS = ["index.html", "app-pronto.html", "404.html"];
 /** Ficheiros copiados tal e qual. */
 const ESTATICOS = [
-  "nuvem-duravel.js", "lote-massa.js", "_redirects", "_headers",
+  "nuvem-duravel.js", "lote-massa.js", "agendamento-rapido.js", "_redirects", "_headers",
   // App instalável no Android (menu Compartilhar do TikTok/Kwai)
   "manifest.webmanifest", "sw.js", "icone-192.png", "icone-512.png", "icone-maskable-512.png",
 ];
@@ -50,6 +50,8 @@ const ESTATICOS = [
 const TAG_NUVEM = '<script src="nuvem-duravel.js"></script>';
 /** Upload em massa (código legível fora do bundle) — também com cache-busting. */
 const TAG_LOTE = '<script src="lote-massa.js"></script>';
+/** Aba «⚡ Agendamento rápido» (código legível fora do bundle) — idem. */
+const TAG_RAPIDO = '<script src="agendamento-rapido.js"></script>';
 
 for (const file of [...PAGINAS, ...ESTATICOS]) {
   if (!fs.existsSync(path.join(root, file))) {
@@ -87,6 +89,7 @@ function descobrirVersao(fallback) {
 
 const hashNuvem = hash(fs.readFileSync(path.join(root, "nuvem-duravel.js")));
 const hashLote = hash(fs.readFileSync(path.join(root, "lote-massa.js")));
+const hashRapido = hash(fs.readFileSync(path.join(root, "agendamento-rapido.js")));
 const hashApp = hash(html);
 const versao = descobrirVersao(hashApp);
 const data = new Date().toISOString();
@@ -108,6 +111,8 @@ const carimbo = {
   data,
   app: hashApp,
   nuvem: hashNuvem,
+  lote: hashLote,
+  rapido: hashRapido,
   ig2207077: temCorrecao2207077,
 };
 
@@ -122,7 +127,8 @@ const scriptCarimbo =
 function prepararPagina(fonte) {
   return fonte
     .replace(TAG_NUVEM, `${scriptCarimbo}\n    <script src="nuvem-duravel.js?v=${hashNuvem}"></script>`)
-    .replace(TAG_LOTE, `<script src="lote-massa.js?v=${hashLote}"></script>`);
+    .replace(TAG_LOTE, `<script src="lote-massa.js?v=${hashLote}"></script>`)
+    .replace(TAG_RAPIDO, `<script src="agendamento-rapido.js?v=${hashRapido}"></script>`);
 }
 
 fs.rmSync(dist, { recursive: true, force: true });
@@ -134,6 +140,9 @@ for (const file of PAGINAS) {
   const pagina = prepararPagina(fs.readFileSync(source, "utf8"));
   if (pagina.includes(TAG_LOTE)) {
     throw new Error(`${file}: a tag do upload em massa não recebeu o cache-busting (?v=).`);
+  }
+  if (pagina.includes(TAG_RAPIDO)) {
+    throw new Error(`${file}: a tag do agendamento rápido não recebeu o cache-busting (?v=).`);
   }
   if (pagina.includes(TAG_NUVEM)) {
     throw new Error(`${file}: a tag de nuvem não recebeu o cache-busting (?v=) — o deploy serviria código em cache.`);
