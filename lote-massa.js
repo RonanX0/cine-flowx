@@ -2436,6 +2436,13 @@
     _interno: {
       ambiente: ambiente,
       hashPerceptualVideo: hashPerceptualVideo,
+      /**
+       * Partilhados com o «⚡ Agendamento rápido» (agendamento-rapido.js): o
+       * mesmo par {IA, TMDB} é reaproveitado nos dois modos, por isso o mesmo
+       * vídeo não gasta duas chamadas à IA.
+       */
+      cacheIdentLer: cacheIdentLer,
+      cacheIdentGuardar: cacheIdentGuardar,
       lerVideoNoNavegador: lerVideoNoNavegador,
       estado: estado,
       adicionarFicheiros: adicionarFicheiros,
