@@ -508,6 +508,8 @@ check("CineClipCore exporta os 4 modos de identificação", Array.isArray(core.m
   ];
   check("limparNomeArquivo rejeita nomes de downloaders, editores e frases de gancho", lixos.every((n) => core.limparNomeArquivo(n) === ""), JSON.stringify(lixos.map((n) => [n, core.limparNomeArquivo(n)])));
   check("limparNomeArquivo extrai título real mesmo com prefixo SnapTik e sufixos 1080p/dublado", core.limparNomeArquivo("SnapTik_7382910_Peaky_Blinders_1080p_dublado_corte_2.mp4") === "Peaky Blinders", core.limparNomeArquivo("SnapTik_7382910_Peaky_Blinders_1080p_dublado_corte_2.mp4"));
+  const idTesouro = await core.identificar("", [], "pt-BR", { fileName: "05_O_Tesouro_National_Treasure_2004.mp4", identMode: "dica" });
+  check("identificar extrai ano 2004, remove prefixo 05_ e gera sub-pista National Treasure para 05_O_Tesouro_National_Treasure_2004.mp4", idTesouro && idTesouro.ano === 2004 && idTesouro.titulo === "O Tesouro National Treasure" && Array.isArray(idTesouro.alternativas) && idTesouro.alternativas.some((a) => a.titulo === "National Treasure"), JSON.stringify(idTesouro));
 
   const idSemDesligado = await core.identificar("", [], "pt-BR", { fileName: "Interestelar_2014.mp4", identMode: "sem_id", useFileNameHint: false });
   check("useFileNameHint=false ignora o nome do ficheiro quando o utilizador desativa o rastreio", idSemDesligado && idSemDesligado.titulo === "Cena de filme", JSON.stringify(idSemDesligado));
