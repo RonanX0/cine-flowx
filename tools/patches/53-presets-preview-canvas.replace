@@ -1,1 +1,1 @@
-const $=nh?"":o.trim(),cx=caixaDoPreset(pv,C,ft,fc);if(pv==="atual"&&(bm==="branco"||bm==="white"))cx.fundo="branco";_h(p.current,C.outWidth,C.outHeight,C.padY,$,!nh&&!$,hc,pv,cx)},[o,C,u,hc,pv,ft,fc,bm,nh])
+const $=nh?"":o.trim(),cx=caixaDoPreset(pv,C,ft,fc);cx.semPill=!0;if(pv==="atual"&&(bm==="branco"||bm==="white"))cx.fundo="branco";_h(p.current,C.outWidth,C.outHeight,C.padY,$,!nh&&!$,hc,pv,cx)},[o,C,u,hc,pv,ft,fc,bm,nh])

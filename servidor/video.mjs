@@ -456,10 +456,11 @@ export async function imagemDoGancho(largura, altura, padY, texto, estilo = {}) 
     ctx.fillStyle = comPreset ? (estilo.hookColor || P.ganchoCor) : "#000000";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    const max = largura * 0.84;
+    const max = largura * 0.86;
+    const palavras = frase.split(/\s+/);
     const linhas = [];
     let atual = "";
-    for (const palavra of frase.split(/\s+/)) {
+    for (const palavra of palavras) {
       const teste = atual ? `${atual} ${palavra}` : palavra;
       if (ctx.measureText(teste).width > max && atual) {
         linhas.push(atual);
@@ -467,12 +468,31 @@ export async function imagemDoGancho(largura, altura, padY, texto, estilo = {}) 
       } else atual = teste;
     }
     if (atual) linhas.push(atual);
+    if (linhas.length > 2) {
+      const wCap = palavras.length > 12 ? [...palavras.slice(0, 11), palavras[palavras.length - 1]] : palavras;
+      const mid = Math.ceil(wCap.length / 2);
+      linhas.length = 0;
+      linhas.push(wCap.slice(0, mid).join(" "), wCap.slice(mid).join(" "));
+    }
     const entre = tam * (comPreset ? P.ganchoEntrelinha : 1.25);
     const total = linhas.length * entre;
     const margem = altura * (comPreset ? 0.065 : 0.06);
     const area = Math.max(total, padY - margem);
     const y0 = margem + (area - total) / 2 + entre / 2;
-    linhas.forEach((l, n) => ctx.fillText(l, largura / 2, y0 + n * entre));
+    const maxDrawW = Math.round(largura * 0.92);
+    const usaBordaPreta = !/^#(?:000|000000)$/i.test(String(ctx.fillStyle || "").trim());
+    if (usaBordaPreta && typeof ctx.strokeText === "function") {
+      ctx.lineJoin = "round";
+      ctx.lineCap = "round";
+      ctx.miterLimit = 2;
+      ctx.strokeStyle = "#000000";
+      ctx.lineWidth = Math.max(4, Math.round(tam * 0.16));
+    }
+    linhas.forEach((l, n) => {
+      const ly = y0 + n * entre;
+      if (usaBordaPreta && typeof ctx.strokeText === "function") ctx.strokeText(l, largura / 2, ly, maxDrawW);
+      ctx.fillText(l, largura / 2, ly, maxDrawW);
+    });
   }
   return canvas.toBuffer("image/png");
 }

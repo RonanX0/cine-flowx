@@ -96,11 +96,11 @@ const codigo = [
 
 /** Canvas falso que regista tudo o que o `_h` desenha. */
 function canvasFalso() {
-  const chamadas = { fillText: [], fill: [], arc: [], roundRect: [], cores: [], fonts: [] };
+  const chamadas = { fillText: [], strokeText: [], fill: [], arc: [], roundRect: [], cores: [], fonts: [] };
   const ctx = {
     font: "", fillStyle: "", textAlign: "", textBaseline: "",
     shadowColor: "", shadowBlur: 0, shadowOffsetX: 0, shadowOffsetY: 0,
-    strokeStyle: "", lineWidth: 0,
+    strokeStyle: "", lineWidth: 0, lineJoin: "", lineCap: "", miterLimit: 0,
     clearRect() {}, save() {}, restore() {}, beginPath() {}, closePath() {},
     moveTo() {}, rect() {}, stroke() {},
     roundRect(...a) { chamadas.roundRect.push(a); },
@@ -109,6 +109,9 @@ function canvasFalso() {
     measureText(t) {
       const px = Number(/(\d+(?:\.\d+)?)px/.exec(ctx.font || "")?.[1] || 20);
       return { width: String(t).length * px * 0.55 };
+    },
+    strokeText(t, x, y) {
+      chamadas.strokeText.push({ texto: String(t), x, y, cor: ctx.strokeStyle, largura: ctx.lineWidth });
     },
     fillText(t, x, y) {
       chamadas.fillText.push({ texto: String(t), x, y, cor: ctx.fillStyle, font: ctx.font });
@@ -235,6 +238,9 @@ const semTexto = desenhar("escuro", "", e720);
 check("sem gancho mas com preset: os cantos continuam desenhados", semTexto.chamadas.fill.length > 0 || semTexto.chamadas.arc.length === 4);
 const corPropria = desenhar("escuro", gancho, e720, { cor: "#FF0000" });
 check("a cor escolhida na conta vence a do preset", ganchoDe(corPropria).every((t) => t.cor === "#FF0000"));
+const ganchoLongo = desenhar("escuro", "⛳ O ex-jogador descobriu um prodígio do golfe num lugar onde ninguém esperava encontrar", e720);
+check("o gancho nunca passa de 2 linhas mesmo em frases longas", ganchoDe(dAtual).length <= 2 && ganchoDe(dEscuro).length <= 2 && ganchoDe(dClaro).length <= 2 && ganchoDe(ganchoLongo).length === 2, `linhas=${ganchoDe(ganchoLongo).length}`);
+check("o gancho usa contorno preto (strokeText #000000) nas letras", dEscuro.chamadas.strokeText.length === ganchoDe(dEscuro).length && dEscuro.chamadas.strokeText.every((s) => s.cor === "#000000" && s.largura >= 4));
 
 /* ------------------------------------------------------------------ 7 */
 console.log("\n7. Servidor: as mesmas contas do app");

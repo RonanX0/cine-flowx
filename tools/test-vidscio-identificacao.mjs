@@ -516,6 +516,8 @@ check("CineClipCore exporta os 4 modos de identificação", Array.isArray(core.m
 
   check("Estúdio tem debounce de sincronização (_syncTm/_editTs) para digitar gancho sem delay", html.includes("_syncTm") && html.includes("_editTs") && html.includes("freshEdit"));
   check("Estúdio tem seletor rápido de preset sob o preview 9:16", html.includes("mudarPresetConta") && html.includes("Mudar preset visual desta conta em tempo real"));
+  const ganchoCurto = core.limparGancho("⛳ O ex-jogador descobriu um prodígio do golfe num campo abandonado onde ninguém imaginava 😳");
+  check("limparGancho limita o tamanho para caber em até 2 linhas e preserva o emoji", ganchoCurto.length <= 58 && ganchoCurto.endsWith("😳"), ganchoCurto);
 }
 
 /* ====================================================================== */
