@@ -81,7 +81,7 @@ async function novoDom() {
 
 /** Ficheiro falso: o nome decide o comportamento dos falsos. */
 function ficheiro(window, nome, bytes = 4096) {
-  const f = new window.File([new Uint8Array(Math.min(bytes, 64))], nome, { type: "video/mp4" });
+  const f = new window.File([new Uint8Array(Math.min(bytes, 64))], nome, { type: "video/mp4", lastModified: 1700000000000 });
   return f;
 }
 
@@ -356,6 +356,9 @@ check("o painel diz para que conta agenda", /@conta\.teste/.test(monte.textConte
 /* Lote com a IA falsa, mas a fila, os horários e as definições reais */
 const rapido = window.CineRapido._interno;
 const coreReal = window.CineClipCore;
+check("os presets Escuro e Claro continuam disponíveis com a aba Rápido", !!coreReal.presets?.escuro && !!coreReal.presets?.claro);
+check("a ponte mantém a geometria e o estilo dos presets", typeof coreReal.enquadramento === "function" && typeof coreReal.presetDoReel === "function");
+check("a ponte mantém as melhorias de identificação e gancho", typeof coreReal.videoParaIA === "function" && typeof coreReal.ganchoGenerico === "function");
 let ffmpegChamado = 0;
 const f1 = new window.File([new Uint8Array(32)], "r1.mp4", { type: "video/mp4" });
 const f2 = new window.File([new Uint8Array(32)], "r2.mp4", { type: "video/mp4" });

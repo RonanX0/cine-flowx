@@ -1,0 +1,1 @@
+async function YS(r,o,a,i,c,u,f,bgMode="preto",hookColor="#FFFFFF"){return _ccComLock(async()=>{

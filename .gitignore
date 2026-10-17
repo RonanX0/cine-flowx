@@ -14,6 +14,9 @@ sessao-meta/
 tools/.syntax-*
 tools/.robo-24h-*
 
+# Amostras de Reel geradas (node tools/gerar-amostra-presets.mjs)
+tools/amostra-preset-*.png
+
 # Segredos locais do wrangler (npx wrangler dev) — nunca versionar
 cloudflare/.dev.vars
 .dev.vars

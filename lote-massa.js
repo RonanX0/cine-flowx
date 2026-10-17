@@ -631,6 +631,28 @@
   }
 
   /**
+   * O estilo do Reel da conta ativa: preset (atual/escuro/claro), fundo, cor do
+   * gancho e rodapé. O app guarda isto na conta do Instagram (não nas chaves),
+   * por isso o lote em massa tem de o levar até ao FFmpeg — sem estes argumentos
+   * o `processar` usava sempre os valores por omissão.
+   */
+  function estiloDoReel(app, s) {
+    var conta = (app && app.account) || {};
+    var geral = s || {};
+    var tabela = (typeof window !== "undefined" && window.CineClipCore && window.CineClipCore.presets) || null;
+    var preset = String(conta.preset || conta.reelPreset || geral.preset || "atual");
+    if (preset !== "escuro" && preset !== "claro") preset = "atual";
+    var padrao = tabela && tabela[preset] ? tabela[preset] : null;
+    return {
+      preset: preset,
+      bgMode: String(conta.bgMode || conta.backgroundMode || geral.bgMode || (padrao && padrao.bgMode) || "preto"),
+      hookColor: String(conta.hookColor || conta.hookTextColor || geral.hookColor || (padrao && padrao.ganchoCor) || "#FFFFFF"),
+      footerText: String(conta.footerText || conta.rodapeTexto || geral.footerText || ""),
+      footerColor: String(conta.footerColor || conta.rodapeCor || geral.footerColor || (padrao && padrao.rodapeCor) || "#2DBD2C"),
+    };
+  }
+
+  /**
    * Leva um vídeo do ficheiro original até à fila do Agendador.
    * Lança um erro (com `tipo`) quando não pode continuar.
    */
@@ -710,16 +732,21 @@
       }
     } catch (e) {}
 
-    /* 2. Identificar o filme (quadros + áudio em paralelo, OCR nativo na IA) */
+    /* 2. Identificar o filme (quadros + áudio + vídeo em paralelo, OCR nativo na IA) */
     if (estado.pararPedido) throw erroComTipo("Lote parado.", "parado");
     definirPasso(item, modoIdent === "sem_id" ? "A preparar corte direto…" : "A identificar o filme…", 0.1);
     var temGemini = !!String(s.geminiKey || "").trim();
     var capturaParalela = await Promise.all([
       core.quadros(ficheiro, 0, fim, corte),
       temGemini ? Promise.resolve().then(function () { return core.audio(ficheiro, 0, fim); }).catch(function () { return null; }) : Promise.resolve(null),
+      temGemini && typeof core.videoParaIA === "function"
+        ? Promise.resolve().then(function () { return core.videoParaIA(ficheiro, 0, fim); }).catch(function () { return null; })
+        : Promise.resolve(null),
     ]);
     var quadros = capturaParalela[0];
     var audio = capturaParalela[1];
+    /* Vídeo para o Gemini "assistir" (File API) — null se o upload não for possível. */
+    var videoIA = capturaParalela[2] || null;
     var dicaLink = String((item && item.dica) || (ficheiro && ficheiro.pistaLink) || "").trim();
     var dicaEnriquecida = [dicaLink, todosMetadados].filter(Boolean).join(" · ");
 
@@ -758,6 +785,7 @@
         userHint: dicaEnriquecida,
         geminiKey: s.geminiKey,
         audioClip: audio,
+        video: videoIA,
         identMode: modoIdent,
         hookMode: modoGancho,
       });
@@ -780,6 +808,9 @@
                 titulo_original: altCand.titulo_original,
                 ano: altCand.ano,
                 tipo: altCand.tipo,
+                atores: ia.atores,
+                personagens: ia.personagens,
+                fala_do_audio: ia.fala_do_audio,
                 confianca: 75
               });
               if (filme) {
@@ -833,10 +864,25 @@
         : function (t) {
             return String(t == null ? "" : t).trim();
           };
+    var ganchosJaUsados = [];
+    reelsAgendadosSessao.forEach(function (r) {
+      if (r && r.hookText) ganchosJaUsados.push(String(r.hookText).trim());
+    });
+    function chaveGanchoLote(txt) {
+      return String(txt || "").toLowerCase().replace(/[^a-z0-9\u00C0-\u017F]+/gi, "");
+    }
+    var setUsados = {};
+    ganchosJaUsados.forEach(function (u) {
+      var k = chaveGanchoLote(u);
+      if (k) setUsados[k] = true;
+    });
     function eGanchoValido(g) {
       var str = String(g || "").trim();
       if (!str || str.length < 8) return false;
-      if (/^(gancho \d|opção \d|opcao \d|você precisa assistir|voce precisa assistir|o que acontece nessa cena)/i.test(str)) return false;
+      if (/^(gancho \d|opção \d|opcao \d|você precisa assistir|voce precisa assistir|veja até o final|veja ate o final|assista até o final|assista ate o final|o que acontece nessa cena)/i.test(str)) return false;
+      if (typeof core.ganchoGenerico === "function" && core.ganchoGenerico(str)) return false;
+      var k = chaveGanchoLote(str);
+      if (k && setUsados[k]) return false;
       return true;
     }
     var gancho = "";
@@ -848,7 +894,16 @@
       }
       if (!gancho) {
         try {
-          var g = await core.gerarGancho(s.nvidiaKey, quadros, s.lang, filme.title, s.geminiKey, audio, modoGancho);
+          var contextoGancho = {
+            cena: cena,
+            fala: ia.fala_do_audio,
+            personagens: ia.personagens,
+            textoTela: ia.texto_na_tela,
+            sinopse: filme && filme.overview ? filme.overview : "",
+            evitar: ganchosJaUsados.slice(-8),
+            hookMode: modoGancho,
+          };
+          var g = await core.gerarGancho(s.nvidiaKey, quadros, s.lang, filme.title, s.geminiKey, audio, videoIA, contextoGancho);
           gancho = ((g && g.ganchos) || [])
             .map(limparGancho)
             .find(eGanchoValido);
@@ -856,28 +911,35 @@
         } catch (e) {}
       }
       if (!gancho) {
+        var cenaLimpa = String(cena || "").trim().replace(/[.!?]+$/, "");
+        var titLimpo = String((filme && filme.title) || "").trim();
         var poolVirais = [
-          "Ele achou que estava no controle até isso acontecer 😳",
-          "Ela percebeu tarde demais com quem estava lidando 💀",
-          "O silêncio dele antes de agir diz tudo 🥶",
-          "Bastou uma frase para mudar o rumo de tudo 😱",
-          "Ninguém na sala esperava por essa resposta 🔥",
-          "A reação dele entregou tudo em 3 segundos 🤯"
+          titLimpo ? ("O detalhe oculto nesta cena de " + titLimpo + " mudou tudo 😳") : "O detalhe que quase ninguém notou nesta cena muda tudo 😳",
+          titLimpo ? ("O segredo por trás deste momento em " + titLimpo + " é assustador 💀") : "O silêncio antes da revelação entregou o segredo inteiro 💀",
+          "Ele percebeu tarde demais a armadilha escondida naquela conversa 😨",
+          "Um único olhar nesta cena entregou quem estava mentindo 🥶",
+          "A última frase dita aqui esconde uma reviravolta sombria 🤯",
+          "Poucos perceberam o erro fatal cometido neste momento 😱"
         ];
-        var customOuPadrao = String(s.overlayText || core.ganchoPadrao || "").trim();
-        gancho = (customOuPadrao && !/você precisa assistir|voce precisa assistir/i.test(customOuPadrao))
-          ? customOuPadrao
-          : poolVirais[Math.floor(Math.random() * poolVirais.length)];
+        if (cenaLimpa && cenaLimpa.length >= 15 && !/^cena\b/i.test(cenaLimpa)) {
+          var pals = cenaLimpa.split(/\s+/);
+          var resumoCurto = pals.length > 11 ? pals.slice(0, 11).join(" ") : cenaLimpa;
+          poolVirais.unshift(resumoCurto + " 😳");
+        }
+        gancho = poolVirais.find(function (cand) { return !setUsados[chaveGanchoLote(cand)]; }) || poolVirais[Math.floor(Math.random() * poolVirais.length)];
       }
     }
     item.resultado.gancho = gancho;
 
     /* 4. Processar o vídeo -------------------------------------------------- */
     definirPasso(item, "A processar o vídeo… 0%", 0.25);
+    /* O preset/fundo/gancho/rodapé vêm da conta ativa — o FFmpeg do app recebe-os
+       nos argumentos 8..12 do `processar`. */
+    var estilo = estiloDoReel(app, s);
     var blob = await core.processar(ficheiro, 0, fim, s.resolution, gancho, function (fracao) {
       var pct = Math.max(0, Math.min(1, Number(fracao) || 0));
       definirPasso(item, "A processar o vídeo… " + Math.round(pct * 100) + "%", 0.25 + pct * 0.6);
-    }, corte);
+    }, corte, estilo.bgMode, estilo.hookColor, estilo.preset, estilo.footerText, estilo.footerColor);
     if (!blob || !blob.size) throw erroComTipo("O FFmpeg não devolveu o vídeo processado.", "processamento");
 
     /* 5. Legenda ------------------------------------------------------------- */
@@ -2541,6 +2603,7 @@
       parar: parar,
       processarItem: processarItem,
       faltaConfigurar: faltaConfigurar,
+      estiloDoReel: estiloDoReel,
       horarioLegivel: horarioLegivel,
       MAX_SEGUNDOS: MAX_SEGUNDOS,
       MAX_SIMULTANEOS: MAX_SIMULTANEOS,

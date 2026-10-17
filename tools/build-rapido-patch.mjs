@@ -2,10 +2,10 @@
 /**
  * Gera e (re)aplica os patches da aba «⚡ Agendamento rápido»:
  *
- *   35-rapido-script-tag    → carrega agendamento-rapido.js antes da nuvem
- *   36-rapido-aba-nav       → botão «⚡ Rápido» na barra (Estúdio · Agendador · Rápido)
- *   37-rapido-aba-estudio   → com três abas, o Estúdio só aparece na aba dele
- *   38-rapido-aba-monte     → <div id="cc-rapido-monte"> onde o painel é desenhado
+ *   63-rapido-script-tag    → carrega agendamento-rapido.js antes da nuvem
+ *   64-rapido-aba-nav       → botão «⚡ Rápido» na barra (Estúdio · Agendador · Rápido)
+ *   65-rapido-aba-estudio   → com três abas, o Estúdio só aparece na aba dele
+ *   66-rapido-aba-monte     → <div id="cc-rapido-monte"> onde o painel é desenhado
  *
  *   node tools/build-rapido-patch.mjs        (ou: npm run patch:rapido)
  *   npm run patch:nuvem                      (aplica todos os patches)
@@ -47,29 +47,29 @@ const ESTUDIO =
 const FIM_MAIN = `onQueueChanged:()=>{C(),j(S,c,g.id,!1)}})})]}),d.jsx("footer"`;
 
 /*
- * A âncora do 35 é o resultado do patch 26 (lote-massa.js + nuvem-duravel.js),
+ * A âncora do 63 é o resultado do patch 26 (lote-massa.js + nuvem-duravel.js),
  * não só a tag da nuvem: assim o agendamento-rapido.js fica entre os dois e o
- * apply-cloud-patch.mjs reconhece que o 26 «já está incluído em 35» em vez de
+ * apply-cloud-patch.mjs reconhece que o 26 «já está incluído em 63» em vez de
  * voltar a aplicá-lo (o que duplicaria as duas tags).
  */
 const TAGS_26 = `    <script src="lote-massa.js"></script>\n    <script src="nuvem-duravel.js"></script>`;
 
 const PATCHES = {
-  "35-rapido-script-tag": [
+  "63-rapido-script-tag": [
     TAGS_26,
     `    <script src="lote-massa.js"></script>\n    <script src="agendamento-rapido.js"></script>\n    <script src="nuvem-duravel.js"></script>`,
   ],
   // FIM_AGENDADOR termina com "]})" (fecha o botão) + "]})" (fecha a barra) + ",".
   // O botão novo entra entre os dois, como irmão do botão do Agendador.
-  "36-rapido-aba-nav": [
+  "64-rapido-aba-nav": [
     FIM_AGENDADOR,
     FIM_AGENDADOR.slice(0, -"]}),".length) + BOTAO_RAPIDO + "]})" + ",",
   ],
-  "37-rapido-aba-estudio": [
+  "65-rapido-aba-estudio": [
     ESTUDIO,
     `d.jsxs("div",{className:v==="studio"?"space-y-6":"hidden",children:[d.jsx(jc,{n:1,title:"Upload e limpeza"`,
   ],
-  "38-rapido-aba-monte": [
+  "66-rapido-aba-monte": [
     FIM_MAIN,
     `onQueueChanged:()=>{C(),j(S,c,g.id,!1)}})}),d.jsx("div",{id:"cc-rapido-monte",className:v==="rapido"?"":"hidden"})]}),d.jsx("footer"`,
   ],
@@ -80,7 +80,7 @@ const PATCHES_COMO_LISTA = NOMES.map((nome) => ({ nome, find: PATCHES[nome][0], 
 
 /**
  * Ordem de desfazer: cada patch, da versão atual para a gravada, em sentido
- * descendente (o 38 foi o último a ser aplicado, é o primeiro a sair).
+ * descendente (o 66 foi o último a ser aplicado, é o primeiro a sair).
  */
 function ordemDeDesfazer() {
   const noDisco = new Map(patchesNoDisco().map((p) => [p.nome, p]));

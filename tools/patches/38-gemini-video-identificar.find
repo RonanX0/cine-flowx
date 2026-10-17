@@ -1,0 +1,6 @@
+  if(p)try{
+    const _=frames.length>=4?frames.slice(1):frames,k=[{text:f}];
+    for(const C of _){const S=cg(C);S&&k.push({inline_data:S})}
+    i!=null&&i.audioClip&&k.push({inline_data:{mime_type:i.audioClip.mimeType,data:i.audioClip.base64}});
+    v=await ju(p,k,!1,!0),x="gemini",res1=_vsParseIA(v,x);
+  }catch(_){if(!g)throw _}

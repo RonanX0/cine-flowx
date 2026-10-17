@@ -91,16 +91,22 @@ function cenario(window, opcoes = {}) {
     detetarBarras: async () => ({ y: 100, h: 800, vh: 1080 }),
     quadros: async () => ["data:image/jpeg;base64,AAA"],
     audio: async () => null,
+    videoParaIA: async (f, ini, fim) => {
+      chamadas.videoParaIA = (chamadas.videoParaIA || 0) + 1;
+      return { data: new Uint8Array([1, 2, 3]), mimeType: "video/mp4", ini: ini || 0, fim: fim || 0 };
+    },
     identificar: async (chave, quadros, lang, info) => {
       chamadas.identificar++;
+      chamadas.videoRecebido = info.video || null;
       const nome = info.fileName;
       if (nome === "duvida.mp4") return { titulo: "Talvez Este", confianca: 50, cena: "cena incerta", ganchos: ["Gancho incerto 🤔"] };
       if (nome === "sem-gancho.mp4") return { titulo: "Sem Gancho", confianca: 90, cena: "", ganchos: [] };
       return { titulo: "Filme " + nome, confianca: 92, cena: "cena de " + nome, ganchos: ["Gancho de " + nome + " 😳", "outro"] };
     },
     procurarTmdb: async (chave, ia) => ({ title: ia.titulo, original: ia.titulo + " (orig)", year: 2024, poster: "https://img/p.jpg", kind: "movie", genres: [], overview: "" }),
-    gerarGancho: async () => {
+    gerarGancho: async (chave, quadros, lang, titulo, geminiKey, audio, video) => {
       chamadas.gerarGancho++;
+      chamadas.videoGancho = video || null;
       return { cena: "cena gerada", ganchos: ["Gancho gerado 🔥"] };
     },
     processar: async (f, inicio, fim, resolucao, gancho, progresso, corte) => {
@@ -205,6 +211,19 @@ console.log("\nA2. Sem gancho na identificação → pede um gancho à IA");
   c.lote.adicionarFicheiros([ficheiro(dom.window, "sem-gancho.mp4")]);
   await c.lote.iniciar();
   check("chama a IA de ganchos", c.chamadas.gerarGancho === 1);
+  check("usa o gancho gerado", c.fila[0]?.hookText === "Gancho gerado 🔥", c.fila[0]?.hookText);
+  dom.window.close();
+}
+
+console.log("\nA2b. Com Gemini: o vídeo vai para a IA («assistir» em vez de frames)");
+{
+  const dom = novoDom();
+  const c = cenario(dom.window, { settings: { geminiKey: "gm-key" } });
+  c.lote.adicionarFicheiros([ficheiro(dom.window, "sem-gancho.mp4")]);
+  await c.lote.iniciar();
+  check("prepara o vídeo para a IA (videoParaIA)", c.chamadas.videoParaIA === 1, "chamadas=" + c.chamadas.videoParaIA);
+  check("a identificação recebe o vídeo", !!c.chamadas.videoRecebido && c.chamadas.videoRecebido.mimeType === "video/mp4" && c.chamadas.videoRecebido.fim === 70, JSON.stringify(c.chamadas.videoRecebido));
+  check("o gerarGancho recebe o vídeo (7.º argumento)", !!c.chamadas.videoGancho && c.chamadas.videoGancho.mimeType === "video/mp4", JSON.stringify(c.chamadas.videoGancho));
   check("usa o gancho gerado", c.fila[0]?.hookText === "Gancho gerado 🔥", c.fila[0]?.hookText);
   dom.window.close();
 }

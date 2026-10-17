@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="pt">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CineClip · Amostra dos presets de Reel</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px 16px 48px; background: #0b0b0f; color: #e8e8ee;
+    font: 14px/1.5 "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  p.sub { margin: 0 0 20px; color: #9a9aa8; font-size: 12.5px; max-width: 860px; }
+  .barra {
+    display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px;
+    padding: 12px; margin-bottom: 22px; border: 1px solid #26262f; border-radius: 12px; background: #12121a;
+  }
+  .campo { display: flex; flex-direction: column; gap: 4px; }
+  .campo label { font-size: 11px; color: #9a9aa8; text-transform: uppercase; letter-spacing: .04em; }
+  input[type="text"], input[type="file"] {
+    background: #0b0b0f; border: 1px solid #2f2f3a; color: #e8e8ee; border-radius: 8px;
+    padding: 7px 9px; font: inherit; font-size: 12.5px; min-width: 220px;
+  }
+  .grelha { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
+  figure { margin: 0; }
+  figcaption { margin-top: 8px; font-size: 11.5px; color: #9a9aa8; }
+  figcaption b { color: #e8e8ee; }
+  .ecra {
+    position: relative; width: 100%; aspect-ratio: 9 / 16; overflow: hidden;
+    border-radius: 14px; border: 1px solid #26262f; box-shadow: 0 8px 30px rgba(0,0,0,.5);
+  }
+  .caixa { position: absolute; overflow: hidden; background: #000; }
+  .caixa video, .caixa .falso { position: absolute; max-width: none; object-fit: fill; }
+  .falso {
+    inset: 0; width: 100%; height: 100%;
+    background: linear-gradient(135deg, #2b3a55 0%, #57406b 45%, #8a4b3a 100%);
+  }
+  .falso span {
+    position: absolute; inset: 0; display: grid; place-items: center;
+    font-size: 11px; color: rgba(255,255,255,.75); text-align: center; padding: 8px;
+  }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  .medidas { margin-top: 6px; font-size: 11px; color: #7f7f8d; font-variant-numeric: tabular-nums; }
+  .erro { padding: 14px; border: 1px solid #5a2b2b; background: #231416; border-radius: 10px; color: #ffb4b4; }
+  code { background: #1b1b24; padding: 1px 5px; border-radius: 5px; font-size: 11.5px; }
+</style>
+</head>
+<body>
+  <h1>Presets de formatação do Reel</h1>
+  <p class="sub">
+    A página não duplica nada: vai buscar o <code>index.html</code> do repositório e usa as
+    funções reais do app (<code>PRESETS_DO_REEL</code>, <code>Eh</code>, <code>_h</code>) para
+    desenhar cada preset — é exatamente o que a pré-visualização do estúdio e o FFmpeg fazem.
+    Escolhe um vídeo para veres a caixa, os cantos e o gancho por cima dele.
+  </p>
+
+  <div class="barra">
+    <div class="campo">
+      <label for="ficheiro">Vídeo (opcional)</label>
+      <input id="ficheiro" type="file" accept="video/*" />
+    </div>
+    <div class="campo">
+      <label for="gancho">Texto do gancho</label>
+      <input id="gancho" type="text" value="O que acontece nessa cena deixou todo mundo em choque" />
+    </div>
+    <div class="campo">
+      <label for="rodape">Rodapé (preset Escuro)</label>
+      <input id="rodape" type="text" value="Cenas rápidas" />
+    </div>
+    <div class="campo">
+      <label for="fonte">Fonte 1920×1080?</label>
+      <input id="fonte" type="text" value="1920x1080" />
+    </div>
+  </div>
+
+  <div id="saida" class="grelha"><p class="sub">A carregar o bundle…</p></div>
+
+<script>
+/* Os candidatos a bundle: a página tanto corre em tools/ (servida da raiz do repo)
+   como numa pasta temporária com o index.html ao lado. */
+const CANDIDATOS = ["../index.html", "index.html", "app.html", "/index.html"];
+
+/** Extrai uma função/const do bundle por chavetas equilibradas (como os testes). */
+function extrair(fonte, inicio) {
+  const a = fonte.indexOf(inicio);
+  if (a < 0) throw new Error('não encontrei "' + inicio + '" no bundle');
+  let i = fonte.indexOf("{", a + (inicio.startsWith("const") ? inicio.length - 1 : 0));
+  let nivel = 0, aspas = null;
+  for (; i < fonte.length; i++) {
+    const ch = fonte[i];
+    if (aspas) { if (ch === "\\") { i++; continue; } if (ch === aspas) aspas = null; continue; }
+    if (ch === '"' || ch === "'" || ch === "`") { aspas = ch; continue; }
+    if (ch === "{") nivel++;
+    else if (ch === "}" && --nivel === 0) return fonte.slice(a, i + 1) + (inicio.startsWith("const") ? ";" : "");
+  }
+  throw new Error("chavetas desequilibradas em " + inicio);
+}
+
+async function carregarBundle() {
+  let ultimoErro = null;
+  for (const url of CANDIDATOS) {
+    try {
+      const r = await fetch(url, { cache: "no-store" });
+      if (!r.ok) throw new Error(url + " → HTTP " + r.status);
+      const html = await r.text();
+      const m = /<script type="module">([\s\S]*?)<\/script>/.exec(html);
+      if (!m) throw new Error(url + " não tem o bundle");
+      const codigo = [
+        extrair(m[1], "const PRESETS_DO_REEL={"),
+        extrair(m[1], "function presetDoReel("),
+        extrair(m[1], "function alvoDaCaixa("),
+        extrair(m[1], "function caixaDoPreset("),
+        extrair(m[1], "function Eh("),
+        extrair(m[1], "function _h("),
+      ].join("\n");
+      const api = new Function(codigo + "\nreturn {PRESETS_DO_REEL,presetDoReel,caixaDoPreset,Eh,_h};")();
+      return { api, url };
+    } catch (e) { ultimoErro = e; }
+  }
+  throw ultimoErro || new Error("não consegui ler o bundle");
+}
+
+const ORDEM = ["atual", "escuro", "claro"];
+const DESCRICAO = {
+  atual: "Padrão do app — caixa automática, pílula por trás do gancho",
+  escuro: "Formato 1 — fundo preto, gancho fluorescente, caixa 1:1 arredondada e rodapé",
+  claro: "Formato 2 — fundo branco, gancho preto, faixa 4:3 de ponta a ponta",
+};
+
+let estado = { api: null, src: "", vw: 1920, vh: 1080 };
+
+function desenhar() {
+  const saida = document.getElementById("saida");
+  if (!estado.api) return;
+  const { PRESETS_DO_REEL, Eh, _h, caixaDoPreset } = estado.api;
+  const gancho = document.getElementById("gancho").value;
+  const rodape = document.getElementById("rodape").value;
+  const vw = estado.vw, vh = estado.vh;
+  saida.textContent = "";
+
+  for (const id of ORDEM) {
+    const P = PRESETS_DO_REEL[id];
+    const geo = Eh(vw, vh, { top: 0, bottom: 0, vw, vh }, 720, id);
+    const pct = (v, t) => ((v / t) * 100).toFixed(2) + "%";
+
+    const figura = document.createElement("figure");
+    const ecra = document.createElement("div");
+    ecra.className = "ecra";
+    ecra.style.background = P.fundo === "branco" ? "#ffffff" : "#000000";
+
+    const caixa = document.createElement("div");
+    caixa.className = "caixa";
+    caixa.style.left = pct(geo.padX, geo.outWidth);
+    caixa.style.top = pct(geo.padY, geo.outHeight);
+    caixa.style.width = pct(geo.videoW, geo.outWidth);
+    caixa.style.height = pct(geo.videoH, geo.outHeight);
+    if (geo.radius > 0) caixa.style.borderRadius = ((geo.radius / geo.videoW) * 100).toFixed(2) + "%";
+
+    if (estado.src) {
+      const video = document.createElement("video");
+      video.src = estado.src;
+      video.muted = true; video.loop = true; video.autoplay = true; video.playsInline = true;
+      video.style.width = ((vw / geo.cropW) * 100).toFixed(3) + "%";
+      video.style.height = ((vh / geo.cropH) * 100).toFixed(3) + "%";
+      video.style.left = (-(geo.cropX / geo.cropW) * 100).toFixed(3) + "%";
+      video.style.top = (-(geo.cropY / geo.cropH) * 100).toFixed(3) + "%";
+      video.play().catch(() => {});
+      caixa.appendChild(video);
+    } else {
+      const falso = document.createElement("div");
+      falso.className = "falso";
+      falso.innerHTML = "<span>o teu vídeo aqui<br>(escolhe um ficheiro em cima)</span>";
+      caixa.appendChild(falso);
+    }
+
+    const tela = document.createElement("canvas");
+    ecra.appendChild(caixa);
+    ecra.appendChild(tela);
+    figura.appendChild(ecra);
+
+    const legenda = document.createElement("figcaption");
+    legenda.innerHTML = "<b>" + P.nome + "</b> — " + DESCRICAO[id];
+    const medidas = document.createElement("div");
+    medidas.className = "medidas";
+    medidas.textContent =
+      "caixa " + geo.videoW + "×" + geo.videoH + " (aspeto " + (geo.videoW / geo.videoH).toFixed(3) + ") · " +
+      "x " + pct(geo.padX, geo.outWidth) + " · y " + pct(geo.padY, geo.outHeight) + "–" +
+      pct(geo.padY + geo.videoH, geo.outHeight) + " · raio " + geo.radius + "px · fundo " + P.fundo +
+      " · recorte " + geo.cropW + "×" + geo.cropH + "+" + geo.cropX + "+" + geo.cropY;
+    legenda.appendChild(medidas);
+    figura.appendChild(legenda);
+    saida.appendChild(figura);
+
+    /* O gancho/rodapé/cantos com o código real do app (720×1280, como o FFmpeg). */
+    tela.width = geo.outWidth; tela.height = geo.outHeight;
+    _h(tela, geo.outWidth, geo.outHeight, geo.padY, gancho, !gancho.trim(), "", id,
+       caixaDoPreset(id, geo, rodape, ""));
+  }
+}
+
+function lerDimensoes(txt) {
+  const m = /^\s*(\d{2,5})\s*[x×,\s]\s*(\d{2,5})\s*$/i.exec(txt || "");
+  if (!m) return null;
+  return { vw: Math.max(2, Number(m[1])), vh: Math.max(2, Number(m[2])) };
+}
+
+async function iniciar() {
+  const saida = document.getElementById("saida");
+  try {
+    const { api, url } = await carregarBundle();
+    estado.api = api;
+    console.log("bundle lido de", url);
+  } catch (e) {
+    saida.innerHTML = '<div class="erro">Não consegui ler o bundle do app: ' + e.message +
+      ".<br>Abre esta página a partir da raiz do repositório (ex.: <code>python3 -m http.server</code> em cine-flowx/).</div>";
+    return;
+  }
+  for (const id of ["gancho", "rodape", "fonte"]) {
+    document.getElementById(id).addEventListener("input", () => {
+      if (id === "fonte") {
+        const d = lerDimensoes(document.getElementById("fonte").value);
+        if (d) { estado.vw = d.vw; estado.vh = d.vh; }
+      }
+      desenhar();
+    });
+  }
+  document.getElementById("ficheiro").addEventListener("change", (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    estado.src = URL.createObjectURL(f);
+    const v = document.createElement("video");
+    v.preload = "metadata";
+    v.src = estado.src;
+    v.onloadedmetadata = () => {
+      if (v.videoWidth > 0) {
+        estado.vw = v.videoWidth; estado.vh = v.videoHeight;
+        document.getElementById("fonte").value = v.videoWidth + "x" + v.videoHeight;
+      }
+      desenhar();
+    };
+    v.onerror = () => desenhar();
+  });
+  desenhar();
+}
+
+iniciar();
+</script>
+</body>
+</html>

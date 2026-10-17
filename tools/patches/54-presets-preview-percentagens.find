@@ -1,0 +1,1 @@
+const S=C.padX/C.outWidth*100,T=C.padY/C.outHeight*100,D=C.videoW/C.outWidth*100,O=C.videoH/C.outHeight*100,j=C.vw/C.cropW*100,
