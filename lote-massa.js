@@ -834,11 +834,25 @@
         : function (t) {
             return String(t == null ? "" : t).trim();
           };
+    var ganchosJaUsados = [];
+    reelsAgendadosSessao.forEach(function (r) {
+      if (r && r.hookText) ganchosJaUsados.push(String(r.hookText).trim());
+    });
+    function chaveGanchoLote(txt) {
+      return String(txt || "").toLowerCase().replace(/[^a-z0-9\u00C0-\u017F]+/gi, "");
+    }
+    var setUsados = {};
+    ganchosJaUsados.forEach(function (u) {
+      var k = chaveGanchoLote(u);
+      if (k) setUsados[k] = true;
+    });
     function eGanchoValido(g) {
       var str = String(g || "").trim();
       if (!str || str.length < 8) return false;
       if (/^(gancho \d|opção \d|opcao \d|você precisa assistir|voce precisa assistir|veja até o final|veja ate o final|assista até o final|assista ate o final)/i.test(str)) return false;
       if (typeof core.ganchoGenerico === "function" && core.ganchoGenerico(str)) return false;
+      var k = chaveGanchoLote(str);
+      if (k && setUsados[k]) return false;
       return true;
     }
     var gancho = (ia.ganchos || [])
@@ -852,6 +866,7 @@
           personagens: ia.personagens,
           textoTela: ia.texto_na_tela,
           sinopse: filme && filme.overview ? filme.overview : "",
+          evitar: ganchosJaUsados.slice(-8),
         };
         var g = await core.gerarGancho(s.nvidiaKey, quadros, s.lang, filme.title, s.geminiKey, audio, videoIA, contextoGancho);
         gancho = ((g && g.ganchos) || [])
@@ -861,18 +876,22 @@
       } catch (e) {}
     }
     if (!gancho) {
+      var cenaLimpa = String(cena || "").trim().replace(/[.!?]+$/, "");
+      var titLimpo = String((filme && filme.title) || "").trim();
       var poolVirais = [
-        "O que acontece nessa cena deixou todo mundo em choque 😳",
-        "Ele quebrou a única regra que nunca deveria ter quebrado 💀",
-        "A reação dele ao descobrir a verdade foi a pior possível 😨",
-        "A calma dele antes do caos começar é assustadora 🥶",
-        "Ninguém imaginava que isso iria acontecer nessa cena 😱",
-        "O momento exato em que tudo deu errado 🤯"
+        titLimpo ? ("O detalhe oculto nesta cena de " + titLimpo + " mudou tudo 😳") : "O detalhe que quase ninguém notou nesta cena muda tudo 😳",
+        titLimpo ? ("O segredo por trás deste momento em " + titLimpo + " é assustador 💀") : "O silêncio antes da revelação entregou o segredo inteiro 💀",
+        "Ele percebeu tarde demais a armadilha escondida naquela conversa 😨",
+        "Um único olhar nesta cena entregou quem estava mentindo 🥶",
+        "A última frase dita aqui esconde uma reviravolta sombria 🤯",
+        "Poucos perceberam o erro fatal cometido neste momento 😱"
       ];
-      var customOuPadrao = String(s.overlayText || core.ganchoPadrao || "").trim();
-      gancho = (customOuPadrao && !/você precisa assistir|voce precisa assistir/i.test(customOuPadrao))
-        ? customOuPadrao
-        : poolVirais[Math.floor(Math.random() * poolVirais.length)];
+      if (cenaLimpa && cenaLimpa.length >= 15 && !/^cena\b/i.test(cenaLimpa)) {
+        var pals = cenaLimpa.split(/\s+/);
+        var resumoCurto = pals.length > 11 ? pals.slice(0, 11).join(" ") : cenaLimpa;
+        poolVirais.unshift(resumoCurto + " 😳");
+      }
+      gancho = poolVirais.find(function (cand) { return !setUsados[chaveGanchoLote(cand)]; }) || poolVirais[Math.floor(Math.random() * poolVirais.length)];
     }
     item.resultado.gancho = gancho;
 
