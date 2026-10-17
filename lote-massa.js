@@ -790,6 +790,9 @@
                 titulo_original: altCand.titulo_original,
                 ano: altCand.ano,
                 tipo: altCand.tipo,
+                atores: ia.atores,
+                personagens: ia.personagens,
+                fala_do_audio: ia.fala_do_audio,
                 confianca: 75
               });
               if (filme) {
@@ -834,7 +837,8 @@
     function eGanchoValido(g) {
       var str = String(g || "").trim();
       if (!str || str.length < 8) return false;
-      if (/^(gancho \d|opção \d|opcao \d|você precisa assistir|voce precisa assistir)/i.test(str)) return false;
+      if (/^(gancho \d|opção \d|opcao \d|você precisa assistir|voce precisa assistir|veja até o final|veja ate o final|assista até o final|assista ate o final)/i.test(str)) return false;
+      if (typeof core.ganchoGenerico === "function" && core.ganchoGenerico(str)) return false;
       return true;
     }
     var gancho = (ia.ganchos || [])
@@ -842,7 +846,14 @@
       .find(eGanchoValido);
     if (!gancho) {
       try {
-        var g = await core.gerarGancho(s.nvidiaKey, quadros, s.lang, filme.title, s.geminiKey, audio, videoIA);
+        var contextoGancho = {
+          cena: cena,
+          fala: ia.fala_do_audio,
+          personagens: ia.personagens,
+          textoTela: ia.texto_na_tela,
+          sinopse: filme && filme.overview ? filme.overview : "",
+        };
+        var g = await core.gerarGancho(s.nvidiaKey, quadros, s.lang, filme.title, s.geminiKey, audio, videoIA, contextoGancho);
         gancho = ((g && g.ganchos) || [])
           .map(limparGancho)
           .find(eGanchoValido);
