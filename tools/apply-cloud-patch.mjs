@@ -69,7 +69,12 @@ for (const file of targets) {
       .filter((later) => later > name)
       .find((later) => {
         const lp = readPatch(later);
-        return lp.find.includes(replace) && countOf(html, lp.replace) >= 1;
+        // O layout do Agendador contém o replace do botão de reenvio no seu
+        // próprio .find. Quando se está a reaplicar tudo a partir do bundle
+        // original, o .find do layout ainda está presente, mas o replace do
+        // patch menor ainda não; nesse caso aplicar o patch menor primeiro
+        // destruiria o alvo maior. O patch posterior já o absorve.
+        return (lp.find.includes(replace) || lp.find.includes(find)) && (countOf(html, lp.replace) >= 1 || countOf(html, lp.find) >= 1);
       });
     if (absorbedBy) {
       totalSkipped++;
