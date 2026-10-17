@@ -1,0 +1,1 @@
+async function YS(r,o,a,i,c,u,f,bgMode="preto",hookColor="#FFFFFF",preset="atual",footerText="",footerColor=""){const __P=presetDoReel(preset);return _ccComLock(async()=>{

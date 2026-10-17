@@ -88,8 +88,17 @@ export function criarTrabalhador({ cfg, app, pastaDados, registo: guardaRegisto,
       quadros: (f, ini, fim, corte) => video.quadros(f.caminho, ini, fim, corte),
       audio: (f, ini, fim) => video.audio(f.caminho, ini, fim),
       videoParaIA: (f, ini, fim) => video.videoParaIA(f.caminho, ini, fim),
-      processar: async (f, ini, fim, res, gancho, progresso, corte) => {
-        const r = await video.processar(f.caminho, ini, fim, res, gancho, progresso, corte, path.join(path.dirname(f.caminho), "final.mp4"));
+      processar: async (f, ini, fim, res, gancho, progresso, corte, bgMode, hookColor, preset, footerText, footerColor) => {
+        // O lote em massa envia a formatação da conta (preset/fundo/gancho/rodapé)
+        // nos argumentos 8..12; se vier vazia, usa-se a que está na própria conta.
+        const estilo = {
+          preset: preset || conta.preset || conta.reelPreset || "atual",
+          bgMode: bgMode || conta.bgMode || conta.backgroundMode || "preto",
+          hookColor: hookColor || conta.hookColor || conta.hookTextColor || "#FFFFFF",
+          footerText: footerText || conta.footerText || conta.rodapeTexto || "",
+          footerColor: footerColor || conta.footerColor || conta.rodapeCor || "",
+        };
+        const r = await video.processar(f.caminho, ini, fim, res, gancho, progresso, corte, path.join(path.dirname(f.caminho), "final.mp4"), estilo);
         return r;
       },
       guardarNaFila: async (reel) => {

@@ -40,6 +40,47 @@ npm run preview
 > NVIDIA incluído. GitHub Pages serve apenas arquivos estáticos e não executa `/api/`; a
 > identificação que depende da NVIDIA precisa de um backend em Vercel/Netlify (ou outro host).
 
+## 🎨 Formatação do Reel (presets)
+
+Em **Configurações → conta do Instagram → Formatação do Reel** escolhes o formato do 9:16.
+O preset é **por conta** (guardado com as outras definições da conta e sincronizado na nuvem)
+e muda tudo de uma vez: o fundo, o estilo do gancho e a **caixa do vídeo**.
+
+| Preset | Fundo | Gancho | Caixa do vídeo | Rodapé |
+| --- | --- | --- | --- | --- |
+| **Padrão do app** (`atual`) | preto (ou desfocado) | branco, com pílula escura | automática: 16:9 fica a 720×406, vertical preenche o 9:16 | — |
+| **Escuro** (`escuro`) | preto | fluorescente `#ECFA12`, 900, linhas coladas (0,88 em), sem pílula | **1:1** de 648 px, 5 % de margem lateral, cantos com raio de 30 px, do 27,4 % ao 78,0 % da altura | verde `#2DBD2C` a 93,55 % (texto opcional) |
+| **Claro** (`claro`) | branco | preto `#000000`, sem pílula | **faixa 4:3** de ponta a ponta (720×540), do 30,1 % ao 72,2 % da altura | — |
+
+As medidas dos dois presets foram tiradas **pixel a pixel** de duas capturas de Reels reais
+(`formato-1.png` e `formato-2.png`, na raiz do repositório) — nada foi inventado:
+
+- os cantos arredondados do preset **Escuro** saem do PNG do gancho, que tapa os quatro cantos
+  da caixa com a cor do fundo (funciona no FFmpeg, que não tem `border-radius`);
+- o recorte do original tem sempre o **mesmo aspeto da caixa**, por isso a imagem nunca fica
+  esticada (16:9 → recorte central 1080×1080 no Escuro e 1440×1080 no Claro);
+- as faixas pretas do original continuam a ser cortadas **antes** da caixa do preset;
+- a pré-visualização do Estúdio, o FFmpeg do navegador (`YS`) e o servidor
+  (`servidor/video.mjs`) fazem **as mesmas contas** — `tools/test-presets.mjs` compara os dois
+  lados e falha se alguma medida divergir.
+
+Para ver os três formatos lado a lado com o código real do bundle (sem instalar nada):
+
+```bash
+python3 -m http.server 8080 --bind 0.0.0.0 --directory tools   # abre /amostra-presets.html
+npm run presets:test                                            # geometria, desenho, paridade app/servidor e (com ffmpeg) o render real
+```
+
+> A `tools/amostra-presets.html` vai buscar o `index.html` e extrai as funções verdadeiras
+> (`PRESETS_DO_REEL`, `Eh`, `_h`), por isso não há uma segunda cópia da geometria para
+> ficar desatualizada. Se servires a raiz do repositório, o caminho `../index.html` também
+> funciona.
+
+Sem preset, o servidor mantém o aspeto que sempre teve (fundo branco, gancho preto); os
+presets **Escuro** e **Claro** é que levam as cores e a caixa medidas. O estilo viaja da conta
+até ao FFmpeg pelo `lote-massa.js` (argumentos 8–12 do `processar`) — antes o Estúdio lia o
+estilo de uma variável errada e o fundo/cor escolhidos nunca chegavam ao vídeo.
+
 ## 📦 Upload em massa
 
 No Estúdio, o botão **📦 Upload em massa** (ou escolher/arrastar vários vídeos de uma vez)
