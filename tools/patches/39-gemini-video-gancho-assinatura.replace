@@ -1,1 +1,1 @@
-async function Hm(r,o,a="pt-BR",i,c,u,vid){
+async function Hm(r,o,a="pt-BR",i,c,u,vid,extra){

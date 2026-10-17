@@ -248,7 +248,7 @@ console.log("\n4. Motor de Identificação e TMDB");
   check("o Estúdio passa o vídeo à identificação (Zb)", html.includes("audioClip:Pt,video:X?{data:X,"));
   check("o Estúdio passa o vídeo ao gancho (Hm)", html.includes('S.geminiKey,ue,{data:X,mimeType:(X&&X.type)||"video/mp4"'));
   check("lote-massa prepara o vídeo para a IA", loteSrc.includes("core.videoParaIA") && loteSrc.includes("video: videoIA"));
-  check("lote-massa passa o vídeo ao gerarGancho", loteSrc.includes("s.geminiKey, audio, videoIA)"));
+  check("lote-massa passa o vídeo ao gerarGancho", loteSrc.includes("s.geminiKey, audio, videoIA, contextoGancho)"));
   check("o servidor também prepara o vídeo para a IA", fs.readFileSync(path.join(root, "servidor", "video.mjs"), "utf8").includes("export async function videoParaIA"));
 }
 

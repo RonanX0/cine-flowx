@@ -1,1 +1,1 @@
-rt=await Hm(S.nvidiaKey,Ue,S.lang,Pe.title,S.geminiKey,Pt,{data:X,mimeType:(X&&X.type)||"video/mp4",ini:Y[0],fim:Y[1]});
+rt=await Hm(S.nvidiaKey,Ue,S.lang,Pe.title,S.geminiKey,Pt,{data:X,mimeType:(X&&X.type)||"video/mp4",ini:Y[0],fim:Y[1]},{cena:G||(bt==null?void 0:bt.cena),fala:bt==null?void 0:bt.fala_do_audio,personagens:bt==null?void 0:bt.personagens,textoTela:bt==null?void 0:bt.texto_na_tela,sinopse:Pe.overview});
