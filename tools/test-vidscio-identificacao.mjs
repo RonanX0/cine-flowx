@@ -159,6 +159,26 @@ console.log("\n4. Motor de Identificação e TMDB");
   // Multi-frame Gemini
   check("Gemini recebe múltiplos frames nítidos em vez de cortar", html.includes("frames.length>=4?frames.slice(1):frames"));
 
+  // Amostragem inteligente (==CINECLIP-KEYFRAME-SMART==) + vídeo bruto (==CINECLIP-VIDEO-BRUTO==)
+  check("motor de keyframes inteligentes presente (nitidez + luminância + diversidade)",
+    html.includes("==CINECLIP-KEYFRAME-SMART==") && html.includes("function kfNitidez") && html.includes("function kfCapturar"));
+  check("quadros capturados em alta resolução (até 1280px, JPEG 0.88)",
+    html.includes("Math.min(1280,sw)") && html.includes('toDataURL("image/jpeg",.88)'));
+  check("seleção dos quadros usa variância do Laplaciano (kfNitidez)",
+    html.includes("kfNitidez(meta.gray") && html.includes("nit/450"));
+  check("vídeo bruto: tentativa de envio ao Gemini implementada (kfVideoBruto)",
+    html.includes("==CINECLIP-VIDEO-BRUTO==") && html.includes("async function kfVideoBruto"));
+  check("vídeo bruto: File API com upload resumável e espera do estado ACTIVE",
+    html.includes("X-Goog-Upload-Protocol") && html.includes('\"ACTIVE\"'));
+  check("vídeo bruto: inline_data até 10MB e limite de 200MB / 300s",
+    html.includes("10*1024*1024") && html.includes("200*1024*1024") && html.includes("dur>300"));
+  check("hasMedia trata inline_data e file_data",
+    html.includes("pt.inline_data||pt.file_data"));
+  check("com vídeo bruto o áudio WAV extraído é poupado (sem duplicar)",
+    html.includes("if(!vdp&&i!=null&&i.audioClip)"));
+  check("identificar e gerarGancho recebem o vídeo bruto nos call sites",
+    html.includes("video:X||Fe||null") && html.includes("{video:X,name:X.name,start:Y[0],end:Y[1]}"));
+
   // Áudio até 120MB
   check("Limite de áudio aceita filmes de até 120MB", html.includes("r.size>120*1024*1024"));
   check("Timeout de áudio estendido para 12s", html.includes('setTimeout(()=>j(new Error("audio timeout")),12000)'));
@@ -196,8 +216,22 @@ window.IDBKeyRange = IDBKeyRange;
 window.TextEncoder = globalThis.TextEncoder;
 window.TextDecoder = globalThis.TextDecoder;
 try { Object.defineProperty(window, "crypto", { value: globalThis.crypto, configurable: true }); } catch {}
-window.fetch = async (url) => {
-  if (String(url).includes("generativelanguage")) return resposta(200, { candidates: [{ content: { parts: [{ text: respostaGemini }] } }] });
+let ultimaChamadaIA = "";
+const chamadasUpload = [];
+window.fetch = async (url, opts) => {
+  const u = String(url);
+  if (u.includes("generativelanguage") && u.includes("generateContent")) {
+    ultimaChamadaIA = opts && opts.body ? String(opts.body) : "";
+    return resposta(200, { candidates: [{ content: { parts: [{ text: respostaGemini }] } }] });
+  }
+  if (u.includes("/upload/v1beta/files")) {
+    chamadasUpload.push({ u, headers: opts && opts.headers });
+    return resposta(200, { ok: true }, { "x-goog-upload-url": "https://upload.stub/u1" });
+  }
+  if (u === "https://upload.stub/u1") {
+    chamadasUpload.push({ u, headers: opts && opts.headers });
+    return resposta(200, { file: { name: "files/abc123", uri: "https://generativelanguage.googleapis.com/v1beta/files/abc123", state: "ACTIVE" } });
+  }
   return resposta(200, { key: "stub", id: "stub" }, { "content-type": "application/json" });
 };
 window.matchMedia = () => ({ matches: false, media: "", addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false });
@@ -323,6 +357,65 @@ try {
   check("identificar (VidScio) mantém o título e a confiança", id1 && id1.titulo === "Filme Teste VidScio" && id1.confianca === 95);
 } catch (e) {
   check("identificar (VidScio) devolve os ganchos limpos", false, e && e.message);
+}
+
+/* ---- B8. identificar: envia o vídeo bruto ao Gemini (inline_data ≤10MB) ---- */
+respostaGemini = JSON.stringify({
+  fala_do_audio: "Ele admite tudo no final.",
+  atores: ["Ator Fictício"], personagens: [], texto_na_tela: "", ancoras_visuais: "cozinha à noite",
+  cena: "Ele confronta a mulher sobre a traição na cozinha", tipo: "movie", temporada_episodio: "",
+  titulo: "Filme Com Video Bruto", titulo_original: "Raw Video Movie", ano: 2024, confianca: 91,
+  ganchos: ["o video bruto foi anexado 😳"], alternativas: [],
+});
+try {
+  const vid = new window.Blob([new Uint8Array(2048)], { type: "video/mp4" });
+  const id2 = await core.identificar("", [QUADRO, QUADRO, QUADRO, QUADRO], "pt-BR", {
+    fileName: "video-bruto.mp4", userHint: "cena com video bruto anexado", geminiKey: "chave-gemini-falsa",
+    audioClip: null, video: vid, videoStart: 3, videoEnd: 40,
+  });
+  check("identificar anexa o vídeo bruto como inline_data (≤10MB)",
+    ultimaChamadaIA.includes('"inline_data"') && ultimaChamadaIA.includes('"mime_type":"video/mp4"'),
+    ultimaChamadaIA.slice(0, 120));
+  check("o prompt menciona o vídeo bruto e a janela da cena",
+    ultimaChamadaIA.includes("O VÍDEO BRUTO") && ultimaChamadaIA.includes("entre os 3 e os 40 segundos"));
+  check("identificar funciona com o vídeo bruto anexado", id2 && id2.titulo === "Filme Com Video Bruto");
+} catch (e) {
+  check("identificar anexa o vídeo bruto como inline_data (≤10MB)", false, e && e.message);
+}
+
+/* ---- B9. identificar: vídeo >10MB → File API (upload resumável) → file_data ---- */
+respostaGemini = JSON.stringify({
+  fala_do_audio: "Segredo revelado.", atores: [], personagens: [], texto_na_tela: "", ancoras_visuais: "estrada à noite",
+  cena: "Perseguição final na autoestrada", tipo: "movie", temporada_episodio: "",
+  titulo: "Filme Com File API", titulo_original: "File API Movie", ano: 2023, confianca: 88,
+  ganchos: ["o upload resumado funcionou 😳"], alternativas: [],
+});
+try {
+  const vidG = new window.Blob([new Uint8Array(11 * 1024 * 1024)], { type: "video/mp4" });
+  const id3 = await core.identificar("", [QUADRO, QUADRO, QUADRO, QUADRO], "pt-BR", {
+    fileName: "grande.mp4", userHint: "cena com upload resumado", geminiKey: "chave-gemini-falsa",
+    audioClip: null, video: vidG, videoStart: 0, videoEnd: 90,
+  });
+  check("vídeo >10MB usa a File API (upload resumável X-Goog-Upload-Protocol)",
+    chamadasUpload.some((c) => c.headers && (c.headers["X-Goog-Upload-Protocol"] === "resumable" || c.headers["X-Goog-Upload-Command"])),
+    JSON.stringify(chamadasUpload.map((c) => c.u)));
+  check("o Gemini recebe file_data com o URI do ficheiro carregado",
+    ultimaChamadaIA.includes('"file_data"') && ultimaChamadaIA.includes("files/abc123"));
+  check("identificar funciona com file_data", id3 && id3.titulo === "Filme Com File API");
+} catch (e) {
+  check("vídeo >10MB usa a File API (upload resumável X-Goog-Upload-Protocol)", false, e && e.message);
+}
+
+/* ---- B10. gerarGancho também anexa o vídeo bruto ---- */
+respostaGemini = JSON.stringify({ cena: "cena tensa", ganchos: ["gancho com video bruto 😳"] });
+try {
+  const vidP = new window.Blob([new Uint8Array(1024)], { type: "video/mp4" });
+  const g3 = await core.gerarGancho("", [QUADRO, QUADRO, QUADRO, QUADRO], "pt-BR", "titulo-video.mp4", "chave-gemini-falsa", null, { video: vidP, name: "titulo-video.mp4", start: 1, end: 30 });
+  check("gerarGancho anexa o vídeo bruto (inline_data)",
+    ultimaChamadaIA.includes('"mime_type":"video/mp4"') && g3 && g3.ganchos && g3.ganchos[0] === "gancho com video bruto 😳",
+    JSON.stringify(g3 && g3.ganchos));
+} catch (e) {
+  check("gerarGancho anexa o vídeo bruto (inline_data)", false, e && e.message);
 }
 
 /* ====================================================================== */

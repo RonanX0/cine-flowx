@@ -459,6 +459,9 @@
           userHint: titulo,
           geminiKey: s.geminiKey,
           audioClip: audio,
+          video: ficheiro,
+          videoStart: 0,
+          videoEnd: fim,
         });
         if (!ia || (!ia.titulo && !(ia.atores && ia.atores.length))) {
           throw erroComTipo("A IA não conseguiu identificar o filme deste clipe.", "identificacao");

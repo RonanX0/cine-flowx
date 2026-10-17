@@ -747,6 +747,9 @@
         userHint: dicaEnriquecida,
         geminiKey: s.geminiKey,
         audioClip: audio,
+        video: ficheiro,
+        videoStart: 0,
+        videoEnd: fim,
       });
       if (!ia || (!ia.titulo && !(ia.atores && ia.atores.length))) {
         throw erroComTipo("A IA não conseguiu identificar o filme deste clipe.", "identificacao");
@@ -814,7 +817,7 @@
       .find(eGanchoValido);
     if (!gancho) {
       try {
-        var g = await core.gerarGancho(s.nvidiaKey, quadros, s.lang, filme.title, s.geminiKey, audio);
+        var g = await core.gerarGancho(s.nvidiaKey, quadros, s.lang, filme.title, s.geminiKey, audio, { video: ficheiro, name: ficheiro.name, start: 0, end: fim });
         gancho = ((g && g.ganchos) || [])
           .map(limparGancho)
           .find(eGanchoValido);

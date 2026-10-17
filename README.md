@@ -98,6 +98,28 @@ O código está em `lote-massa.js` (legível, fora do bundle). A ligação ao bu
 `27-lote-ponte` (expõe `window.CineClipCore` e `window.__CineClipApp`); os patches `26` e
 `28` carregam o script e mudam a área de upload. Testes: `npm run lote:test`.
 
+## 🧠 Identificação de filmes (motor VidScio)
+
+A identificação (Estúdio, upload em massa e ⚡ Rápido) aproxima os resultados da API aos do
+app do Gemini com três artigos no bundle (`index.html`, blocos marcados no código):
+
+- **`==CINECLIP-KEYFRAME-SMART==` — amostragem inteligente de quadros.** Em vez de 6 pontos
+  fixos do vídeo, são avaliados até 16 candidatos pela janela da cena, pontuados por
+  **nitidez** (variância do Laplaciano), **luminância** (evita quadros escuros/queimados) e
+  **diversidade de plano** (cada quadro escolhido deve diferir dos anteriores). Os 6 melhores
+  são capturados em **alta resolução** (até 1280 px, JPEG 0.88) + folha de contacto 2×3 — e
+  nunca se envia o vídeo bruto compactado como substituto dos quadros.
+- **`==CINECLIP-VIDEO-BRUTO==` — o vídeo bruto vai junto.** Antes dos quadros, o app *tenta*
+  anexar o vídeo original ao pedido ao Gemini: `inline_data` até 10 MB ou **File API**
+  (upload resumável + espera do estado `ACTIVE`) até 200 MB / 5 min. O vídeo traz o áudio
+  nativo e a ação completa; se o envio falhar (rede, CORS, tamanho), o fluxo segue só com
+  os quadros + o recorte WAV — a identificação nunca bloqueia por causa disto.
+- **Método VidScio** — o prompt obriga a transcrever o diálogo, ler texto na tela (OCR),
+  listar atores/personagens e âncoras visuais antes de cruzar tudo com o título; abaixo de
+  65 % de certeza uma segunda passagem semântica reidentifica a partir das pistas extraídas.
+
+Testes: `npm run vidscio:test` (inclui os cenários de vídeo bruto com a API simulada).
+
 ## ⚡ Agendamento rápido (sem edição)
 
 Quando os vídeos **já estão editados** (CapCut, Premiere, o Estúdio…) e só falta pô-los na
