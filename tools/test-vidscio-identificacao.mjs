@@ -325,6 +325,43 @@ try {
   check("identificar (VidScio) devolve os ganchos limpos", false, e && e.message);
 }
 
+/* ---- B8. Modos de Gancho Viral e Modos de Identificação exportados ---- */
+check("CineClipCore exporta os 7 modos de gancho viral", Array.isArray(core.modosGancho) && core.modosGancho.length === 7 && core.modosGancho.some((m) => m.id === "suspense") && core.modosGancho.some((m) => m.id === "sem_gancho"));
+check("CineClipCore exporta os 4 modos de identificação", Array.isArray(core.modosIdentificacao) && core.modosIdentificacao.length === 4 && core.modosIdentificacao.some((m) => m.id === "dialogo") && core.modosIdentificacao.some((m) => m.id === "sem_id"));
+
+/* ---- B9. gerarGancho: modo sem_gancho e filtro de clichês por modo ---- */
+{
+  const semG = await core.gerarGancho("", [QUADRO], "pt-BR", "qualquer.mp4", "", null, "sem_gancho");
+  check("modo sem_gancho devolve lista vazia sem chamar IA", semG && semG.modo === "sem_gancho" && Array.isArray(semG.ganchos) && semG.ganchos.length === 0);
+
+  respostaGemini = JSON.stringify({
+    cena: "Interrogatório tenso na delegacia",
+    ganchos: [
+      "Você precisa assistir esse filme até o final 😱",
+      "O que acontece nessa cena é inacreditável 😳",
+      "Quem você salvaria se tivesse apenas 10 segundos? 🤔",
+    ],
+  });
+  const rPerg = await core.gerarGancho("", [QUADRO], "pt-BR", { titulo: "Prisoners", ano: 2013 }, "chave-gemini-falsa", null, "pergunta");
+  check("gerarGancho filtra clichês genéricos e preserva o gancho real do modo", rPerg && rPerg.modo === "pergunta" && rPerg.ganchos.length === 1 && rPerg.ganchos[0] === "Quem você salvaria se tivesse apenas 10 segundos? 🤔", JSON.stringify(rPerg && rPerg.ganchos));
+}
+
+/* ---- B10. identificar: modo sem_id e modo dica (rápido por nome) ---- */
+{
+  const idSem = await core.identificar("", [], "pt-BR", { fileName: "Interestelar_2014_corte_final.mp4", identMode: "sem_id" });
+  check("identificar em modo sem_id limpa o nome do ficheiro e nunca trava", idSem && idSem.modo_identificacao === "sem_id" && idSem.titulo === "Interestelar" && idSem.confianca === 100, JSON.stringify(idSem));
+
+  const idDica = await core.identificar("", [], "pt-BR", { fileName: "Breaking.Bad.S02E03.1080p.WEB-DL.mp4", identMode: "dica" });
+  check("identificar em modo dica extrai título, série e episódio do nome sem precisar de IA", idDica && idDica.titulo === "Breaking Bad" && idDica.tipo === "tv" && idDica.temporada_episodio === "S02E03" && idDica.confianca >= 85, JSON.stringify(idDica));
+}
+
+/* ---- B11. identificar: modo dialogo + recuperação de JSON truncado + IMDb ID ---- */
+{
+  respostaGemini = '```json\n{"fala_do_audio":"Say my name","personagens":["Heisenberg"],"titulo":"Breaking Bad","titulo_original":"Breaking Bad","ano":2008,"tipo":"tv","imdb_id":"tt0903747","confianca":98,"ganchos":["Quando ele disse essas 3 palavras o império nasceu 💀"';
+  const idDiag = await core.identificar("", [QUADRO], "pt-BR", { fileName: "corte.mp4", geminiKey: "chave-gemini-falsa", identMode: "dialogo", hookMode: "fala" });
+  check("identificar recupera JSON truncado e preserva imdb_id e modo dialogo", idDiag && idDiag.titulo === "Breaking Bad" && idDiag.imdb_id === "tt0903747" && idDiag.modo_identificacao === "dialogo", JSON.stringify(idDiag));
+}
+
 /* ====================================================================== */
 
 console.log(`\n${fail === 0 ? "✅" : "❌"} ${pass} verificações passaram${fail ? `, ${fail} falharam` : ""}\n`);

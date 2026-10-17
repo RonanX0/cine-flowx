@@ -63,9 +63,12 @@
 
   /* ------------------------------------------------------------- opções */
 
+  var MODOS_IDENT_VALIDOS = ["auto", "dialogo", "dica", "sem_id"];
+
   function lerOpcoes() {
     var omissao = {
       identificar: true,
+      modoIdentificacao: "auto",
       usarCapa: true,
       agendarComPoucaCerteza: false,
       simultaneos: 3,
@@ -77,6 +80,7 @@
       var sim = Number(o.simultaneos);
       return {
         identificar: typeof o.identificar === "boolean" ? o.identificar : omissao.identificar,
+        modoIdentificacao: MODOS_IDENT_VALIDOS.indexOf(o.modoIdentificacao) !== -1 ? o.modoIdentificacao : omissao.modoIdentificacao,
         usarCapa: typeof o.usarCapa === "boolean" ? o.usarCapa : omissao.usarCapa,
         agendarComPoucaCerteza: !!o.agendarComPoucaCerteza,
         simultaneos: sim >= 1 && sim <= MAX_SIMULTANEOS ? Math.round(sim) : omissao.simultaneos,
@@ -233,7 +237,7 @@
   }
 
   function assinaturaDoFicheiro(ficheiro) {
-    return String(ficheiro.name || "") + "|" + (ficheiro.size || 0) + "|" + (ficheiro.lastModified || 0);
+    return String(ficheiro.name || "") + "|" + (ficheiro.size || 0);
   }
 
   /* ----------------------------------------------------------- os itens */
@@ -335,9 +339,10 @@
     if (!core || !app) return "O app ainda está a carregar. Tenta de novo dentro de alguns segundos.";
     var s = app.settings || {};
     if (!app.account || !app.account.id) return "Escolhe uma conta do Instagram no topo do app.";
-    if (!estado.opcoes.identificar) return null;
+    var modoIdent = (estado.opcoes && estado.opcoes.modoIdentificacao) || s.identMode || "auto";
+    if (!estado.opcoes.identificar || modoIdent === "sem_id") return null;
     var temIA = !!String(s.nvidiaKey || "").trim() || !!String(s.geminiKey || "").trim();
-    if (!temIA) return "Desliga «Identificar o filme com IA» ou adiciona a chave NVIDIA/Gemini nas configurações.";
+    if (!temIA && modoIdent !== "dica") return "Desliga «Identificar o filme com IA» ou adiciona a chave NVIDIA/Gemini nas configurações.";
     if (!String(s.tmdbKey || "").trim()) return "Desliga «Identificar o filme com IA» ou adiciona a chave TMDB nas configurações — é ela que traz a capa.";
     return null;
   }
@@ -361,9 +366,10 @@
     var permitirPoucaCerteza = ctx && typeof ctx.agendarComPoucaCerteza === "boolean"
       ? ctx.agendarComPoucaCerteza
       : !!estado.opcoes.agendarComPoucaCerteza;
-    var identificar = ctx && typeof ctx.identificar === "boolean" ? ctx.identificar : !!estado.opcoes.identificar;
-    var usarCapa = ctx && typeof ctx.usarCapa === "boolean" ? ctx.usarCapa : !!estado.opcoes.usarCapa;
     var s = (app && app.settings) || {};
+    var modoIdent = (ctx && ctx.modoIdentificacao) || (estado.opcoes && estado.opcoes.modoIdentificacao) || s.identMode || "auto";
+    var identificar = (ctx && typeof ctx.identificar === "boolean" ? ctx.identificar : !!estado.opcoes.identificar) && modoIdent !== "sem_id";
+    var usarCapa = ctx && typeof ctx.usarCapa === "boolean" ? ctx.usarCapa : !!estado.opcoes.usarCapa;
     var ficheiro = item.ficheiro;
 
     /* 1. Ler o vídeo ------------------------------------------------------ */
@@ -459,8 +465,9 @@
           userHint: titulo,
           geminiKey: s.geminiKey,
           audioClip: audio,
+          identMode: modoIdent,
         });
-        if (!ia || (!ia.titulo && !(ia.atores && ia.atores.length))) {
+        if (!ia || (!ia.titulo && !(ia.atores && ia.atores.length) && !ia.imdb_id)) {
           throw erroComTipo("A IA não conseguiu identificar o filme deste clipe.", "identificacao");
         }
         filme = await core.procurarTmdb(s.tmdbKey, ia);
@@ -488,13 +495,25 @@
             }
           }
         }
+        if (!filme && permitirPoucaCerteza && (ia.titulo || ia.titulo_original)) {
+          filme = {
+            id: 0,
+            kind: ia.tipo === "tv" ? "tv" : "movie",
+            title: ia.titulo || ia.titulo_original,
+            original: ia.titulo_original || ia.titulo,
+            year: ia.ano || "",
+            poster: "",
+            overview: ia.cena || "",
+            genres: [],
+          };
+        }
         if (!filme) {
           throw erroComTipo(
             'Não encontrei "' + (ia.titulo || ia.titulo_original || "o filme") + '" no TMDB.',
             "identificacao"
           );
         }
-        if (hashVideo && ajudas && typeof ajudas.cacheIdentGuardar === "function") {
+        if (hashVideo && filme.id && ajudas && typeof ajudas.cacheIdentGuardar === "function") {
           try {
             ajudas.cacheIdentGuardar(hashVideo, { ia: ia, filme: filme });
           } catch (e) {}
@@ -705,6 +724,7 @@
     var quantos = Math.max(1, Math.min(MAX_SIMULTANEOS, Number(estado.opcoes.simultaneos) || 1));
     var ctx = {
       identificar: !!estado.opcoes.identificar,
+      modoIdentificacao: estado.opcoes.modoIdentificacao || "auto",
       usarCapa: !!estado.opcoes.usarCapa,
       agendarComPoucaCerteza: !!estado.opcoes.agendarComPoucaCerteza,
     };
@@ -955,9 +975,28 @@
       gravarOpcoes();
     });
 
+    var selectIdent = el("select", { className: "cr-mini cr-sec", "aria-label": "Modo de identificação", style: "border-radius:8px;padding:4px 8px;font:inherit" }, [
+      el("option", { value: "auto", text: "🎯 IA Completa (Vídeo + Áudio + Google)" }),
+      el("option", { value: "dialogo", text: "💬 Busca por Falas / Legendas (OCR + Áudio)" }),
+      el("option", { value: "dica", text: "⚡ Rápido por Nome do Ficheiro" }),
+      el("option", { value: "sem_id", text: "🚫 Sem Identificação / Direto" }),
+    ]);
+    selectIdent.value = estado.opcoes.modoIdentificacao || "auto";
+    selectIdent.addEventListener("change", function () {
+      estado.opcoes.modoIdentificacao = MODOS_IDENT_VALIDOS.indexOf(selectIdent.value) !== -1 ? selectIdent.value : "auto";
+      if (estado.opcoes.modoIdentificacao === "sem_id") estado.opcoes.identificar = false;
+      else estado.opcoes.identificar = true;
+      gravarOpcoes();
+      desenhar();
+    });
+
     return el("div", { className: "cr-opcoes" }, [
       el("div", { className: "cr-opcoes-titulo", text: "Opções" }),
       opcaoSimples("identificar", "🔎 Identificar o filme com a IA — escreve a legenda e traz a capa (pôster) do TMDB"),
+      el("label", { className: "cr-opcao" }, [
+        el("span", { text: "Modo do identificador: " }),
+        selectIdent,
+      ]),
       opcaoSimples("usarCapa", "🖼 Usar o pôster oficial do TMDB como capa do Reel"),
       opcaoSimples("agendarComPoucaCerteza", "Agendar mesmo com pouca certeza (menos de " + CONFIANCA_MINIMA + "%)"),
       el("label", { className: "cr-opcao" }, [

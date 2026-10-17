@@ -210,6 +210,8 @@
   var EXTENSOES = ["mp4", "mov", "mkv", "webm", "avi"];
   var CONFIANCA_MINIMA = 65;
   var CHAVE_OPCOES = "cineclip.lote.opcoes";
+  var MODOS_GANCHO_VALIDOS = ["auto", "suspense", "polemica", "pergunta", "curiosidade", "fala", "sem_gancho"];
+  var MODOS_IDENT_VALIDOS = ["auto", "dialogo", "dica", "sem_id"];
 
   /* ---------------------------------------------------------------- estado */
 
@@ -235,13 +237,15 @@
       return {
         agendarComPoucaCerteza: !!o.agendarComPoucaCerteza,
         simultaneos: (sim >= 1 && sim <= MAX_SIMULTANEOS) ? Math.round(sim) : MAX_SIMULTANEOS,
+        modoGancho: MODOS_GANCHO_VALIDOS.indexOf(o.modoGancho) !== -1 ? o.modoGancho : "auto",
+        modoIdentificacao: MODOS_IDENT_VALIDOS.indexOf(o.modoIdentificacao) !== -1 ? o.modoIdentificacao : "auto",
         aoPartilhar: o.aoPartilhar === "aqui" || o.aoPartilhar === "pc" || o.aoPartilhar === "nuvem" ? o.aoPartilhar : "perguntar",
         processarLinksDoCelular: typeof o.processarLinksDoCelular === "boolean" ? o.processarLinksDoCelular : !eCelular(),
         botaoColar: o.botaoColar !== false,
         avisarLinkCopiado: o.avisarLinkCopiado !== false,
       };
     } catch (e) {
-      return { agendarComPoucaCerteza: false, simultaneos: MAX_SIMULTANEOS, aoPartilhar: "perguntar", processarLinksDoCelular: !eCelular(), botaoColar: true, avisarLinkCopiado: true };
+      return { agendarComPoucaCerteza: false, simultaneos: MAX_SIMULTANEOS, modoGancho: "auto", modoIdentificacao: "auto", aoPartilhar: "perguntar", processarLinksDoCelular: !eCelular(), botaoColar: true, avisarLinkCopiado: true };
     }
   }
 
@@ -610,9 +614,10 @@
     var app = ambiente.app();
     if (!core || !app) return "O app ainda está a carregar. Tenta de novo dentro de alguns segundos.";
     var s = app.settings || {};
+    var modoIdent = (estado.opcoes && estado.opcoes.modoIdentificacao) || s.identMode || "auto";
     var temIA = !!String(s.nvidiaKey || "").trim() || !!String(s.geminiKey || "").trim();
-    if (!temIA) return "Adiciona a tua chave NVIDIA ou Google Gemini nas configurações — a IA identifica o filme e cria o gancho e a legenda.";
-    if (!String(s.tmdbKey || "").trim()) return "Adiciona a tua chave TMDB nas configurações — é ela que confirma o filme e traz o pôster e a sinopse.";
+    if (!temIA && modoIdent !== "sem_id") return "Adiciona a tua chave NVIDIA ou Google Gemini nas configurações — a IA identifica o filme e cria o gancho e a legenda.";
+    if (!String(s.tmdbKey || "").trim() && modoIdent !== "sem_id") return "Adiciona a tua chave TMDB nas configurações — é ela que confirma o filme e traz o pôster e a sinopse.";
     if (!app.account || !app.account.id) return "Escolhe uma conta do Instagram no topo do app.";
     return null;
   }
@@ -637,6 +642,8 @@
       ? ctx.agendarComPoucaCerteza
       : !!(estado.opcoes && estado.opcoes.agendarComPoucaCerteza);
     var s = app.settings || {};
+    var modoIdent = (ctx && ctx.modoIdentificacao) || (estado.opcoes && estado.opcoes.modoIdentificacao) || s.identMode || "auto";
+    var modoGancho = (ctx && ctx.modoGancho) || (estado.opcoes && estado.opcoes.modoGancho) || s.hookMode || "auto";
     var ficheiro = item.ficheiro;
 
     /* 1. Ler o vídeo (metadados + dimensões em paralelo) ------------------- */
@@ -705,7 +712,7 @@
 
     /* 2. Identificar o filme (quadros + áudio em paralelo, OCR nativo na IA) */
     if (estado.pararPedido) throw erroComTipo("Lote parado.", "parado");
-    definirPasso(item, "A identificar o filme…", 0.1);
+    definirPasso(item, modoIdent === "sem_id" ? "A preparar corte direto…" : "A identificar o filme…", 0.1);
     var temGemini = !!String(s.geminiKey || "").trim();
     var capturaParalela = await Promise.all([
       core.quadros(ficheiro, 0, fim, corte),
@@ -733,11 +740,15 @@
         return false;
       });
     }
-    var cacheHit = hashVideo ? cacheIdentLer(hashVideo) : null;
+    var cacheHit = (hashVideo && modoIdent !== "sem_id") ? cacheIdentLer(hashVideo) : null;
 
     var ia = null;
     var filme = null;
-    if (cacheHit && cacheHit.ia && cacheHit.filme) {
+    if (modoIdent === "sem_id") {
+      var nomeLimpo = dicaLink || tituloMetadados || (!nomeGen ? baseNome.replace(/[._-]+/g, " ").trim() : "") || "Cena de Filme / Série";
+      ia = { titulo: nomeLimpo, confianca: 100, cena: dicaLink || "", ganchos: [], modo_identificacao: "sem_id" };
+      filme = { id: 0, kind: "movie", title: nomeLimpo, original: nomeLimpo, year: "", poster: "", overview: "", genres: [] };
+    } else if (cacheHit && cacheHit.ia && cacheHit.filme) {
       ia = cacheHit.ia;
       filme = cacheHit.filme;
     } else {
@@ -747,9 +758,16 @@
         userHint: dicaEnriquecida,
         geminiKey: s.geminiKey,
         audioClip: audio,
+        identMode: modoIdent,
+        hookMode: modoGancho,
       });
-      if (!ia || (!ia.titulo && !(ia.atores && ia.atores.length))) {
-        throw erroComTipo("A IA não conseguiu identificar o filme deste clipe.", "identificacao");
+      if (!ia || (!ia.titulo && !(ia.atores && ia.atores.length) && !ia.imdb_id)) {
+        if (permitirPoucaCerteza) {
+          var fallbackTit = dicaLink || tituloMetadados || (!nomeGen ? baseNome.replace(/[._-]+/g, " ").trim() : "") || "Cena de Filme";
+          ia = Object.assign({}, ia || {}, { titulo: fallbackTit, confianca: 65 });
+        } else {
+          throw erroComTipo("A IA não conseguiu identificar o filme deste clipe.", "identificacao");
+        }
       }
       filme = await core.procurarTmdb(s.tmdbKey, ia);
       if (!filme && Array.isArray(ia.alternativas) && ia.alternativas.length) {
@@ -775,17 +793,29 @@
           }
         }
       }
+      if (!filme && permitirPoucaCerteza && (ia.titulo || ia.titulo_original)) {
+        filme = {
+          id: 0,
+          kind: ia.tipo === "tv" ? "tv" : "movie",
+          title: ia.titulo || ia.titulo_original,
+          original: ia.titulo_original || ia.titulo,
+          year: ia.ano || "",
+          poster: "",
+          overview: ia.cena || "",
+          genres: []
+        };
+      }
       if (!filme) {
         throw erroComTipo(
           'Não encontrei "' + (ia.titulo || ia.titulo_original || "o filme") + '" no TMDB.',
           "identificacao"
         );
       }
-      if (hashVideo) cacheIdentGuardar(hashVideo, { ia: ia, filme: filme });
+      if (hashVideo && filme.id) cacheIdentGuardar(hashVideo, { ia: ia, filme: filme });
     }
     var confianca = Number(ia.confianca) || 0;
     item.resultado = { titulo: filme.title, ano: filme.year, confianca: confianca };
-    if (confianca < CONFIANCA_MINIMA && !permitirPoucaCerteza) {
+    if (modoIdent !== "sem_id" && confianca < CONFIANCA_MINIMA && !permitirPoucaCerteza) {
       throw erroComTipo(
         'A IA acha que é "' + filme.title + (filme.year ? " (" + filme.year + ")" : "") + '", mas só com ' +
           confianca + "% de certeza. Confere no Estúdio ou liga “Agendar mesmo com pouca certeza”.",
@@ -794,7 +824,7 @@
     }
 
     /* 3. Gancho ------------------------------------------------------------ */
-    definirPasso(item, "A criar o gancho…", 0.2);
+    definirPasso(item, modoGancho === "sem_gancho" ? "Modo sem gancho…" : "A criar o gancho…", 0.2);
     var cena = ia.cena || "";
     /* A IA às vezes devolve "Gancho 1: texto" em vez de só o texto — limpa. */
     var limparGancho =
@@ -806,34 +836,39 @@
     function eGanchoValido(g) {
       var str = String(g || "").trim();
       if (!str || str.length < 8) return false;
-      if (/^(gancho \d|opção \d|opcao \d|você precisa assistir|voce precisa assistir)/i.test(str)) return false;
+      if (/^(gancho \d|opção \d|opcao \d|você precisa assistir|voce precisa assistir|o que acontece nessa cena)/i.test(str)) return false;
       return true;
     }
-    var gancho = (ia.ganchos || [])
-      .map(limparGancho)
-      .find(eGanchoValido);
-    if (!gancho) {
-      try {
-        var g = await core.gerarGancho(s.nvidiaKey, quadros, s.lang, filme.title, s.geminiKey, audio);
-        gancho = ((g && g.ganchos) || [])
+    var gancho = "";
+    if (modoGancho !== "sem_gancho") {
+      if (modoGancho === "auto" || ia.modo_gancho === modoGancho) {
+        gancho = (ia.ganchos || [])
           .map(limparGancho)
           .find(eGanchoValido);
-        if (!cena && g && g.cena) cena = g.cena;
-      } catch (e) {}
-    }
-    if (!gancho) {
-      var poolVirais = [
-        "O que acontece nessa cena deixou todo mundo em choque 😳",
-        "Ele quebrou a única regra que nunca deveria ter quebrado 💀",
-        "A reação dele ao descobrir a verdade foi a pior possível 😨",
-        "A calma dele antes do caos começar é assustadora 🥶",
-        "Ninguém imaginava que isso iria acontecer nessa cena 😱",
-        "O momento exato em que tudo deu errado 🤯"
-      ];
-      var customOuPadrao = String(s.overlayText || core.ganchoPadrao || "").trim();
-      gancho = (customOuPadrao && !/você precisa assistir|voce precisa assistir/i.test(customOuPadrao))
-        ? customOuPadrao
-        : poolVirais[Math.floor(Math.random() * poolVirais.length)];
+      }
+      if (!gancho) {
+        try {
+          var g = await core.gerarGancho(s.nvidiaKey, quadros, s.lang, filme.title, s.geminiKey, audio, modoGancho);
+          gancho = ((g && g.ganchos) || [])
+            .map(limparGancho)
+            .find(eGanchoValido);
+          if (!cena && g && g.cena) cena = g.cena;
+        } catch (e) {}
+      }
+      if (!gancho) {
+        var poolVirais = [
+          "Ele achou que estava no controle até isso acontecer 😳",
+          "Ela percebeu tarde demais com quem estava lidando 💀",
+          "O silêncio dele antes de agir diz tudo 🥶",
+          "Bastou uma frase para mudar o rumo de tudo 😱",
+          "Ninguém na sala esperava por essa resposta 🔥",
+          "A reação dele entregou tudo em 3 segundos 🤯"
+        ];
+        var customOuPadrao = String(s.overlayText || core.ganchoPadrao || "").trim();
+        gancho = (customOuPadrao && !/você precisa assistir|voce precisa assistir/i.test(customOuPadrao))
+          ? customOuPadrao
+          : poolVirais[Math.floor(Math.random() * poolVirais.length)];
+      }
     }
     item.resultado.gancho = gancho;
 
@@ -2289,6 +2324,43 @@
         }, [estado.links.aImportar ? "A importar…" : "Importar links"]),
         el("span", { className: "cl-peso cl-links-estado", role: "status", text: estado.links.estado }),
       ]),
+    ]));
+
+    var seletorIdent = el("select", { className: "cl-select", "aria-label": "Modo de identificação" }, [
+      el("option", { value: "auto", text: "🎯 IA Completa (Vídeo + Áudio + Google)" }),
+      el("option", { value: "dialogo", text: "💬 Busca por Falas / Legendas (OCR + Áudio)" }),
+      el("option", { value: "dica", text: "⚡ Rápido por Nome / Dica" }),
+      el("option", { value: "sem_id", text: "🚫 Sem Identificação / Direto (não trava)" }),
+    ]);
+    seletorIdent.value = String(estado.opcoes.modoIdentificacao || "auto");
+    seletorIdent.addEventListener("change", function () {
+      estado.opcoes.modoIdentificacao = MODOS_IDENT_VALIDOS.indexOf(seletorIdent.value) !== -1 ? seletorIdent.value : "auto";
+      gravarOpcoes();
+      desenhar();
+    });
+    corpo.push(el("label", { className: "cl-opcao" }, [
+      el("span", { text: "🎬 Identificador de vídeo:" }),
+      seletorIdent,
+    ]));
+
+    var seletorGancho = el("select", { className: "cl-select", "aria-label": "Modo do gancho viral" }, [
+      el("option", { value: "auto", text: "✨ Automático (Melhor da Cena)" }),
+      el("option", { value: "suspense", text: "😰 Suspense / Tensão" }),
+      el("option", { value: "polemica", text: "🔥 Polêmica / Dilema" }),
+      el("option", { value: "pergunta", text: "❓ Pergunta Direta" }),
+      el("option", { value: "curiosidade", text: "🤯 Curiosidade / Detalhe" }),
+      el("option", { value: "fala", text: "💬 Fala da Cena" }),
+      el("option", { value: "sem_gancho", text: "🚫 Sem Gancho (Vídeo Limpo)" }),
+    ]);
+    seletorGancho.value = String(estado.opcoes.modoGancho || "auto");
+    seletorGancho.addEventListener("change", function () {
+      estado.opcoes.modoGancho = MODOS_GANCHO_VALIDOS.indexOf(seletorGancho.value) !== -1 ? seletorGancho.value : "auto";
+      gravarOpcoes();
+      desenhar();
+    });
+    corpo.push(el("label", { className: "cl-opcao" }, [
+      el("span", { text: "🔥 Estilo do gancho viral:" }),
+      seletorGancho,
     ]));
 
     var seletorSim = el("select", { className: "cl-select", "aria-label": "Vídeos ao mesmo tempo" }, [1, 2, 3, 4, 5].map(function (n) {

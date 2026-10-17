@@ -220,6 +220,19 @@ console.log("\nA3. Opção «Agendar mesmo com pouca certeza»");
   dom.window.close();
 }
 
+console.log("\nA3b. Modo Sem Identificação (sem_id) + Modo Sem Gancho (sem_gancho)");
+{
+  const dom = novoDom();
+  const c = cenario(dom.window, { settings: { tmdbKey: "" } });
+  c.lote.estado.opcoes.modoIdentificacao = "sem_id";
+  c.lote.estado.opcoes.modoGancho = "sem_gancho";
+  c.lote.adicionarFicheiros([ficheiro(dom.window, "curto.mp4")]);
+  await c.lote.iniciar();
+  check("modo sem_id não chama core.identificar nem precisa de chave TMDB", c.chamadas.identificar === 0 && c.fila.length === 1);
+  check("modo sem_gancho processa o vídeo com gancho vazio", c.chamadas.processar[0]?.gancho === "" && c.fila[0]?.hookText === "");
+  dom.window.close();
+}
+
 console.log("\nA4. Chaves em falta");
 {
   const dom = novoDom();
