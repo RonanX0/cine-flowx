@@ -1,0 +1,1 @@
+d.jsx(Im,{src:ye,hookText:S.overlayText,manualCrop:R,timeRange:Re>0?Y:void 0,className:"w-24 shrink-0 sm:w-40",hookColor:g.hookColor||g.hookTextColor||"#FFFFFF",preset:g.preset||g.reelPreset||"atual",footerText:g.footerText||g.rodapeTexto||"",footerColor:g.footerColor||g.rodapeCor||""})

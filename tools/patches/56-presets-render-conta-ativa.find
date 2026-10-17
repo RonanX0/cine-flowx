@@ -1,0 +1,1 @@
+const ue=await YS(X,Y[0],Y[1],S.resolution,F,nn,K?R:null,j.bgMode||j.backgroundMode||"preto",j.hookColor||j.hookTextColor||"#FFFFFF");

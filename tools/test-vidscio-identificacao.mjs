@@ -96,11 +96,79 @@ check("app-pronto.html e 404.html sincronizados com index.html", html === appPro
 console.log("1. Corte de Formato 9:16 e Dimensões");
 {
   const modulo = /<script type="module">([\s\S]*?)<\/script>/.exec(html)[1];
-  const ehMatch = modulo.match(/function Eh\(r,o,a,i=720\)\{[\s\S]*?return\{outWidth[\s\S]*?\}\}/);
-  if (!ehMatch) throw new Error("Função Eh não encontrada no bundle.");
+  // Chavetas equilibradas: o `Eh` ganhou um parâmetro de preset e a regex antiga
+  // (que parava no primeiro `}}`) truncava a função.
+  const extrairEh = (fonte) => extrairFuncao2(fonte, "function Eh(");
+  function extrairFuncao2(fonte, inicio) {
+    const a = fonte.indexOf("function Eh(");
+    if (a < 0) return null;
+    let i = fonte.indexOf("{", a);
+    let nivel = 0;
+    let aspas = null;
+    for (; i < fonte.length; i++) {
+      const ch = fonte[i];
+      if (aspas) {
+        if (ch === "\\") { i++; continue; }
+        if (ch === aspas) aspas = null;
+        continue;
+      }
+      if (ch === '"' || ch === "'" || ch === "`") { aspas = ch; continue; }
+      if (ch === "{") nivel++;
+      else if (ch === "}" && --nivel === 0) return fonte.slice(a, i + 1);
+    }
+    return null;
+  }
+  // O Eh usa a tabela de presets e dois helpers do bundle — vão todos para o vm.
+  function extrairFuncao(fonte, inicio) {
+    const a = fonte.indexOf(inicio);
+    if (a < 0) return null;
+    let i = fonte.indexOf("{", a);
+    let nivel = 0;
+    let aspas = null;
+    for (; i < fonte.length; i++) {
+      const ch = fonte[i];
+      if (aspas) {
+        if (ch === "\\") { i++; continue; }
+        if (ch === aspas) aspas = null;
+        continue;
+      }
+      if (ch === '"' || ch === "'" || ch === "`") { aspas = ch; continue; }
+      if (ch === "{") nivel++;
+      else if (ch === "}" && --nivel === 0) return fonte.slice(a, i + 1);
+    }
+    return null;
+  }
+  function extrairTabela(fonte) {
+    const inicio = "const PRESETS_DO_REEL={";
+    const a = fonte.indexOf(inicio);
+    if (a < 0) return "";
+    let i = fonte.indexOf("{", a + inicio.length - 1);
+    let nivel = 0;
+    let aspas = null;
+    for (; i < fonte.length; i++) {
+      const ch = fonte[i];
+      if (aspas) {
+        if (ch === "\\") { i++; continue; }
+        if (ch === aspas) aspas = null;
+        continue;
+      }
+      if (ch === '"' || ch === "'" || ch === "`") { aspas = ch; continue; }
+      if (ch === "{") nivel++;
+      else if (ch === "}" && --nivel === 0) return fonte.slice(a, i + 1) + ";";
+    }
+    return "";
+  }
+  const ehCodigo = extrairEh(modulo);
+  if (!ehCodigo) throw new Error("Função Eh não encontrada no bundle.");
+  const codigoVm = [
+    extrairTabela(modulo),
+    extrairFuncao(modulo, "function presetDoReel("),
+    extrairFuncao(modulo, "function alvoDaCaixa("),
+    ehCodigo,
+  ].filter(Boolean).join("\n");
 
   const ctx = vm.createContext({ Math, Number });
-  vm.runInContext(ehMatch[0], ctx);
+  vm.runInContext(codigoVm, ctx);
 
   // Vídeo 16:9 (1920x1080) -> deve ser centralizado em 720x1280 com margem vertical equilibrada
   const r169 = ctx.Eh(1920, 1080, null, 720);
@@ -125,7 +193,9 @@ console.log("1. Corte de Formato 9:16 e Dimensões");
 // -----------------------------------------------------------------------------
 console.log("\n2. Estética Cinematográfica (Fundo Preto)");
 {
-  check("FFmpeg processa com fundo preto (pad=...:black)", html.includes(":black,setsar=1"));
+  // O fundo do pad passou a vir de uma variável: preto por omissão, branco só
+  // quando a conta escolhe o fundo branco (preset "claro" ou opção "Branco").
+  check("FFmpeg processa com fundo preto por omissão (pad=...:${__corFundo})", html.includes(",pad=${w.outWidth}:${w.outHeight}:${w.padX}:${w.padY}:${__corFundo},setsar=1") && html.includes('__corFundo=__fundoBranco?"white":"black"') && html.includes('__fundoBranco=__P.fundo==="branco"||bgMode==="branco"'));
   check("FFmpeg não usa mais fundo branco (:white)", !html.includes(":white,setsar=1"));
   check("Preview 9:16 usa container preto (bg-black)", html.includes('aspect-[9/16] w-full overflow-hidden rounded-xl border border-border bg-black'));
 }
@@ -138,7 +208,7 @@ console.log("\n3. Ganchos Virais e Tipografia Moderna");
   check("Gancho padrão não é o clichê genérico", !html.includes('overlayText:"Você precisa assistir esse filme 😳"'));
   check("Renderizador _h usa tipografia em negrito 900", html.includes('900 ${g}px "Inter", "Montserrat"'));
   check("Renderizador _h usa badge de alto contraste com cantos arredondados", html.includes('rgba(10, 10, 14, 0.78)'));
-  check("Renderizador _h usa texto branco puro com sombra", html.includes('#FFFFFF') && html.includes('shadowColor="rgba(0, 0, 0, 0.9)"'));
+  check("Renderizador _h usa texto branco puro com sombra (em fundo escuro)", html.includes('#FFFFFF') && html.includes('shadowColor=P.ganchoPill?"rgba(0, 0, 0, 0.9)":"rgba(0, 0, 0, 0.55)"') && html.includes('f.fillStyle=color||(P.ganchoPill?(ital?"rgba(255, 255, 255, 0.55)":"#FFFFFF"):P.ganchoCor)'));
 
   // Prompt do Hm deve conter fórmulas virais comprovadas
   check("Prompt do Hm ensina quebra de expectativa", html.includes("QUEBRA DE EXPECTATIVA"));
@@ -167,6 +237,19 @@ console.log("\n4. Motor de Identificação e TMDB");
   check("Título exato original recebe pontuação dominante (+145)", html.includes("if(x&&(D===x||O===x))T+=145"));
   check("Título exato em português recebe pontuação dominante (+135)", html.includes("else if(h&&(O===h||D===h))T+=135"));
   check("Pontuação de ator calibrada para não sobrepor título (+45 max)", html.includes("T+=(ac.actorMatches||1)>=2?45:25"));
+
+  // 🎬 Gemini "assiste" ao vídeo (File API) em vez de só ver frames
+  check("bundle tem o upload do vídeo para a File API do Gemini", html.includes("_ccGeminiVideo") && html.includes("upload/v1beta/files"));
+  check("a análise usa file_data + video_metadata (intervalo)", html.includes("file_data:{file_uri:uri,mime_type:tipo}") && html.includes("part.video_metadata=md"));
+  check("hasMedia do generateContent conta também o vídeo (file_data)", html.includes("hasMedia=a.some(pt=>pt&&(pt.inline_data||pt.file_data))"));
+  check("hasMedia do ju conta também o vídeo (file_data)", html.includes("hasMedia=o.some(pt=>pt&&(pt.inline_data||pt.file_data))"));
+  check("com vídeo, o generateContent espera mais tempo (300 s)", html.includes("body:JSON.stringify(p)},hasMedia?3e5:9e4)"));
+  check("CineClipCore exporta videoParaIA", html.includes("videoParaIA:_ccVideoParaIA"));
+  check("o Estúdio passa o vídeo à identificação (Zb)", html.includes("audioClip:Pt,video:X?{data:X,"));
+  check("o Estúdio passa o vídeo ao gancho (Hm)", html.includes('S.geminiKey,ue,{data:X,mimeType:(X&&X.type)||"video/mp4"'));
+  check("lote-massa prepara o vídeo para a IA", loteSrc.includes("core.videoParaIA") && loteSrc.includes("video: videoIA"));
+  check("lote-massa passa o vídeo ao gerarGancho", loteSrc.includes("s.geminiKey, audio, videoIA, contextoGancho)"));
+  check("o servidor também prepara o vídeo para a IA", fs.readFileSync(path.join(root, "servidor", "video.mjs"), "utf8").includes("export async function videoParaIA"));
 }
 
 
@@ -189,6 +272,9 @@ function resposta(status, body, headers = {}) {
 
 /** Resposta da IA (Gemini) — mutável para cada cenário. */
 let respostaGemini = "";
+/** Corpo do último generateContent + contagem de uploads (File API de vídeo). */
+let corpoGenerate = null;
+let uploads = 0;
 const dom = new JSDOM(html, { url: "http://localhost/", runScripts: "outside-only", pretendToBeVisual: true });
 const { window } = dom;
 window.indexedDB = fakeIndexedDB;
@@ -196,8 +282,23 @@ window.IDBKeyRange = IDBKeyRange;
 window.TextEncoder = globalThis.TextEncoder;
 window.TextDecoder = globalThis.TextDecoder;
 try { Object.defineProperty(window, "crypto", { value: globalThis.crypto, configurable: true }); } catch {}
-window.fetch = async (url) => {
-  if (String(url).includes("generativelanguage")) return resposta(200, { candidates: [{ content: { parts: [{ text: respostaGemini }] } }] });
+window.fetch = async (url, opts) => {
+  const u = String(url);
+  if (u.includes("upload/v1beta/files")) {
+    uploads++;
+    return resposta(200, {}, { "x-goog-upload-url": "https://upload.stub/finalize" });
+  }
+  if (u.includes("upload.stub/finalize")) {
+    return resposta(200, { file: { name: "files/vid01", uri: "https://generativelanguage.googleapis.com/v1beta/files/vid01", state: "PROCESSING" } });
+  }
+  if (u.includes("/files/vid01")) {
+    return resposta(200, { file: { state: "ACTIVE" } });
+  }
+  if (u.includes(":generateContent")) {
+    corpoGenerate = opts && opts.body != null ? String(opts.body) : "";
+    return resposta(200, { candidates: [{ content: { parts: [{ text: respostaGemini }] } }] });
+  }
+  if (u.includes("generativelanguage")) return resposta(200, { candidates: [{ content: { parts: [{ text: respostaGemini }] } }] });
   return resposta(200, { key: "stub", id: "stub" }, { "content-type": "application/json" });
 };
 window.matchMedia = () => ({ matches: false, media: "", addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false });
@@ -323,6 +424,37 @@ try {
   check("identificar (VidScio) mantém o título e a confiança", id1 && id1.titulo === "Filme Teste VidScio" && id1.confianca === 95);
 } catch (e) {
   check("identificar (VidScio) devolve os ganchos limpos", false, e && e.message);
+}
+
+/* ---- B8. identificar e gerarGancho com o vídeo (Gemini File API) ---- */
+respostaGemini = JSON.stringify({
+  fala_do_audio: "Ele disse: não devias ter feito isso.",
+  atores: ["Ator Vídeo"], personagens: ["Personagem Vídeo"], texto_na_tela: "",
+  ancoras_visuais: "cozinha à noite, tom dramático", cena: "Ele confronta a mulher e a situação escala em movimento",
+  tipo: "movie", temporada_episodio: "", titulo: "Filme Com Vídeo", titulo_original: "Video Movie",
+  ano: 2025, confianca: 96, ganchos: ["A cena em movimento mudou tudo 😳"], alternativas: [],
+});
+const videoFake = { data: new Uint8Array([1, 2, 3, 4]), mimeType: "video/mp4", ini: 0, fim: 90 };
+let idv = null;
+try {
+  idv = await core.identificar("", [QUADRO], "pt-BR", { fileName: "video-fake.mp4", userHint: "cena com vídeo", geminiKey: "chave-gemini-falsa", audioClip: null, video: videoFake });
+  check("identificar com vídeo devolve o resultado", !!idv && idv.titulo === "Filme Com Vídeo" && idv.confianca === 96, JSON.stringify(idv && idv.titulo));
+  check("o vídeo sobe uma vez para a File API do Gemini", uploads === 1, "uploads=" + uploads);
+  check("a identificação usa file_data com o file_uri", !!corpoGenerate && corpoGenerate.includes('"file_data"') && corpoGenerate.includes("files/vid01"));
+  check("a identificação marca o intervalo com video_metadata", !!corpoGenerate && corpoGenerate.includes('"end_offset":"90s"'));
+  check("com vídeo, os frames não são enviados como inline_data", !!corpoGenerate && !corpoGenerate.includes("inline_data"));
+} catch (e) {
+  check("identificar com vídeo devolve o resultado", false, e && e.message);
+}
+
+let gv = null;
+try {
+  gv = await core.gerarGancho("", [QUADRO], "pt-BR", "Filme Com Vídeo", "chave-gemini-falsa", null, videoFake);
+  check("gerarGancho com vídeo devolve a cena", !!gv && /movimento/.test(gv.cena || ""), JSON.stringify(gv && gv.cena));
+  check("o mesmo vídeo reutiliza o upload (cache)", uploads === 1, "uploads=" + uploads);
+  check("o gancho também usa file_data", !!corpoGenerate && corpoGenerate.includes('"file_data"') && corpoGenerate.includes("files/vid01"));
+} catch (e) {
+  check("gerarGancho com vídeo devolve a cena", false, e && e.message);
 }
 
 /* ====================================================================== */

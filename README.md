@@ -1,6 +1,6 @@
 # CineClip 🎬
 
-Aplicação web **100% no navegador** que limpa metadados de vídeos, corta até 2:30, formata em **9:16** com texto de *hook* no topo, identifica o filme/série via **NVIDIA Vision + TMDB** e gera uma legenda pronta para publicar.
+Aplicação web **100% no navegador** que limpa metadados de vídeos, corta até 2:30, formata em **9:16** com texto de *hook* no topo, identifica o filme/série via **NVIDIA Vision + TMDB** (ou com o Gemini a *assistir ao vídeo*) e gera uma legenda pronta para publicar.
 
 ## Estrutura do Projeto
 
@@ -41,6 +41,47 @@ npm run preview
 > NVIDIA incluído. GitHub Pages serve apenas arquivos estáticos e não executa `/api/`; a
 > identificação que depende da NVIDIA precisa de um backend em Vercel/Netlify (ou outro host).
 
+## 🎨 Formatação do Reel (presets)
+
+Em **Configurações → conta do Instagram → Formatação do Reel** escolhes o formato do 9:16.
+O preset é **por conta** (guardado com as outras definições da conta e sincronizado na nuvem)
+e muda tudo de uma vez: o fundo, o estilo do gancho e a **caixa do vídeo**.
+
+| Preset | Fundo | Gancho | Caixa do vídeo | Rodapé |
+| --- | --- | --- | --- | --- |
+| **Padrão do app** (`atual`) | preto (ou desfocado) | branco, com pílula escura | automática: 16:9 fica a 720×406, vertical preenche o 9:16 | — |
+| **Escuro** (`escuro`) | preto | fluorescente `#ECFA12`, 900, linhas coladas (0,88 em), sem pílula | **1:1** de 648 px, 5 % de margem lateral, cantos com raio de 30 px, do 27,4 % ao 78,0 % da altura | verde `#2DBD2C` a 93,55 % (texto opcional) |
+| **Claro** (`claro`) | branco | preto `#000000`, sem pílula | **faixa 4:3** de ponta a ponta (720×540), do 30,1 % ao 72,2 % da altura | — |
+
+As medidas dos dois presets foram tiradas **pixel a pixel** de duas capturas de Reels reais
+(`formato-1.png` e `formato-2.png`, na raiz do repositório) — nada foi inventado:
+
+- os cantos arredondados do preset **Escuro** saem do PNG do gancho, que tapa os quatro cantos
+  da caixa com a cor do fundo (funciona no FFmpeg, que não tem `border-radius`);
+- o recorte do original tem sempre o **mesmo aspeto da caixa**, por isso a imagem nunca fica
+  esticada (16:9 → recorte central 1080×1080 no Escuro e 1440×1080 no Claro);
+- as faixas pretas do original continuam a ser cortadas **antes** da caixa do preset;
+- a pré-visualização do Estúdio, o FFmpeg do navegador (`YS`) e o servidor
+  (`servidor/video.mjs`) fazem **as mesmas contas** — `tools/test-presets.mjs` compara os dois
+  lados e falha se alguma medida divergir.
+
+Para ver os três formatos lado a lado com o código real do bundle (sem instalar nada):
+
+```bash
+python3 -m http.server 8080 --bind 0.0.0.0 --directory tools   # abre /amostra-presets.html
+npm run presets:test                                            # geometria, desenho, paridade app/servidor e (com ffmpeg) o render real
+```
+
+> A `tools/amostra-presets.html` vai buscar o `index.html` e extrai as funções verdadeiras
+> (`PRESETS_DO_REEL`, `Eh`, `_h`), por isso não há uma segunda cópia da geometria para
+> ficar desatualizada. Se servires a raiz do repositório, o caminho `../index.html` também
+> funciona.
+
+Sem preset, o servidor mantém o aspeto que sempre teve (fundo branco, gancho preto); os
+presets **Escuro** e **Claro** é que levam as cores e a caixa medidas. O estilo viaja da conta
+até ao FFmpeg pelo `lote-massa.js` (argumentos 8–12 do `processar`) — antes o Estúdio lia o
+estilo de uma variável errada e o fundo/cor escolhidos nunca chegavam ao vídeo.
+
 ## 📦 Upload em massa
 
 No Estúdio, o botão **📦 Upload em massa** (ou escolher/arrastar vários vídeos de uma vez)
@@ -54,6 +95,17 @@ vez; o painel pode ser fechado (fica um atalho no canto) e o botão **Parar** in
 - Vídeos em **H.265/HEVC** (comuns nos downloads do TikTok) dão erro claro: o navegador não
   consegue ler a imagem. Converte-os para H.264 antes.
 - Precisa das chaves NVIDIA ou Gemini e TMDB nas configurações.
+
+### 🎬 A IA assiste ao vídeo (Gemini File API)
+
+Quando há chave do **Google Gemini**, a identificação do filme e a criação do gancho passam a
+enviar o **vídeo em si** (File API: upload do ficheiro uma vez, até 2 GB) em vez de 6 frames +
+áudio soltos. O Gemini analisa a cena **em movimento e com áudio sincronizado** (amostragem
+~1 frame/s, com timestamps), o que melhora muito o reconhecimento de diálogo, legendas
+queimadas, atores e ação — só o intervalo escolhido (ex.: os primeiros 90 s) é contabilizado
+com `video_metadata`. O mesmo vídeo é reutilizado entre a identificação e o gancho (cache do
+upload). Se o upload falhar (CORS, rede, ficheiro gigante), o fluxo cai automaticamente para
+os frames + áudio como antes; o caminho NVIDIA continua a usar frames.
 
 ### 🔗 Importar do TikTok ou do Kwai
 
@@ -132,7 +184,7 @@ erro. O Reel fica marcado com `semEdicao: true` para se saber de onde veio.
 O código está em `agendamento-rapido.js` (legível, fora do bundle). Usa a mesma ponte do
 lote (`window.CineClipCore` / `window.__CineClipApp`, patch `27-lote-ponte`) e partilha com
 ele o cache de identificação, para o mesmo vídeo não gastar duas chamadas à IA. Os patches
-`35`–`38` carregam o script, acrescentam a aba e criam o ponto de montagem; as âncoras
+`63`–`66` carregam o script, acrescentam a aba e criam o ponto de montagem; as âncoras
 vivem em `tools/build-rapido-patch.mjs` (regenera com `npm run patch:rapido`).
 Testes: `npm run rapido:test`.
 
@@ -148,8 +200,8 @@ em [`servidor/README.md`](servidor/README.md).
 A aba **Agendador** tem um layout próprio: resumo (na fila / próximo post / publicados /
 erros), abas **Fila · Conta e horários · Robô 24h**, cartão *Novo agendamento* com atalhos
 para os próximos horários livres, fila agrupada por dia com filtros e detalhes expansíveis
-(reagendar, mudar de conta, legenda, baixar, reenviar, remover com confirmação) e editor
-de horários diários em chips.
+(reagendar, mudar de conta, **corrigir título, legenda e capa antes de publicar**, baixar, reenviar, remover com confirmação) e editor
+de horários diários em chips. A capa aceita um URL HTTPS público (por exemplo, uma imagem do TMDB), que é o formato que a Meta exige para o `cover_url`.
 
 **Ordenar a fila:** ordena por horário (mais cedo / mais tarde), título ou situação (erros
 primeiro), com busca por título/legenda. Em *Horário (mais cedo)* podes **arrastar** os

@@ -49,6 +49,10 @@ function between(start, endMarker) {
 // Nota: os patches 22 (layout do Agendador) e 23 (CSS do Agendador) NÃO são
 // extraídos aqui — são gerados por tools/build-agendador-patch.mjs a partir de
 // tools/agendador-ui/ e aplicados por cima dos patches 01–21.
+// Nota 2: os patches 26–32 e 35–43 (ponte do lote, Gemini-video…) também são
+// mantidos à mão (os .find/.replace vivem em tools/patches/); o 27 contém o
+// texto do próprio find no fim do replace (é o export do CineClipCore que o
+// patch 44-antigo alterava — fundido no 27 para o apply não o reaplicar).
 const P = {
   "01-script-tag": `    <script type="module">`,
   "02-toast-export": `Iy.createRoot(document.getElementById("root"))`,
