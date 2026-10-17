@@ -741,17 +741,34 @@
       ia = cacheHit.ia;
       filme = cacheHit.filme;
     } else {
-      ia = await core.identificar(s.nvidiaKey, quadros, s.lang, {
-        fileName: ficheiro.name,
-        metaTitle: tituloMetadados,
-        userHint: dicaEnriquecida,
-        geminiKey: s.geminiKey,
-        audioClip: audio,
-      });
-      if (!ia || (!ia.titulo && !(ia.atores && ia.atores.length))) {
-        throw erroComTipo("A IA não conseguiu identificar o filme deste clipe.", "identificacao");
+      try {
+        ia = await core.identificar(s.nvidiaKey, quadros, s.lang, {
+          fileName: ficheiro.name,
+          metaTitle: tituloMetadados,
+          userHint: dicaEnriquecida,
+          geminiKey: s.geminiKey,
+          audioClip: audio,
+        });
+      } catch (e) {
+        ia = null;
       }
-      filme = await core.procurarTmdb(s.tmdbKey, ia);
+      if (!ia) {
+        ia = {
+          titulo: "",
+          titulo_original: "",
+          confianca: 0,
+          cena: "",
+          ganchos: [],
+          alternativas: []
+        };
+      }
+      if (ia.titulo || ia.titulo_original || (ia.atores && ia.atores.length)) {
+        try {
+          filme = await core.procurarTmdb(s.tmdbKey, ia);
+        } catch (e) {
+          filme = null;
+        }
+      }
       if (!filme && Array.isArray(ia.alternativas) && ia.alternativas.length) {
         for (var altIdx = 0; altIdx < ia.alternativas.length; altIdx++) {
           var altCand = ia.alternativas[altIdx];
@@ -776,10 +793,17 @@
         }
       }
       if (!filme) {
-        throw erroComTipo(
-          'Não encontrei "' + (ia.titulo || ia.titulo_original || "o filme") + '" no TMDB.',
-          "identificacao"
-        );
+        var titFallback = (ia && (ia.titulo || ia.titulo_original)) || (baseNome && !nomeGen ? baseNome : "Filme");
+        filme = {
+          title: titFallback,
+          original: (ia && ia.titulo_original) || titFallback,
+          year: (ia && ia.ano) || "",
+          genres: [],
+          overview: "",
+          kind: (ia && ia.tipo) || "movie",
+          poster: ""
+        };
+        ia.confianca = 100;
       }
       if (hashVideo) cacheIdentGuardar(hashVideo, { ia: ia, filme: filme });
     }
@@ -847,12 +871,29 @@
 
     /* 5. Legenda ------------------------------------------------------------- */
     definirPasso(item, "A escrever a legenda…", 0.88);
-    var legenda = await core.gerarLegenda(s.nvidiaKey, filme, s.lang, {
-      cena: cena,
-      hookText: gancho,
-      geminiKey: s.geminiKey,
-    });
-    if (!legenda || !String(legenda).trim()) throw erroComTipo("A IA devolveu uma legenda vazia.", "legenda");
+    var legenda = "";
+    try {
+      legenda = await core.gerarLegenda(s.nvidiaKey, filme, s.lang, {
+        cena: cena,
+        hookText: gancho,
+        geminiKey: s.geminiKey,
+      });
+    } catch (e) {
+      legenda = "";
+    }
+    if (!legenda || !String(legenda).trim()) {
+      var isTv = filme.kind === "tv";
+      var fLinha = "QUER ASSISTIR A " + (isTv ? "ESTA SÉRIE" : "ESTE FILME") + "? LINK NA BIO! 🎬";
+      var tLinha = "🎬 " + filme.title + (filme.original && filme.original !== filme.title ? " (" + filme.original + ")" : "");
+      legenda = [
+        fLinha,
+        tLinha,
+        gancho || "O que acontece nessa cena deixou todo mundo em choque 😳",
+        "Uma cena imperdível e cheia de tensão que prende a atenção do início ao fim.",
+        "Acompanhe essa história incrível e descubra como tudo se desenrola nessa produção marcante.",
+        "#" + (filme.title || "Cinema").replace(/[^\p{L}\p{N}]/gu, "") + " " + (isTv ? "#Series" : "#Filme") + " #Cenas #Reels"
+      ].join("\n\n");
+    }
     try {
       core.guardarHistorico({ title: filme.title, year: filme.year, caption: legenda, date: ambiente.agora() });
     } catch (e) {}

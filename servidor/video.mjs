@@ -332,7 +332,7 @@ export async function imagemDoGancho(largura, altura, padY, texto) {
   const frase = String(texto || "").trim();
   if (frase) {
     const tam = Math.round(largura * 0.062);
-    ctx.font = `800 ${tam}px Inter, "Noto Color Emoji", "Helvetica Neue", Arial, sans-serif`;
+    ctx.font = `600 ${tam}px Inter, "Noto Color Emoji", "Helvetica Neue", Arial, sans-serif`;
     ctx.fillStyle = "#000000";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";

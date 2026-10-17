@@ -136,7 +136,7 @@ console.log("\n2. Estética Cinematográfica (Fundo Preto)");
 console.log("\n3. Ganchos Virais e Tipografia Moderna");
 {
   check("Gancho padrão não é o clichê genérico", !html.includes('overlayText:"Você precisa assistir esse filme 😳"'));
-  check("Renderizador _h usa tipografia em negrito 900", html.includes('900 ${g}px "Inter", "Montserrat"'));
+  check("Renderizador _h usa tipografia em peso 600 (fonte mais fina)", html.includes('600 ${g}px "Inter", "Montserrat"'));
   check("Renderizador _h usa badge de alto contraste com cantos arredondados", html.includes('rgba(10, 10, 14, 0.78)'));
   check("Renderizador _h usa texto branco puro com sombra", html.includes('#FFFFFF') && html.includes('shadowColor="rgba(0, 0, 0, 0.9)"'));
 
@@ -323,6 +323,52 @@ try {
   check("identificar (VidScio) mantém o título e a confiança", id1 && id1.titulo === "Filme Teste VidScio" && id1.confianca === 95);
 } catch (e) {
   check("identificar (VidScio) devolve os ganchos limpos", false, e && e.message);
+}
+
+/* ---- B8. gerarLegenda: formatação e resiliência ---- */
+respostaGemini = `Aqui está a legenda:
+
+QUER ASSISTIR A ESTE FILME? LINK NA BIO! 🎬
+
+🎬 Filme Teste (VidScio Test Movie)
+
+**Parágrafo 1:**
+Esta cena eletrizante marca o ponto sem retorno na história.
+
+Parágrafo 2:
+O momento crucial em que **o segredo é revelado** muda tudo na trama.
+
+Parágrafo 3:
+Uma obra indispensável para quem ama suspense de alta qualidade.
+
+#FilmeTeste #Filme #Suspense #Cinema #ExtraTag1 #ExtraTag2`;
+
+try {
+  const leg1 = await core.gerarLegenda("", { title: "Filme Teste", original: "VidScio Test Movie", year: 2024, kind: "movie", genres: ["Suspense"] }, "pt-BR", { geminiKey: "chave-gemini-falsa" });
+  check("gerarLegenda limpa preâmbulos da IA ('Aqui está a legenda...')", !leg1.includes("Aqui está a legenda"));
+  check("gerarLegenda limpa rótulos de parágrafo ('**Parágrafo 1:**')", !leg1.includes("Parágrafo 1:"));
+  check("gerarLegenda inclui cabeçalho CTA e título", leg1.startsWith("QUER ASSISTIR A ESTE FILME? LINK NA BIO! 🎬\n\n🎬 Filme Teste (VidScio Test Movie)"));
+  check("gerarLegenda limita hashtags a 4", (leg1.match(/#[\p{L}\p{N}_]+/gu) || []).length <= 4);
+} catch (e) {
+  check("gerarLegenda formata corretamente", false, e && e.message);
+}
+
+// Teste quando título original é igual ao título
+respostaGemini = "Uma cena incrível que prende do início ao fim.\n\nO momento de tensão máxima.\n\nImperdível.";
+try {
+  const leg2 = await core.gerarLegenda("", { title: "Avatar", original: "Avatar", year: 2009, kind: "movie" }, "pt-BR", { geminiKey: "chave-gemini-falsa" });
+  check("gerarLegenda não duplica título quando original é igual", leg2.includes("🎬 Avatar\n\n") && !leg2.includes("🎬 Avatar (Avatar)"));
+} catch (e) {
+  check("gerarLegenda título original igual", false, e && e.message);
+}
+
+// Teste quando a IA devolve vazio (fallback automático)
+respostaGemini = "";
+try {
+  const leg3 = await core.gerarLegenda("", { title: "Desconhecido", kind: "movie" }, "pt-BR", { geminiKey: "chave-gemini-falsa" });
+  check("gerarLegenda com resposta vazia gera fallback válido", leg3.includes("QUER ASSISTIR A ESTE FILME? LINK NA BIO! 🎬") && leg3.includes("🎬 Desconhecido"));
+} catch (e) {
+  check("gerarLegenda fallback vazio", false, e && e.message);
 }
 
 /* ====================================================================== */
