@@ -2174,6 +2174,8 @@ const [cc_q, cc_setQ] = b.useState("");
 const [cc_drag, cc_setDrag] = b.useState(null);
 const [cc_over, cc_setOver] = b.useState(null);
 const [cc_busy, cc_setBusy] = b.useState(false);
+const [cc_editDraft, cc_setEditDraft] = b.useState(null);
+const [cc_editBusy, cc_setEditBusy] = b.useState(false);
 b.useEffect(() => {
   // Criar conta / abrir configuração (código antigo) passa a abrir a aba "Conta"
   if (g) { cc_setTab("conta"); v(!1); }
@@ -2291,6 +2293,51 @@ const cc_repack = async () => {
   } finally { cc_setBusy(!1); }
 };
 const cc_nextFreeFor = (it) => za(f.filter((x2) => x2.id !== it.id), j.dailySlots, j.id);
+
+/* ------------------------------------ editar antes de publicar
+ * O resultado da identificação é uma sugestão, não uma sentença. O item é
+ * salvo na mesma fila local/nuvem usada pelo publicador, portanto a legenda e
+ * a capa corrigidas chegam tanto ao botão "Publicar agora" como ao Robô 24h. */
+const cc_coverValue = (value) => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (/^\/\/\S+/.test(raw)) return `https:${raw}`;
+  if (/^\/t\/p\//i.test(raw)) return `https://image.tmdb.org${raw}`;
+  return raw;
+};
+const cc_startEdit = (it) => {
+  cc_setOpen(it.id);
+  cc_setEditDraft({
+    id: it.id,
+    title: it.title || "",
+    caption: it.caption || "",
+    poster: it.poster || it.coverUrl || "",
+  });
+};
+const cc_cancelEdit = () => cc_setEditDraft(null);
+const cc_updateEdit = (field, value) => cc_setEditDraft((draft) => draft ? { ...draft, [field]: value } : draft);
+const cc_saveEdit = async (it) => {
+  const draft = cc_editDraft && cc_editDraft.id === it.id ? cc_editDraft : null;
+  if (!draft) return;
+  const title = String(draft.title || "").trim();
+  const caption = String(draft.caption || "").trim();
+  const poster = cc_coverValue(draft.poster);
+  if (!title) { je.error("Preenche o título do filme ou série."); return; }
+  if (poster && !/^https:\/\/[^\s]+$/i.test(poster)) {
+    je.error("A capa precisa de um link HTTPS público (por exemplo, uma imagem do TMDB).");
+    return;
+  }
+  cc_setEditBusy(true);
+  try {
+    await Rn({ ...it, title, caption, poster, coverUrl: poster, updatedAt: Date.now() });
+    await he();
+    u == null || u();
+    cc_setEditDraft(null);
+    je.success(`Legenda e capa de "${title}" atualizadas — prontas para publicar.`);
+  } catch (err) {
+    je.error((err == null ? void 0 : err.message) || "Não foi possível guardar as alterações.");
+  } finally { cc_setEditBusy(false); }
+};
 
 // Próximos horários livres desta conta (atalhos rápidos para agendar)
 const cc_quick = b.useMemo(() => {
@@ -2412,7 +2459,7 @@ const cc_composeEmpty = cc_h("div", { className: "cc-card cc-compose-empty" },
   cc_h(Ae, { variant: "outline", onClick: () => { var el = oe.current; el && el.click(); }, title: "Importar vídeo .mp4 ou pacote .cineclip.json" },
     d.jsx(T0, { className: "h-4 w-4" }), "Importar"),
 );
-const cc_compose = !(r && r.cleanBlob && window.__ccLastScheduledClip !== r.cleanBlob) ? cc_composeEmpty : cc_h("div", { className: "cc-card cc-compose" },
+const cc_compose = !(r && r.cleanBlob) ? cc_composeEmpty : cc_h("div", { className: "cc-card cc-compose" },
   cc_h("div", { className: "cc-compose-clip" },
     r && r.poster
       ? d.jsx("img", { src: r.poster, alt: "", className: "cc-poster cc-poster-lg" })
@@ -2454,7 +2501,8 @@ const cc_item = (N) => {
   const late = N.status === "scheduled" && N.scheduledAt.slice(0, 16) < cc_nowStr;
   const st = cc_statusInfo(N, late);
   const opened = cc_open === N.id;
-  const canPublish = N.status !== "published" && !G && !!(N.videoBlob || N.remoteVideoUrl);
+  const editing = !!(cc_editDraft && cc_editDraft.id === N.id);
+  const canPublish = N.status !== "published" && !G && !editing && !!(N.videoBlob || N.remoteVideoUrl);
   const pos = cc_orderable.findIndex((x2) => x2.id === N.id);
   const movable = cc_canReorder && pos >= 0 && !G;
   const dragProps = movable ? {
@@ -2466,7 +2514,7 @@ const cc_item = (N) => {
     onDrop: (ev) => { ev.preventDefault(); const id = cc_drag; cc_setDrag(null); cc_setOver(null); cc_dropOn(id, N.id); },
   } : {};
   return cc_h("div", { key: N.id, ...dragProps, className: qe("cc-item", st.cls, opened && "cc-item-open", cc_drag === N.id && "cc-item-drag", cc_over === N.id && "cc-item-over", cc_busy && "cc-item-busy") },
-    cc_h("div", { className: "cc-row", onClick: (ev) => { ev.target.closest("button,input,select,a") || cc_setOpen(opened ? null : N.id); } },
+    cc_h("div", { className: "cc-row", onClick: (ev) => { ev.target.closest("button,input,select,textarea,a") || cc_setOpen(opened ? null : N.id); } },
       movable && cc_h("span", { className: "cc-grip", title: "Arrasta para mudar a ordem (os horários ficam, os Reels trocam)" },
         d.jsx("svg", { viewBox: "0 0 24 24", width: 14, height: 14, fill: "currentColor", children: d.jsx("path", { d: "M9 5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Zm0 7a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Zm-1.5 8.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3ZM18 5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Zm-1.5 8.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3ZM18 19a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Z" }) })),
       cc_h("div", { className: "cc-time" }, !cc_byDay && cc_h("span", { className: "cc-time-day" }, cc_dayLabel((N.scheduledAt || "").slice(0, 10))), cc_h("strong", null, (N.scheduledAt || "").slice(11, 16)), cc_h("span", { className: qe("cc-pill", st.cls) }, st.label)),
@@ -2485,7 +2533,7 @@ const cc_item = (N) => {
             d.jsx("svg", { viewBox: "0 0 24 24", width: 14, height: 14, fill: "none", stroke: "currentColor", strokeWidth: 2.5, strokeLinecap: "round", strokeLinejoin: "round", children: d.jsx("path", { d: "m18 15-6-6-6 6" }) })),
           cc_h("button", { type: "button", disabled: pos === cc_orderable.length - 1 || cc_busy, title: "Descer (troca de horário com o seguinte)", onClick: () => cc_moveBy(N, 1) },
             d.jsx("svg", { viewBox: "0 0 24 24", width: 14, height: 14, fill: "none", stroke: "currentColor", strokeWidth: 2.5, strokeLinecap: "round", strokeLinejoin: "round", children: d.jsx("path", { d: "m6 9 6 6 6-6" }) }))),
-        N.status !== "published" && cc_h(Ae, { size: "sm", disabled: !canPublish, onClick: () => le(N), title: N.videoBlob || N.remoteVideoUrl ? `Publicar agora em ${j.name}` : "Sem vídeo — importa o .mp4", className: "cc-pub" },
+        N.status !== "published" && cc_h(Ae, { size: "sm", disabled: !canPublish, onClick: () => le(N), title: editing ? "Guarda ou cancela a edição antes de publicar" : N.videoBlob || N.remoteVideoUrl ? `Publicar agora em ${j.name}` : "Sem vídeo — importa o .mp4", className: "cc-pub" },
           G ? d.jsx(rr, { className: "h-3.5 w-3.5 animate-spin" }) : d.jsx(J0, { className: "h-3.5 w-3.5" }), cc_h("span", { className: "cc-hide-sm" }, "Publicar")),
         d.jsx(Ae, { size: "sm", variant: "ghost", className: "cc-icon-btn", title: "Copiar legenda", onClick: () => { navigator.clipboard.writeText(N.caption); je.success("Legenda copiada!"); }, children: d.jsx(Pc, { className: "h-4 w-4" }) }),
         d.jsx(Ae, { size: "sm", variant: "ghost", className: qe("cc-icon-btn cc-chev", opened && "cc-chev-on"), title: opened ? "Fechar detalhes" : "Editar / mais opções", "aria-expanded": opened, onClick: () => cc_setOpen(opened ? null : N.id), children: d.jsx("svg", { viewBox: "0 0 24 24", width: 16, height: 16, fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round", children: d.jsx("path", { d: "m6 9 6 6 6-6" }) }) }),
@@ -2498,13 +2546,40 @@ const cc_item = (N) => {
         o.length > 1 && cc_h("label", { className: "cc-field" }, cc_h("span", { className: "cc-label" }, "Conta"),
           d.jsx("select", { value: N.accountId || j.id, disabled: G, onChange: (ev) => { K(N, ev.target.value); cc_setOpen(null); }, className: "cc-input", children: o.map((acc) => d.jsx("option", { value: acc.id, children: acc.name }, acc.id)) })),
       ),
-      cc_h("div", { className: "cc-field" }, cc_h("span", { className: "cc-label" }, "Legenda"), cc_h("div", { className: "cc-caption" }, N.caption || "—")),
-      N.poster && cc_h("span", { className: "cc-sub" }, "✔ O pôster do TMDB vai como capa do Reel."),
+      editing
+        ? cc_h("div", { className: "cc-edit-panel" },
+            cc_h("div", { className: "cc-edit-head" },
+              cc_h("strong", null, "Corrigir antes de publicar"),
+              cc_h("span", { className: "cc-sub" }, "O título, a legenda e a capa ficam guardados neste agendamento.")),
+            cc_h("label", { className: "cc-field cc-edit-field" },
+              cc_h("span", { className: "cc-label" }, "Filme ou série"),
+              d.jsx("input", { type: "text", value: cc_editDraft.title, onChange: (ev) => cc_updateEdit("title", ev.target.value), className: "cc-input cc-edit-title", autoFocus: !0 })),
+            cc_h("label", { className: "cc-field cc-edit-field" },
+              cc_h("span", { className: "cc-label" }, "Legenda"),
+              d.jsx("textarea", { value: cc_editDraft.caption, onChange: (ev) => cc_updateEdit("caption", ev.target.value), className: "cc-edit-textarea", rows: 6, maxLength: 2200, placeholder: "Escreve a legenda que será enviada ao Instagram…" }),
+              cc_h("span", { className: "cc-edit-count" }, `${String(cc_editDraft.caption || "").length}/2200`)),
+            cc_h("div", { className: "cc-edit-cover" },
+              cc_editDraft.poster
+                ? d.jsx("img", { src: cc_editDraft.poster, alt: "Pré-visualização da capa", className: "cc-edit-cover-preview" })
+                : cc_h("div", { className: "cc-edit-cover-preview cc-poster-empty" }, d.jsx(ip, { className: "h-6 w-6" })),
+              cc_h("div", { className: "cc-edit-cover-main" },
+                cc_h("label", { className: "cc-field" },
+                  cc_h("span", { className: "cc-label" }, "Capa do Reel"),
+                  d.jsx("input", { type: "text", inputMode: "url", value: cc_editDraft.poster, onChange: (ev) => cc_updateEdit("poster", ev.target.value), className: "cc-input cc-edit-url", placeholder: "https://image.tmdb.org/t/p/w780/capa.jpg" })),
+                cc_h("span", { className: "cc-edit-help" }, "Cole o link HTTPS público de uma imagem (por exemplo, do TMDB). A Meta precisa conseguir abrir esse link para usar a capa."))),
+            cc_h("div", { className: "cc-edit-actions" },
+              cc_h(Ae, { size: "sm", disabled: cc_editBusy || G, onClick: () => cc_saveEdit(N), className: "bg-brand text-primary-foreground" },
+                cc_editBusy ? d.jsx(rr, { className: "h-3.5 w-3.5 animate-spin" }) : d.jsx(ap, { className: "h-3.5 w-3.5" }), " Guardar alterações"),
+              cc_h(Ae, { size: "sm", variant: "ghost", disabled: cc_editBusy, onClick: cc_cancelEdit }, "Cancelar")))
+        : cc_h("div", { className: "cc-field" }, cc_h("span", { className: "cc-label" }, "Legenda"), cc_h("div", { className: "cc-caption" }, N.caption || "—")),
+      !editing && (N.poster || N.coverUrl) && cc_h("span", { className: "cc-sub" }, "✔ A capa guardada será enviada ao Instagram."),
       cc_h("div", { className: "cc-detail-actions" },
+        !editing && N.status !== "published" && cc_h(Ae, { size: "sm", variant: "outline", disabled: G, onClick: () => cc_startEdit(N) },
+          "✎ Editar legenda e capa"),
         (N.videoBlob || N.remoteVideoUrl) && cc_h(Ae, { size: "sm", variant: "outline", onClick: () => { N.videoBlob ? Zn(N.videoBlob, N.videoFileName) : N.remoteVideoUrl && window.open(N.remoteVideoUrl, "_blank"); } },
           d.jsx(Ko, { className: "h-3.5 w-3.5" }), " Baixar vídeo"),
         (!N.remoteVideoUrl||N.needsReupload||N.cloudError)&&d.jsxs(Ae,{size:"sm",variant:"secondary",disabled:G||!N.videoBlob,onClick:()=>{je("☁️ A reenviar os vídeos pendentes para a nuvem durável…"),u==null||u()},title:N.cloudError?`Tentar outra vez. Último erro: ${N.cloudError}`:"Enviar este vídeo para a nuvem durável (Cloudflare R2)",children:[d.jsx(Kr,{className:"h-3.5 w-3.5"})," Reenviar p/ nuvem"]}),
-        cc_h(Ae, { size: "sm", variant: "ghost", disabled: G, className: "cc-del", onClick: () => { window.confirm(`Remover "${N.title}" da fila de ${j.name}?`) && (H(N.id), cc_setOpen(null)); } },
+        cc_h(Ae, { size: "sm", variant: "ghost", disabled: G || editing, className: "cc-del", onClick: () => { window.confirm(`Remover "${N.title}" da fila de ${j.name}?`) && (H(N.id), cc_setOpen(null)); } },
           d.jsx(bm, { className: "h-3.5 w-3.5" }), " Remover"),
       ),
     ),
@@ -2609,7 +2684,7 @@ return cc_h("section", { className: "cc-ag" },
     cc_tabBtn("robo", Kr, "Robô 24h", 0),
   ),
   cc_tab === "fila" && cc_h("div", { className: "cc-panel" }, cc_compose, cc_queue),
-  cc_tab === "conta" && cc_h("div", { className: "cc-panel" }, cc_slotEditor, d.jsxs("div",{className:"space-y-4 rounded-xl border border-border bg-card p-4",children:[d.jsxs("div",{className:"flex flex-wrap items-center justify-between gap-2",children:[d.jsxs("div",{className:"flex items-center gap-2",children:[d.jsx(er,{className:"text-xs font-semibold uppercase tracking-wider text-muted-foreground",children:"Configuração exclusiva da conta:"}),d.jsx(dn,{value:j.name,onChange:N=>ye({name:N.target.value}),className:"h-7 w-48 font-mono text-xs font-bold"})]}),o.length>1&&d.jsxs(Ae,{size:"sm",variant:"ghost",onClick:Re,className:"h-7 text-xs text-destructive hover:text-destructive",children:[d.jsx(bm,{className:"h-3.5 w-3.5"})," Excluir conta"," ",j.name]})]}),d.jsx("div",{className:"grid gap-2 sm:grid-cols-3",children:[{id:"webhook",title:"1. Webhook Make / n8n (Mais Fácil)",desc:"Sem criar app na Meta! Conecta tua conta Instagram em 2 cliques no Make.com gratuito."},{id:"meta_api",title:"2. API Oficial Meta (Direto)",desc:"Publica direto na Graph API usando teu IG User ID e Token da Meta."},{id:"browser_bot",title:"3. Robô Meta Business Suite",desc:"Agenda dezenas de Reels no teu navegador Chrome já logado."}].map(N=>d.jsxs("button",{type:"button",onClick:()=>ye({mode:N.id}),className:qe("flex flex-col items-start rounded-xl border p-3 text-left transition-all",j.mode===N.id?"border-primary bg-primary/10 shadow-sm":"border-border bg-card/60 hover:border-primary/40"),children:[d.jsx("span",{className:"text-xs font-bold text-foreground",children:N.title}),d.jsx("span",{className:"mt-1 text-[11px] text-muted-foreground",children:N.desc})]},N.id))}),j.mode==="meta_api"&&d.jsxs("div",{className:"grid gap-3 sm:grid-cols-2",children:[d.jsxs("div",{className:"space-y-1.5",children:[d.jsxs(er,{children:["ID da Conta Instagram Profissional (`ig_user_id`) de"," ",j.name]}),d.jsx(dn,{value:j.igUserId,onChange:N=>ye({igUserId:N.target.value}),placeholder:"Ex.: 17841405822304914",className:"font-mono text-xs"})]}),d.jsxs("div",{className:"space-y-1.5",children:[d.jsxs(er,{children:["Meta Graph Access Token (`EAAB...`) de ",j.name]}),d.jsx(dn,{type:"password",value:j.metaAccessToken,onChange:N=>ye({metaAccessToken:N.target.value}),placeholder:"EAABwzLixnjYBO...",className:"font-mono text-xs"})]}),d.jsxs("div",{className:"sm:col-span-2 flex flex-wrap items-center justify-between gap-2 pt-1",children:[d.jsxs("p",{className:"text-[11px] text-muted-foreground",children:["Requer conta Instagram Criador ou Empresarial vinculada a uma Página do Facebook com permissão"," ",d.jsx("code",{className:"text-foreground",children:"instagram_content_publish"}),"."]}),d.jsxs(Ae,{size:"sm",variant:"secondary",onClick:W,disabled:S,children:[S?d.jsx(rr,{className:"h-3.5 w-3.5 animate-spin"}):d.jsx(ap,{className:"h-3.5 w-3.5"}),"Testar conexão no Instagram"]})]})]}),j.mode==="webhook"&&d.jsxs("div",{className:"space-y-3",children:[d.jsxs("div",{className:"space-y-1.5",children:[d.jsxs(er,{children:["URL do Webhook (Make.com / n8n / Zapier) para"," ",d.jsx("span",{className:"text-primary",children:j.name})]}),d.jsx(dn,{value:j.webhookUrl,onChange:N=>ye({webhookUrl:N.target.value}),placeholder:"https://hook.us1.make.com/...",className:"font-mono text-xs"})]}),d.jsxs("div",{className:"rounded-xl border border-primary/25 bg-primary/5 p-3.5 text-xs space-y-2.5",children:[d.jsxs("div",{className:"flex flex-wrap items-center justify-between gap-2",children:[d.jsxs("p",{className:"font-semibold text-foreground flex items-center gap-1.5",children:[d.jsx(Kr,{className:"h-4 w-4 text-primary"}),"Passo a passo para cada conta do Instagram (2 minutos):"]}),d.jsxs(Ae,{type:"button",size:"sm",variant:"secondary",onClick:()=>{Zn(new Blob([jS],{type:"application/json;charset=utf-8"}),"make-blueprint-reels.json"),je.success("Blueprint baixado! No Make.com clica em '...' (More) -> Import Blueprint.")},children:[d.jsx(Ko,{className:"h-3.5 w-3.5"})," Baixar Blueprint Pronto (.json)"]})]}),d.jsxs("ol",{className:"list-decimal pl-4 space-y-1 text-muted-foreground",children:[d.jsxs("li",{children:["Para cada conta do Instagram, cria um Scenario no"," ",d.jsx("a",{href:"https://www.make.com/en/register",target:"_blank",rel:"noreferrer",className:"text-primary underline",children:"Make.com"})," ","e importa o ",d.jsx("strong",{children:"Blueprint Pronto (.json)"})," acima."]}),d.jsxs("li",{children:["No 1º bolinha (",d.jsx("strong",{children:"Webhooks"}),"), clica em"," ",d.jsx("em",{children:"Add"})," → ",d.jsx("em",{children:"Copy address to clipboard"})," e cola a URL no campo acima desta conta (",j.name,")."]}),d.jsxs("li",{children:["Na 2ª bolinha (",d.jsx("strong",{children:"Instagram for Business"}),"), seleciona a página/conta ",d.jsx("strong",{children:j.name}),", ativa a chave ",d.jsx("strong",{children:"Scheduling"})," no rodapé e salva!"]})]})]})]}),j.mode==="browser_bot"&&d.jsxs("div",{className:"rounded-lg border border-border bg-card/80 p-3 text-xs text-muted-foreground space-y-1.5",children:[d.jsx("p",{className:"font-medium text-foreground",children:"Como funciona o Robô de Navegador (Meta Business Suite):"}),d.jsxs("p",{children:["1. Adiciona todos os teus vídeos à fila de"," ",d.jsx("strong",{children:j.name})," aqui na página.",d.jsx("br",{}),"2. Clica em ",d.jsx("strong",{children:"Exportar Fila para o Robô (.json)"}),".",d.jsx("br",{}),"3. No teu computador, executa"," ",d.jsx("code",{className:"rounded bg-muted px-1.5 py-0.5 font-mono text-foreground",children:"node robo-agendador-reels.mjs"})," ","— ele abre o Meta Business Suite e agenda todos os vídeos nos horários definidos!"]})]}),d.jsxs("div",{className:"space-y-2",children:[d.jsx(er,{children:"Formatação do Reel (fundo e gancho)"}),d.jsxs("div",{className:"grid gap-3 sm:grid-cols-2",children:[d.jsxs("div",{className:"space-y-1.5",children:[d.jsx(er,{children:"Fundo do vídeo"}),d.jsx("select",{value:j.bgMode||j.backgroundMode||"preto",onChange:N=>ye({bgMode:N.target.value,backgroundMode:N.target.value}),className:"h-9 w-full rounded-md border border-border bg-background px-2 text-xs",children:[d.jsx("option",{value:"preto",children:"Preto"}),d.jsx("option",{value:"desfocado",children:"Desfocado"})]})]}),d.jsxs("div",{className:"space-y-1.5",children:[d.jsx(er,{children:"Cor da fonte do gancho"}),d.jsx("input",{type:"color",value:j.hookColor||j.hookTextColor||"#FFFFFF",onChange:N=>ye({hookColor:N.target.value,hookTextColor:N.target.value}),className:"h-9 w-full cursor-pointer rounded-md border border-border bg-background"})]})]})]}),d.jsx("div",{className:"flex justify-end pt-2",children:d.jsxs(Ae,{size:"sm",onClick:Y,children:["Salvar configuração de ",j.name]})})]})),
+  cc_tab === "conta" && cc_h("div", { className: "cc-panel" }, cc_slotEditor, d.jsxs("div",{className:"space-y-4 rounded-xl border border-border bg-card p-4",children:[d.jsxs("div",{className:"flex flex-wrap items-center justify-between gap-2",children:[d.jsxs("div",{className:"flex items-center gap-2",children:[d.jsx(er,{className:"text-xs font-semibold uppercase tracking-wider text-muted-foreground",children:"Configuração exclusiva da conta:"}),d.jsx(dn,{value:j.name,onChange:N=>ye({name:N.target.value}),className:"h-7 w-48 font-mono text-xs font-bold"})]}),o.length>1&&d.jsxs(Ae,{size:"sm",variant:"ghost",onClick:Re,className:"h-7 text-xs text-destructive hover:text-destructive",children:[d.jsx(bm,{className:"h-3.5 w-3.5"})," Excluir conta"," ",j.name]})]}),d.jsx("div",{className:"grid gap-2 sm:grid-cols-3",children:[{id:"webhook",title:"1. Webhook Make / n8n (Mais Fácil)",desc:"Sem criar app na Meta! Conecta tua conta Instagram em 2 cliques no Make.com gratuito."},{id:"meta_api",title:"2. API Oficial Meta (Direto)",desc:"Publica direto na Graph API usando teu IG User ID e Token da Meta."},{id:"browser_bot",title:"3. Robô Meta Business Suite",desc:"Agenda dezenas de Reels no teu navegador Chrome já logado."}].map(N=>d.jsxs("button",{type:"button",onClick:()=>ye({mode:N.id}),className:qe("flex flex-col items-start rounded-xl border p-3 text-left transition-all",j.mode===N.id?"border-primary bg-primary/10 shadow-sm":"border-border bg-card/60 hover:border-primary/40"),children:[d.jsx("span",{className:"text-xs font-bold text-foreground",children:N.title}),d.jsx("span",{className:"mt-1 text-[11px] text-muted-foreground",children:N.desc})]},N.id))}),j.mode==="meta_api"&&d.jsxs("div",{className:"grid gap-3 sm:grid-cols-2",children:[d.jsxs("div",{className:"space-y-1.5",children:[d.jsxs(er,{children:["ID da Conta Instagram Profissional (`ig_user_id`) de"," ",j.name]}),d.jsx(dn,{value:j.igUserId,onChange:N=>ye({igUserId:N.target.value}),placeholder:"Ex.: 17841405822304914",className:"font-mono text-xs"})]}),d.jsxs("div",{className:"space-y-1.5",children:[d.jsxs(er,{children:["Meta Graph Access Token (`EAAB...`) de ",j.name]}),d.jsx(dn,{type:"password",value:j.metaAccessToken,onChange:N=>ye({metaAccessToken:N.target.value}),placeholder:"EAABwzLixnjYBO...",className:"font-mono text-xs"})]}),d.jsxs("div",{className:"sm:col-span-2 flex flex-wrap items-center justify-between gap-2 pt-1",children:[d.jsxs("p",{className:"text-[11px] text-muted-foreground",children:["Requer conta Instagram Criador ou Empresarial vinculada a uma Página do Facebook com permissão"," ",d.jsx("code",{className:"text-foreground",children:"instagram_content_publish"}),"."]}),d.jsxs(Ae,{size:"sm",variant:"secondary",onClick:W,disabled:S,children:[S?d.jsx(rr,{className:"h-3.5 w-3.5 animate-spin"}):d.jsx(ap,{className:"h-3.5 w-3.5"}),"Testar conexão no Instagram"]})]})]}),j.mode==="webhook"&&d.jsxs("div",{className:"space-y-3",children:[d.jsxs("div",{className:"space-y-1.5",children:[d.jsxs(er,{children:["URL do Webhook (Make.com / n8n / Zapier) para"," ",d.jsx("span",{className:"text-primary",children:j.name})]}),d.jsx(dn,{value:j.webhookUrl,onChange:N=>ye({webhookUrl:N.target.value}),placeholder:"https://hook.us1.make.com/...",className:"font-mono text-xs"})]}),d.jsxs("div",{className:"rounded-xl border border-primary/25 bg-primary/5 p-3.5 text-xs space-y-2.5",children:[d.jsxs("div",{className:"flex flex-wrap items-center justify-between gap-2",children:[d.jsxs("p",{className:"font-semibold text-foreground flex items-center gap-1.5",children:[d.jsx(Kr,{className:"h-4 w-4 text-primary"}),"Passo a passo para cada conta do Instagram (2 minutos):"]}),d.jsxs(Ae,{type:"button",size:"sm",variant:"secondary",onClick:()=>{Zn(new Blob([jS],{type:"application/json;charset=utf-8"}),"make-blueprint-reels.json"),je.success("Blueprint baixado! No Make.com clica em '...' (More) -> Import Blueprint.")},children:[d.jsx(Ko,{className:"h-3.5 w-3.5"})," Baixar Blueprint Pronto (.json)"]})]}),d.jsxs("ol",{className:"list-decimal pl-4 space-y-1 text-muted-foreground",children:[d.jsxs("li",{children:["Para cada conta do Instagram, cria um Scenario no"," ",d.jsx("a",{href:"https://www.make.com/en/register",target:"_blank",rel:"noreferrer",className:"text-primary underline",children:"Make.com"})," ","e importa o ",d.jsx("strong",{children:"Blueprint Pronto (.json)"})," acima."]}),d.jsxs("li",{children:["No 1º bolinha (",d.jsx("strong",{children:"Webhooks"}),"), clica em"," ",d.jsx("em",{children:"Add"})," → ",d.jsx("em",{children:"Copy address to clipboard"})," e cola a URL no campo acima desta conta (",j.name,")."]}),d.jsxs("li",{children:["Na 2ª bolinha (",d.jsx("strong",{children:"Instagram for Business"}),"), seleciona a página/conta ",d.jsx("strong",{children:j.name}),", ativa a chave ",d.jsx("strong",{children:"Scheduling"})," no rodapé e salva!"]})]})]})]}),j.mode==="browser_bot"&&d.jsxs("div",{className:"rounded-lg border border-border bg-card/80 p-3 text-xs text-muted-foreground space-y-1.5",children:[d.jsx("p",{className:"font-medium text-foreground",children:"Como funciona o Robô de Navegador (Meta Business Suite):"}),d.jsxs("p",{children:["1. Adiciona todos os teus vídeos à fila de"," ",d.jsx("strong",{children:j.name})," aqui na página.",d.jsx("br",{}),"2. Clica em ",d.jsx("strong",{children:"Exportar Fila para o Robô (.json)"}),".",d.jsx("br",{}),"3. No teu computador, executa"," ",d.jsx("code",{className:"rounded bg-muted px-1.5 py-0.5 font-mono text-foreground",children:"node robo-agendador-reels.mjs"})," ","— ele abre o Meta Business Suite e agenda todos os vídeos nos horários definidos!"]})]}),d.jsx("div",{className:"flex justify-end pt-2",children:d.jsxs(Ae,{size:"sm",onClick:Y,children:["Salvar configuração de ",j.name]})})]})),
   cc_tab === "robo" && cc_h("div", { className: "cc-panel" }, d.jsxs("div",{className:"space-y-3 rounded-xl border border-primary/40 bg-primary/5 p-4 text-xs",children:[d.jsxs("div",{className:"flex flex-wrap items-center justify-between gap-2",children:[d.jsxs("div",{children:[d.jsxs("h3",{className:"flex items-center gap-2 text-sm font-bold text-foreground",children:[d.jsx(Kr,{className:"h-4 w-4 text-primary"}),"Robô 24h na Nuvem — Posta seus Reels com PC e Celular 100% Desligados!"]}),d.jsx("p",{className:"mt-0.5 text-muted-foreground",children:"Roda 100% grátis nos servidores do Google (Google Apps Script) a cada 5 minutos, 24h por dia, lendo todas as suas contas do Instagram!"})]}),d.jsxs("div",{className:"flex flex-wrap items-center gap-2",children:[d.jsxs(Ae,{size:"sm",className:"bg-brand text-primary-foreground",onClick:()=>{const N=Tg();if(!N){je.error("Faça login primeiro para gerar o seu código.");return}u==null||u();const G=kS(N);navigator.clipboard.writeText(G),je.success("Código do Robô 24h copiado! Agora cole em script.google.com")},children:[d.jsx(Pc,{className:"h-3.5 w-3.5"})," 1. Copiar Código do Robô 24h"]}),d.jsxs("a",{href:"https://script.google.com/home/start",target:"_blank",rel:"noreferrer",className:"inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-card px-3 text-xs font-semibold text-foreground hover:bg-secondary",children:[d.jsx(sp,{className:"h-3.5 w-3.5 text-primary"})," 2. Abrir Google Apps Script"]})]})]}),d.jsxs("ol",{className:"list-decimal space-y-1.5 pl-4 text-muted-foreground",children:[d.jsxs("li",{children:["Clique no botão ",d.jsx("strong",{children:"1. Copiar Código do Robô 24h"})," ","acima (ele já vem pré-configurado com a chave criptografada do seu login!)."]}),d.jsxs("li",{children:["Clique em ",d.jsx("strong",{children:"2. Abrir Google Apps Script"})," → clique no botão ",d.jsx("strong",{children:"Novo projeto"})," (no canto superior esquerdo)."]}),d.jsxs("li",{children:["Apague as linhas que vêm lá (",d.jsx("code",{className:"text-foreground",children:"function myFunction() {}"}),"),"," ",d.jsx("strong",{children:"cole o código copiado"})," e clique no ícone de"," ",d.jsx("strong",{children:"Disquete 💾 (Salvar projeto)"})," no topo."]}),d.jsxs("li",{children:["Lá no topo (ao lado do botão ",d.jsx("strong",{children:"▶️ Executar"}),"), deixe selecionado ",d.jsx("code",{className:"text-foreground font-bold",children:"ativarRobo24h"})," e clique em ",d.jsx("strong",{children:"▶️ Executar"})," uma única vez (autorize sua conta Google: ",d.jsx("em",{children:"Avançado → Acessar Projeto sem título"}),")."]}),d.jsxs("li",{children:[d.jsx("strong",{children:"Pronto!"})," O servidor do Google vai acordar sozinho"," ",d.jsx("strong",{children:"a cada 5 minutos, 24 horas por dia"}),", verificar os vídeos com o selo ",d.jsx("strong",{className:"text-primary",children:"☁️ PC + Celular"})," ","e publicá-los no horário agendado (com o Pôster Oficial de Capa!) mesmo com seu PC e seu celular totalmente desligados!"]})]})]})),
 );
 }
@@ -2740,6 +2815,19 @@ return cc_h("section", { className: "cc-ag" },
 .cc-fields{display:flex;flex-wrap:wrap;gap:.75rem}
 .cc-field{display:flex;flex-direction:column;gap:.3rem;min-width:0}
 .cc-caption{white-space:pre-wrap;font-size:.78rem;line-height:1.45;color:var(--muted-foreground);background:var(--background);border:1px solid var(--cc-line);border-radius:calc(var(--cc-r) - 2px);padding:.6rem .7rem;max-height:9rem;overflow:auto}
+.cc-edit-panel{display:flex;flex-direction:column;gap:.7rem;border:1px solid color-mix(in oklab,var(--primary) 42%,var(--cc-line));border-radius:calc(var(--cc-r) - 1px);background:color-mix(in oklab,var(--primary) 6%,var(--background));padding:.8rem}
+.cc-edit-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:.45rem .7rem}
+.cc-edit-head strong{font-size:.9rem}
+.cc-edit-field{width:100%}
+.cc-edit-title,.cc-edit-url{width:100%;font-family:inherit;font-size:.85rem}
+.cc-edit-textarea{width:100%;min-height:8rem;resize:vertical;border:1px solid var(--cc-line);border-radius:calc(var(--cc-r) - 2px);background:var(--background);color:var(--foreground);padding:.65rem .7rem;font-family:inherit;font-size:.82rem;line-height:1.45}
+.cc-edit-textarea:focus{outline:2px solid color-mix(in oklab,var(--primary) 55%,transparent);outline-offset:1px}
+.cc-edit-count{align-self:flex-end;font-size:.65rem;color:var(--muted-foreground);font-family:var(--font-mono)}
+.cc-edit-cover{display:flex;align-items:flex-start;gap:.75rem;min-width:0}
+.cc-edit-cover-preview{width:4.25rem;height:6rem;object-fit:cover;flex-shrink:0;border:1px solid var(--cc-line);border-radius:.5rem;background:var(--muted)}
+.cc-edit-cover-main{display:flex;flex-direction:column;gap:.35rem;min-width:0;flex:1}
+.cc-edit-help{font-size:.68rem;line-height:1.4;color:var(--muted-foreground)}
+.cc-edit-actions{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center}
 .cc-detail-actions{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center}
 .cc-del{margin-left:auto;color:var(--muted-foreground)}
 .cc-del:hover{color:var(--destructive)!important}

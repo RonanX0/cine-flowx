@@ -120,8 +120,8 @@ em [`servidor/README.md`](servidor/README.md).
 A aba **Agendador** tem um layout próprio: resumo (na fila / próximo post / publicados /
 erros), abas **Fila · Conta e horários · Robô 24h**, cartão *Novo agendamento* com atalhos
 para os próximos horários livres, fila agrupada por dia com filtros e detalhes expansíveis
-(reagendar, mudar de conta, legenda, baixar, reenviar, remover com confirmação) e editor
-de horários diários em chips.
+(reagendar, mudar de conta, **corrigir título, legenda e capa antes de publicar**, baixar, reenviar, remover com confirmação) e editor
+de horários diários em chips. A capa aceita um URL HTTPS público (por exemplo, uma imagem do TMDB), que é o formato que a Meta exige para o `cover_url`.
 
 **Ordenar a fila:** ordena por horário (mais cedo / mais tarde), título ou situação (erros
 primeiro), com busca por título/legenda. Em *Horário (mais cedo)* podes **arrastar** os
