@@ -494,6 +494,28 @@ check("CineClipCore exporta os 4 modos de identificação", Array.isArray(core.m
   check("identificar recupera JSON truncado e preserva imdb_id e modo dialogo", idDiag && idDiag.titulo === "Breaking Bad" && idDiag.imdb_id === "tt0903747" && idDiag.modo_identificacao === "dialogo", JSON.stringify(idDiag));
 }
 
+/* ---- B13. Limpeza de nomes de ficheiro (SnapTik/CapCut/WhatsApp) + toggle useFileNameHint + anti-lag do gancho ---- */
+{
+  check("CineClipCore exporta limparNomeArquivo", typeof core.limparNomeArquivo === "function");
+  const lixos = [
+    "SnapTik_App_7382910384920192.mp4",
+    "ssstik.io_1709382910392.mp4",
+    "SaveInsta.App_3291029384920_1080p.mp4",
+    "CapCut_20260415_182011.mp4",
+    "WhatsApp Video 2026-04-12 at 19.22.10.mp4",
+    "corte_1_final_1080p_dublado.mp4",
+    "O_que_acontece_nessa_cena_deixou_todo_mundo_em_choque.mp4",
+  ];
+  check("limparNomeArquivo rejeita nomes de downloaders, editores e frases de gancho", lixos.every((n) => core.limparNomeArquivo(n) === ""), JSON.stringify(lixos.map((n) => [n, core.limparNomeArquivo(n)])));
+  check("limparNomeArquivo extrai título real mesmo com prefixo SnapTik e sufixos 1080p/dublado", core.limparNomeArquivo("SnapTik_7382910_Peaky_Blinders_1080p_dublado_corte_2.mp4") === "Peaky Blinders", core.limparNomeArquivo("SnapTik_7382910_Peaky_Blinders_1080p_dublado_corte_2.mp4"));
+
+  const idSemDesligado = await core.identificar("", [], "pt-BR", { fileName: "Interestelar_2014.mp4", identMode: "sem_id", useFileNameHint: false });
+  check("useFileNameHint=false ignora o nome do ficheiro quando o utilizador desativa o rastreio", idSemDesligado && idSemDesligado.titulo === "Cena de filme", JSON.stringify(idSemDesligado));
+
+  check("Estúdio tem debounce de sincronização (_syncTm/_editTs) para digitar gancho sem delay", html.includes("_syncTm") && html.includes("_editTs") && html.includes("freshEdit"));
+  check("Estúdio tem seletor rápido de preset sob o preview 9:16", html.includes("mudarPresetConta") && html.includes("Mudar preset visual desta conta em tempo real"));
+}
+
 /* ====================================================================== */
 
 console.log(`\n${fail === 0 ? "✅" : "❌"} ${pass} verificações passaram${fail ? `, ${fail} falharam` : ""}\n`);

@@ -207,10 +207,17 @@
 
   /** Nome do ficheiro → título apresentável (usado quando a IA está desligada). */
   function tituloDoNome(nome) {
+    var core = ambiente.core && ambiente.core();
+    if (core && typeof core.limparNomeArquivo === "function") {
+      var limpo = core.limparNomeArquivo(nome);
+      if (limpo) return limpo;
+      if (/^(?:snaptik|ssstik|saveinsta|snapinsta|savetik|capcut|inshot|whatsapp|vid[-_]\d|img[-_]\d|pxl_|dsc_|mvi_)/i.test(String(nome || ""))) return "Reels";
+    }
     var base = semExtensao(nome);
     base = base.replace(/[_\-.]+/g, " ").replace(/\s+/g, " ").trim();
     base = base
-      .replace(/\b(cineclip|clean|final|editado|edit|reels?|tiktok|kwai|download|downloads|video|output|input)\b/gi, " ")
+      .replace(/\b(cineclip|clean|final|editado|edit|reels?|tiktok|kwai|download|downloads|video|output|input|snaptik|ssstik|saveinsta|snapinsta|capcut|inshot)\b/gi, " ")
+      .replace(/\b\d{6,}\b/g, " ")
       .replace(/\s+/g, " ")
       .trim();
     return base || "Reels";
@@ -460,9 +467,10 @@
         filme = cacheHit.filme;
       } else {
         ia = await core.identificar(s.nvidiaKey, quadros, s.lang || "pt-PT", {
+          useFileNameHint: s.useFileNameHint !== false,
           fileName: ficheiro.name,
-          metaTitle: titulo,
-          userHint: titulo,
+          metaTitle: titulo !== "Reels" ? titulo : "",
+          userHint: (s.useFileNameHint !== false && titulo !== "Reels") ? titulo : "",
           geminiKey: s.geminiKey,
           audioClip: audio,
           identMode: modoIdent,

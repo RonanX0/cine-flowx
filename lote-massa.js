@@ -769,10 +769,13 @@
     }
     var cacheHit = (hashVideo && modoIdent !== "sem_id") ? cacheIdentLer(hashVideo) : null;
 
+    var baseLimpo = (s.useFileNameHint !== false)
+      ? ((typeof core.limparNomeArquivo === "function") ? core.limparNomeArquivo(ficheiro.name) : (!nomeGen ? baseNome.replace(/[._-]+/g, " ").trim() : ""))
+      : "";
     var ia = null;
     var filme = null;
     if (modoIdent === "sem_id") {
-      var nomeLimpo = dicaLink || tituloMetadados || (!nomeGen ? baseNome.replace(/[._-]+/g, " ").trim() : "") || "Cena de Filme / Série";
+      var nomeLimpo = dicaLink || tituloMetadados || baseLimpo || "Cena de Filme / Série";
       ia = { titulo: nomeLimpo, confianca: 100, cena: dicaLink || "", ganchos: [], modo_identificacao: "sem_id" };
       filme = { id: 0, kind: "movie", title: nomeLimpo, original: nomeLimpo, year: "", poster: "", overview: "", genres: [] };
     } else if (cacheHit && cacheHit.ia && cacheHit.filme) {
@@ -780,6 +783,7 @@
       filme = cacheHit.filme;
     } else {
       ia = await core.identificar(s.nvidiaKey, quadros, s.lang, {
+        useFileNameHint: s.useFileNameHint !== false,
         fileName: ficheiro.name,
         metaTitle: tituloMetadados,
         userHint: dicaEnriquecida,
@@ -791,7 +795,7 @@
       });
       if (!ia || (!ia.titulo && !(ia.atores && ia.atores.length) && !ia.imdb_id)) {
         if (permitirPoucaCerteza) {
-          var fallbackTit = dicaLink || tituloMetadados || (!nomeGen ? baseNome.replace(/[._-]+/g, " ").trim() : "") || "Cena de Filme";
+          var fallbackTit = dicaLink || tituloMetadados || baseLimpo || "Cena de Filme";
           ia = Object.assign({}, ia || {}, { titulo: fallbackTit, confianca: 65 });
         } else {
           throw erroComTipo("A IA não conseguiu identificar o filme deste clipe.", "identificacao");

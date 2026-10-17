@@ -23,7 +23,7 @@ const argv = process.argv.slice(2);
 const dry = argv.includes("--dry");
 const verify = argv.includes("--verify");
 
-const stripOneNewline = (s) => (s.endsWith("\n") ? s.slice(0, -1) : s);
+const stripOneNewline = (s) => s.replace(/\r\n/g, "\n").replace(/\n$/, "");
 const readPatch = (name) => ({
   find: stripOneNewline(fs.readFileSync(path.join(patchDir, name + ".find"), "utf8")),
   replace: stripOneNewline(fs.readFileSync(path.join(patchDir, name + ".replace"), "utf8")),
@@ -46,7 +46,7 @@ for (const file of targets) {
     console.log(`⚠️  ${file} não existe — ignorado.`);
     continue;
   }
-  let html = fs.readFileSync(filePath, "utf8");
+  let html = fs.readFileSync(filePath, "utf8").replace(/\r\n/g, "\n");
   const originalLength = html.length;
   console.log(`── ${file} (${originalLength} bytes)`);
 

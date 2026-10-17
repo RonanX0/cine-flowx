@@ -19,6 +19,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import vm from "node:vm";
 
 const root = path.resolve(import.meta.dirname, "..");
@@ -237,8 +238,8 @@ check("a cor escolhida na conta vence a do preset", ganchoDe(corPropria).every((
 
 /* ------------------------------------------------------------------ 7 */
 console.log("\n7. Servidor: as mesmas contas do app");
-const servidor = await import(path.join(root, "servidor", "presets.mjs"));
-const video = await import(path.join(root, "servidor", "video.mjs"));
+const servidor = await import(pathToFileURL(path.join(root, "servidor", "presets.mjs")).href);
+const video = await import(pathToFileURL(path.join(root, "servidor", "video.mjs")).href);
 check("a tabela do servidor é igual à do bundle", JSON.stringify(servidor.PRESETS_DO_REEL) === JSON.stringify(PRESETS_DO_REEL));
 for (const preset of ["escuro", "claro"]) {
   for (const [largura, altura, corte] of [[1920, 1080, horizontal], [1080, 1920, { top: 0, bottom: 0, vw: 1080, vh: 1920 }], [1080, 1920, { top: 440, bottom: 440, vw: 1080, vh: 1920 }]]) {
