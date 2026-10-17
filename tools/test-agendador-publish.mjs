@@ -194,7 +194,9 @@ function findByText(window, selector, text) {
 }
 
 function reactType(window, input, value) {
-  const proto = window.HTMLInputElement.prototype;
+  const proto = input instanceof window.HTMLTextAreaElement
+    ? window.HTMLTextAreaElement.prototype
+    : window.HTMLInputElement.prototype;
   const setter = Object.getOwnPropertyDescriptor(proto, "value").set;
   setter.call(input, value);
   input.dispatchEvent(new window.Event("input", { bubbles: true }));
@@ -290,10 +292,39 @@ const publishButton = await waitFor("botão Publicar do item", () =>
 check("item da fila aparece com o botão \"Publicar\"", !!publishButton);
 check("botão \"Publicar\" está ativo (tem vídeo na nuvem)", !publishButton.disabled);
 
-console.log("\n3. Clique no botão e observa o que o app faz");
+console.log("\n3. Corrige a legenda e a capa antes de publicar");
+const detailsButton = window.document.querySelector(".cc-chev");
+detailsButton.click();
+const editButton = await waitFor("ação Editar legenda e capa", () =>
+  findByText(window, "button", "Editar legenda e capa")
+);
+check("a fila oferece editar legenda e capa", !!editButton);
+editButton.click();
+const editCaption = await waitFor("campo de legenda editável", () =>
+  window.document.querySelector(".cc-edit-textarea")
+);
+const editTitle = window.document.querySelector(".cc-edit-title");
+const editCover = window.document.querySelector(".cc-edit-url");
+reactType(window, editTitle, "Filme Corrigido");
+reactType(window, editCaption, "legenda corrigida antes de publicar");
+reactType(window, editCover, "https://image.tmdb.org/t/p/w780/capa-corrigida.jpg");
+findByText(window, "button", "Guardar alterações").click();
+const edited = await waitFor("alterações gravadas na fila", async () => {
+  const items = await readQueueFromIndexedDB();
+  const item = items.find((it) => it.id === reel.id);
+  return item && item.title === "Filme Corrigido" && item.caption === "legenda corrigida antes de publicar" && item.poster === "https://image.tmdb.org/t/p/w780/capa-corrigida.jpg" ? item : null;
+});
+check("título, legenda e capa corrigidos ficam guardados", !!edited);
+const publishAfterEdit = await waitFor("botão Publicar reativado depois da edição", () => {
+  const button = window.document.querySelector(".cc-pub");
+  return button && !button.disabled ? button : null;
+});
+check("depois de guardar, publicar continua disponível", !!publishAfterEdit);
+
+console.log("\n4. Clique no botão e observa o que o app faz");
 
 requests.length = 0;
-publishButton.click();
+publishAfterEdit.click();
 await sleep(2500);
 
 const graphCalls = requests.filter((r) => /graph\.facebook\.com|rupload\.facebook\.com/.test(r.url));

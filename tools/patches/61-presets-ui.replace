@@ -19,6 +19,8 @@ const [cc_q, cc_setQ] = b.useState("");
 const [cc_drag, cc_setDrag] = b.useState(null);
 const [cc_over, cc_setOver] = b.useState(null);
 const [cc_busy, cc_setBusy] = b.useState(false);
+const [cc_editDraft, cc_setEditDraft] = b.useState(null);
+const [cc_editBusy, cc_setEditBusy] = b.useState(false);
 b.useEffect(() => {
   // Criar conta / abrir configuração (código antigo) passa a abrir a aba "Conta"
   if (g) { cc_setTab("conta"); v(!1); }
@@ -136,6 +138,51 @@ const cc_repack = async () => {
   } finally { cc_setBusy(!1); }
 };
 const cc_nextFreeFor = (it) => za(f.filter((x2) => x2.id !== it.id), j.dailySlots, j.id);
+
+/* ------------------------------------ editar antes de publicar
+ * O resultado da identificação é uma sugestão, não uma sentença. O item é
+ * salvo na mesma fila local/nuvem usada pelo publicador, portanto a legenda e
+ * a capa corrigidas chegam tanto ao botão "Publicar agora" como ao Robô 24h. */
+const cc_coverValue = (value) => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (/^\/\/\S+/.test(raw)) return `https:${raw}`;
+  if (/^\/t\/p\//i.test(raw)) return `https://image.tmdb.org${raw}`;
+  return raw;
+};
+const cc_startEdit = (it) => {
+  cc_setOpen(it.id);
+  cc_setEditDraft({
+    id: it.id,
+    title: it.title || "",
+    caption: it.caption || "",
+    poster: it.poster || it.coverUrl || "",
+  });
+};
+const cc_cancelEdit = () => cc_setEditDraft(null);
+const cc_updateEdit = (field, value) => cc_setEditDraft((draft) => draft ? { ...draft, [field]: value } : draft);
+const cc_saveEdit = async (it) => {
+  const draft = cc_editDraft && cc_editDraft.id === it.id ? cc_editDraft : null;
+  if (!draft) return;
+  const title = String(draft.title || "").trim();
+  const caption = String(draft.caption || "").trim();
+  const poster = cc_coverValue(draft.poster);
+  if (!title) { je.error("Preenche o título do filme ou série."); return; }
+  if (poster && !/^https:\/\/[^\s]+$/i.test(poster)) {
+    je.error("A capa precisa de um link HTTPS público (por exemplo, uma imagem do TMDB).");
+    return;
+  }
+  cc_setEditBusy(true);
+  try {
+    await Rn({ ...it, title, caption, poster, coverUrl: poster, updatedAt: Date.now() });
+    await he();
+    u == null || u();
+    cc_setEditDraft(null);
+    je.success(`Legenda e capa de "${title}" atualizadas — prontas para publicar.`);
+  } catch (err) {
+    je.error((err == null ? void 0 : err.message) || "Não foi possível guardar as alterações.");
+  } finally { cc_setEditBusy(false); }
+};
 
 // Próximos horários livres desta conta (atalhos rápidos para agendar)
 const cc_quick = b.useMemo(() => {
@@ -257,7 +304,7 @@ const cc_composeEmpty = cc_h("div", { className: "cc-card cc-compose-empty" },
   cc_h(Ae, { variant: "outline", onClick: () => { var el = oe.current; el && el.click(); }, title: "Importar vídeo .mp4 ou pacote .cineclip.json" },
     d.jsx(T0, { className: "h-4 w-4" }), "Importar"),
 );
-const cc_compose = !(r && r.cleanBlob && window.__ccLastScheduledClip !== r.cleanBlob) ? cc_composeEmpty : cc_h("div", { className: "cc-card cc-compose" },
+const cc_compose = !(r && r.cleanBlob) ? cc_composeEmpty : cc_h("div", { className: "cc-card cc-compose" },
   cc_h("div", { className: "cc-compose-clip" },
     r && r.poster
       ? d.jsx("img", { src: r.poster, alt: "", className: "cc-poster cc-poster-lg" })
@@ -299,7 +346,8 @@ const cc_item = (N) => {
   const late = N.status === "scheduled" && N.scheduledAt.slice(0, 16) < cc_nowStr;
   const st = cc_statusInfo(N, late);
   const opened = cc_open === N.id;
-  const canPublish = N.status !== "published" && !G && !!(N.videoBlob || N.remoteVideoUrl);
+  const editing = !!(cc_editDraft && cc_editDraft.id === N.id);
+  const canPublish = N.status !== "published" && !G && !editing && !!(N.videoBlob || N.remoteVideoUrl);
   const pos = cc_orderable.findIndex((x2) => x2.id === N.id);
   const movable = cc_canReorder && pos >= 0 && !G;
   const dragProps = movable ? {
@@ -311,7 +359,7 @@ const cc_item = (N) => {
     onDrop: (ev) => { ev.preventDefault(); const id = cc_drag; cc_setDrag(null); cc_setOver(null); cc_dropOn(id, N.id); },
   } : {};
   return cc_h("div", { key: N.id, ...dragProps, className: qe("cc-item", st.cls, opened && "cc-item-open", cc_drag === N.id && "cc-item-drag", cc_over === N.id && "cc-item-over", cc_busy && "cc-item-busy") },
-    cc_h("div", { className: "cc-row", onClick: (ev) => { ev.target.closest("button,input,select,a") || cc_setOpen(opened ? null : N.id); } },
+    cc_h("div", { className: "cc-row", onClick: (ev) => { ev.target.closest("button,input,select,textarea,a") || cc_setOpen(opened ? null : N.id); } },
       movable && cc_h("span", { className: "cc-grip", title: "Arrasta para mudar a ordem (os horários ficam, os Reels trocam)" },
         d.jsx("svg", { viewBox: "0 0 24 24", width: 14, height: 14, fill: "currentColor", children: d.jsx("path", { d: "M9 5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Zm0 7a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Zm-1.5 8.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3ZM18 5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Zm-1.5 8.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3ZM18 19a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Z" }) })),
       cc_h("div", { className: "cc-time" }, !cc_byDay && cc_h("span", { className: "cc-time-day" }, cc_dayLabel((N.scheduledAt || "").slice(0, 10))), cc_h("strong", null, (N.scheduledAt || "").slice(11, 16)), cc_h("span", { className: qe("cc-pill", st.cls) }, st.label)),
@@ -330,7 +378,7 @@ const cc_item = (N) => {
             d.jsx("svg", { viewBox: "0 0 24 24", width: 14, height: 14, fill: "none", stroke: "currentColor", strokeWidth: 2.5, strokeLinecap: "round", strokeLinejoin: "round", children: d.jsx("path", { d: "m18 15-6-6-6 6" }) })),
           cc_h("button", { type: "button", disabled: pos === cc_orderable.length - 1 || cc_busy, title: "Descer (troca de horário com o seguinte)", onClick: () => cc_moveBy(N, 1) },
             d.jsx("svg", { viewBox: "0 0 24 24", width: 14, height: 14, fill: "none", stroke: "currentColor", strokeWidth: 2.5, strokeLinecap: "round", strokeLinejoin: "round", children: d.jsx("path", { d: "m6 9 6 6 6-6" }) }))),
-        N.status !== "published" && cc_h(Ae, { size: "sm", disabled: !canPublish, onClick: () => le(N), title: N.videoBlob || N.remoteVideoUrl ? `Publicar agora em ${j.name}` : "Sem vídeo — importa o .mp4", className: "cc-pub" },
+        N.status !== "published" && cc_h(Ae, { size: "sm", disabled: !canPublish, onClick: () => le(N), title: editing ? "Guarda ou cancela a edição antes de publicar" : N.videoBlob || N.remoteVideoUrl ? `Publicar agora em ${j.name}` : "Sem vídeo — importa o .mp4", className: "cc-pub" },
           G ? d.jsx(rr, { className: "h-3.5 w-3.5 animate-spin" }) : d.jsx(J0, { className: "h-3.5 w-3.5" }), cc_h("span", { className: "cc-hide-sm" }, "Publicar")),
         d.jsx(Ae, { size: "sm", variant: "ghost", className: "cc-icon-btn", title: "Copiar legenda", onClick: () => { navigator.clipboard.writeText(N.caption); je.success("Legenda copiada!"); }, children: d.jsx(Pc, { className: "h-4 w-4" }) }),
         d.jsx(Ae, { size: "sm", variant: "ghost", className: qe("cc-icon-btn cc-chev", opened && "cc-chev-on"), title: opened ? "Fechar detalhes" : "Editar / mais opções", "aria-expanded": opened, onClick: () => cc_setOpen(opened ? null : N.id), children: d.jsx("svg", { viewBox: "0 0 24 24", width: 16, height: 16, fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round", children: d.jsx("path", { d: "m6 9 6 6 6-6" }) }) }),
@@ -343,13 +391,40 @@ const cc_item = (N) => {
         o.length > 1 && cc_h("label", { className: "cc-field" }, cc_h("span", { className: "cc-label" }, "Conta"),
           d.jsx("select", { value: N.accountId || j.id, disabled: G, onChange: (ev) => { K(N, ev.target.value); cc_setOpen(null); }, className: "cc-input", children: o.map((acc) => d.jsx("option", { value: acc.id, children: acc.name }, acc.id)) })),
       ),
-      cc_h("div", { className: "cc-field" }, cc_h("span", { className: "cc-label" }, "Legenda"), cc_h("div", { className: "cc-caption" }, N.caption || "—")),
-      N.poster && cc_h("span", { className: "cc-sub" }, "✔ O pôster do TMDB vai como capa do Reel."),
+      editing
+        ? cc_h("div", { className: "cc-edit-panel" },
+            cc_h("div", { className: "cc-edit-head" },
+              cc_h("strong", null, "Corrigir antes de publicar"),
+              cc_h("span", { className: "cc-sub" }, "O título, a legenda e a capa ficam guardados neste agendamento.")),
+            cc_h("label", { className: "cc-field cc-edit-field" },
+              cc_h("span", { className: "cc-label" }, "Filme ou série"),
+              d.jsx("input", { type: "text", value: cc_editDraft.title, onChange: (ev) => cc_updateEdit("title", ev.target.value), className: "cc-input cc-edit-title", autoFocus: !0 })),
+            cc_h("label", { className: "cc-field cc-edit-field" },
+              cc_h("span", { className: "cc-label" }, "Legenda"),
+              d.jsx("textarea", { value: cc_editDraft.caption, onChange: (ev) => cc_updateEdit("caption", ev.target.value), className: "cc-edit-textarea", rows: 6, maxLength: 2200, placeholder: "Escreve a legenda que será enviada ao Instagram…" }),
+              cc_h("span", { className: "cc-edit-count" }, `${String(cc_editDraft.caption || "").length}/2200`)),
+            cc_h("div", { className: "cc-edit-cover" },
+              cc_editDraft.poster
+                ? d.jsx("img", { src: cc_editDraft.poster, alt: "Pré-visualização da capa", className: "cc-edit-cover-preview" })
+                : cc_h("div", { className: "cc-edit-cover-preview cc-poster-empty" }, d.jsx(ip, { className: "h-6 w-6" })),
+              cc_h("div", { className: "cc-edit-cover-main" },
+                cc_h("label", { className: "cc-field" },
+                  cc_h("span", { className: "cc-label" }, "Capa do Reel"),
+                  d.jsx("input", { type: "text", inputMode: "url", value: cc_editDraft.poster, onChange: (ev) => cc_updateEdit("poster", ev.target.value), className: "cc-input cc-edit-url", placeholder: "https://image.tmdb.org/t/p/w780/capa.jpg" })),
+                cc_h("span", { className: "cc-edit-help" }, "Cole o link HTTPS público de uma imagem (por exemplo, do TMDB). A Meta precisa conseguir abrir esse link para usar a capa."))),
+            cc_h("div", { className: "cc-edit-actions" },
+              cc_h(Ae, { size: "sm", disabled: cc_editBusy || G, onClick: () => cc_saveEdit(N), className: "bg-brand text-primary-foreground" },
+                cc_editBusy ? d.jsx(rr, { className: "h-3.5 w-3.5 animate-spin" }) : d.jsx(ap, { className: "h-3.5 w-3.5" }), " Guardar alterações"),
+              cc_h(Ae, { size: "sm", variant: "ghost", disabled: cc_editBusy, onClick: cc_cancelEdit }, "Cancelar")))
+        : cc_h("div", { className: "cc-field" }, cc_h("span", { className: "cc-label" }, "Legenda"), cc_h("div", { className: "cc-caption" }, N.caption || "—")),
+      !editing && (N.poster || N.coverUrl) && cc_h("span", { className: "cc-sub" }, "✔ A capa guardada será enviada ao Instagram."),
       cc_h("div", { className: "cc-detail-actions" },
+        !editing && N.status !== "published" && cc_h(Ae, { size: "sm", variant: "outline", disabled: G, onClick: () => cc_startEdit(N) },
+          "✎ Editar legenda e capa"),
         (N.videoBlob || N.remoteVideoUrl) && cc_h(Ae, { size: "sm", variant: "outline", onClick: () => { N.videoBlob ? Zn(N.videoBlob, N.videoFileName) : N.remoteVideoUrl && window.open(N.remoteVideoUrl, "_blank"); } },
           d.jsx(Ko, { className: "h-3.5 w-3.5" }), " Baixar vídeo"),
         (!N.remoteVideoUrl||N.needsReupload||N.cloudError)&&d.jsxs(Ae,{size:"sm",variant:"secondary",disabled:G||!N.videoBlob,onClick:()=>{je("☁️ A reenviar os vídeos pendentes para a nuvem durável…"),u==null||u()},title:N.cloudError?`Tentar outra vez. Último erro: ${N.cloudError}`:"Enviar este vídeo para a nuvem durável (Cloudflare R2)",children:[d.jsx(Kr,{className:"h-3.5 w-3.5"})," Reenviar p/ nuvem"]}),
-        cc_h(Ae, { size: "sm", variant: "ghost", disabled: G, className: "cc-del", onClick: () => { window.confirm(`Remover "${N.title}" da fila de ${j.name}?`) && (H(N.id), cc_setOpen(null)); } },
+        cc_h(Ae, { size: "sm", variant: "ghost", disabled: G || editing, className: "cc-del", onClick: () => { window.confirm(`Remover "${N.title}" da fila de ${j.name}?`) && (H(N.id), cc_setOpen(null)); } },
           d.jsx(bm, { className: "h-3.5 w-3.5" }), " Remover"),
       ),
     ),
