@@ -1,0 +1,30 @@
+function cg(r){const o=r.match(/^data:([^;]+);base64,(.+)$/);return o?{mime_type:o[1],data:o[2]}:null}
+/* 🎬 Gemini "assiste" ao vídeo (File API): o ficheiro de vídeo sobe uma vez para o
+   Google e a análise usa file_data + video_metadata (intervalo) — o modelo vê a
+   cena em movimento e ouve o áudio sincronizado, em vez de frames soltos. Se o
+   upload falhar, os chamadores ficam com os frames + áudio como até agora. */
+const _ccVideoCache=new Map();
+function _ccVideoMime(v,m){const t=String(m||(v&&v.mimeType)||(v&&v.type)||"");if(t&&/^video\//i.test(t))return t;const n=String((v&&v.name)||"");if(/\.mov$/i.test(n))return "video/quicktime";if(/\.webm$/i.test(n))return "video/webm";if(/\.mkv$/i.test(n))return "video/x-matroska";if(/\.3gp$/i.test(n))return "video/3gpp";return "video/mp4"}
+async function _ccVideoBytes(v){if(!v)return null;try{
+if(typeof v==="string"){const m=v.match(/^data:([^;]+);base64,(.+)$/);if(m)v={base64:m[2]}}
+if(Object.prototype.toString.call(v)==="[object ArrayBuffer]")return new Uint8Array(v);
+if(ArrayBuffer.isView(v))return new Uint8Array(v.buffer,v.byteOffset,v.byteLength);
+if(v.bytes)return ArrayBuffer.isView(v.bytes)?new Uint8Array(v.bytes.buffer,v.bytes.byteOffset,v.bytes.byteLength):new Uint8Array(v.bytes);
+if(typeof v.base64==="string"){const b=atob(v.base64),u=new Uint8Array(b.length);for(let n=0;n<b.length;n++)u[n]=b.charCodeAt(n);return u}
+if(typeof v.arrayBuffer==="function")return new Uint8Array(await v.arrayBuffer())}catch{}return null}
+async function _ccGeminiVideo(chave,v){const k=String(chave||"").trim();const alvo=v&&v.data;if(!k||!alvo)return null;try{
+const tipo=_ccVideoMime(alvo,v.mimeType);let uri=_ccVideoCache.get(alvo)||null;
+if(!uri){const bytes=await _ccVideoBytes(alvo);if(!bytes||!bytes.length||bytes.length>1900*1024*1024)return null;
+const nome=String((alvo&&alvo.name)||"cineclip-cena").slice(0,80);
+const r1=await Ka("Google Gemini",`https://generativelanguage.googleapis.com/upload/v1beta/files?key=${encodeURIComponent(k)}`,{method:"POST",headers:{"X-Goog-Upload-Protocol":"resumable","X-Goog-Upload-Command":"start","X-Goog-Upload-Header-Content-Length":String(bytes.length),"X-Goog-Upload-Header-Content-Type":tipo,"Content-Type":"application/json"},body:JSON.stringify({file:{display_name:nome}})},6e5);
+const up=r1.headers.get("X-Goog-Upload-URL")||r1.headers.get("x-goog-upload-url");if(!up)return null;
+const r2=await fetch(up,{method:"POST",headers:{"X-Goog-Upload-Offset":"0","X-Goog-Upload-Command":"upload, finalize"},body:bytes});if(!r2.ok)return null;
+const j=await r2.json(),fl=j&&j.file||null,id=String((fl&&fl.name)||"").split("/").pop();
+uri=(fl&&(fl.uri||(id&&`${Cu}/files/${id}`)))||null;if(!uri)return null;
+_ccVideoCache.set(alvo,uri);
+let falhas=0;for(let t=0;t<45&&id;t++){let st="";try{const ej=await (await Ka("Google Gemini",`${Cu}/files/${id}?key=${encodeURIComponent(k)}`,void 0,2e4)).json();st=(ej&&ej.file&&ej.file.state)||""}catch{falhas++;if(falhas>=2)break}
+if(st==="ACTIVE")break;if(st==="FAILED"){_ccVideoCache.delete(alvo);return null}if(st!=="PROCESSING")break;await new Promise(r=>setTimeout(r,2000))}}
+const md={},A=Number(v.ini)||0,B=Number(v.fim)||0;if(A>0)md.start_offset=A+"s";if(B>A)md.end_offset=B+"s";
+const part={file_data:{file_uri:uri,mime_type:tipo}};if(md.start_offset||md.end_offset)part.video_metadata=md;return part}catch{return null}}
+async function _ccVideoParaIA(f,ini,fim){if(!f)return null;return{data:f,mimeType:_ccVideoMime(f),ini:Number(ini)||0,fim:Number(fim)||0}}
+async function Ec(r,o,a,i,c){

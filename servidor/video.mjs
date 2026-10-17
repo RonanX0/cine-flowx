@@ -258,6 +258,40 @@ export async function audio(caminho, inicio = 0, fim = 45) {
   return pico < 0.002 ? null : { mimeType: "audio/wav", base64: wav.toString("base64") };
 }
 
+/* ------------------------------------------------- vídeo para a IA */
+
+/**
+ * Vídeo para o Gemini "assistir" (File API) — recorta [inicio, fim] (ou os
+ * primeiros 90 s) com stream copy (sem re-encode, com áudio) para o Gemini
+ * analisar a cena em movimento em vez de frames soltos. Devolve
+ * { data, mimeType, ini, fim } para `core.identificar`/`core.gerarGancho`
+ * (o `video` do bundle faz o upload); null se não for possível.
+ */
+export async function videoParaIA(caminho, inicio = 0, fim = 0) {
+  try {
+    const info = await sondar(caminho);
+    const ini = Math.max(0, Number(inicio) || 0);
+    const pedida = Number(fim) > ini ? Number(fim) - ini : 0;
+    const dur = pedida || Math.min(90, Math.max(1, info.duracao - ini));
+    const pasta = await pastaTemporaria("cineclip-ia-");
+    try {
+      const destino = path.join(pasta, "cena.mp4");
+      const args = ["-v", "error", "-y"];
+      if (ini > 0) args.push("-ss", ini.toFixed(3));
+      if (dur > 0) args.push("-t", dur.toFixed(3));
+      args.push("-i", caminho, "-map", "0:v:0", "-map", "0:a?", "-c", "copy",
+        "-movflags", "+faststart", "-f", "mp4", destino);
+      await correr(ffmpeg(), args);
+      const bytes = await fs.promises.readFile(destino);
+      return bytes.length ? { data: bytes, mimeType: "video/mp4", ini: 0, fim: dur } : null;
+    } finally {
+      fs.promises.rm(pasta, { recursive: true, force: true }).catch(() => {});
+    }
+  } catch {
+    return null;
+  }
+}
+
 /* ------------------------------------------------- imagem do gancho */
 
 /** Enquadramento 9:16 — cópia do `Eh` do app (inclui a caixa fixa dos presets). */

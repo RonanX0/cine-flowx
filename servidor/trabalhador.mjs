@@ -87,6 +87,7 @@ export function criarTrabalhador({ cfg, app, pastaDados, registo: guardaRegisto,
       detetarBarras: (f, ini, fim) => video.detetarBarras(f.caminho, ini, fim),
       quadros: (f, ini, fim, corte) => video.quadros(f.caminho, ini, fim, corte),
       audio: (f, ini, fim) => video.audio(f.caminho, ini, fim),
+      videoParaIA: (f, ini, fim) => video.videoParaIA(f.caminho, ini, fim),
       processar: async (f, ini, fim, res, gancho, progresso, corte, bgMode, hookColor, preset, footerText, footerColor) => {
         // O lote em massa envia a formatação da conta (preset/fundo/gancho/rodapé)
         // nos argumentos 8..12; se vier vazia, usa-se a que está na própria conta.
