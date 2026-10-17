@@ -16,6 +16,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { presetDoReel, alvoDaCaixa } from "./presets.mjs";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 // Lidos na hora (não no import): na Vercel o FFmpeg vem do pacote ffmpeg-static e o
@@ -259,8 +260,8 @@ export async function audio(caminho, inicio = 0, fim = 45) {
 
 /* ------------------------------------------------- imagem do gancho */
 
-/** Enquadramento 9:16 — cópia do `Eh` do app. */
-export function enquadramento(r, o, corte, i = 720) {
+/** Enquadramento 9:16 — cópia do `Eh` do app (inclui a caixa fixa dos presets). */
+export function enquadramento(r, o, corte, i = 720, preset = "atual") {
   const c = Math.max(2, r - (r % 2));
   const u = Math.max(2, o - (o % 2));
   const f = Math.round((i * 16) / 9);
@@ -271,6 +272,41 @@ export function enquadramento(r, o, corte, i = 720) {
   const h = Math.max(2, Math.min(u - v, Math.floor((u - v - x) / 2) * 2));
   const w = c;
   const temCorte = v > 0 || x > 0;
+  const P = presetDoReel(preset);
+  const A = alvoDaCaixa(P);
+  if (A > 0) {
+    // Caixa fixa do preset: 1:1 com margens laterais (escuro) ou faixa 4:3 de
+    // ponta a ponta (claro). O recorte é centrado e tem o mesmo aspeto da caixa,
+    // para o `scale` não esticar a imagem.
+    let S = Math.max(2, Math.round((i * (1 - 2 * P.margem)) / 2) * 2);
+    let T = Math.max(2, Math.round(S / A / 2) * 2);
+    if (T > f - 2) {
+      T = Math.max(2, Math.round((f - 2) / 2) * 2);
+      S = Math.min(i, Math.max(2, Math.round((T * A) / 2) * 2));
+    }
+    const D = Math.max(0, Math.round((i - S) / 2 / 2) * 2);
+    const k = Math.max(0, Math.min(f - T - 2, Math.round((f * P.topo) / 2) * 2));
+    let cropW = w;
+    let cropH = h;
+    let cropX = 0;
+    let cropY = v;
+    const fa = cropW / cropH;
+    if (fa > A) {
+      const nw = Math.max(2, Math.min(cropW, Math.round((cropH * A) / 2) * 2));
+      cropX += Math.max(0, Math.round((cropW - nw) / 2 / 2) * 2);
+      cropW = nw;
+    } else if (fa < A) {
+      const nh = Math.max(2, Math.min(cropH, Math.round(cropW / A / 2) * 2));
+      cropY += Math.max(0, Math.round((cropH - nh) / 2 / 2) * 2);
+      cropH = nh;
+    }
+    return {
+      outWidth: i, outHeight: f, vw: c, vh: u,
+      hasCrop: cropX > 0 || cropY > 0 || cropW < c || cropH < u,
+      cropX, cropY, cropW, cropH, videoW: S, videoH: T, padX: D, padY: k,
+      radius: Math.max(0, Math.round(S * P.raio)), bg: P.fundo, preset: P.id,
+    };
+  }
   const k = Math.round((f * 0.3) / 2) * 2;
   const C = f - k;
   let S = i;
@@ -281,7 +317,7 @@ export function enquadramento(r, o, corte, i = 720) {
     S = Math.max(2, Math.floor((T * w) / h / 2) * 2);
     D = Math.floor((i - S) / 4) * 2;
   }
-  return { outWidth: i, outHeight: f, vw: c, vh: u, hasCrop: temCorte, cropX: 0, cropY: v, cropW: w, cropH: h, videoW: S, videoH: T, padX: D, padY: k };
+  return { outWidth: i, outHeight: f, vw: c, vh: u, hasCrop: temCorte, cropX: 0, cropY: v, cropW: w, cropH: h, videoW: S, videoH: T, padX: D, padY: k, radius: 0, bg: P.fundo, preset: P.id };
 }
 
 let fontesProntas = null;
@@ -323,17 +359,67 @@ export async function fontesDisponiveis() {
   return { ...fontesProntas };
 }
 
-/** PNG do gancho por cima do vídeo — cópia do `_h` do app (texto preto, centrado). */
-export async function imagemDoGancho(largura, altura, padY, texto) {
+/**
+ * PNG do gancho por cima do vídeo — cópia do `_h` do app.
+ *
+ * Sem preset (o padrão do servidor) mantém o aspeto de sempre: texto preto,
+ * centrado na faixa de cima. Com um preset ("escuro"/"claro") usa a tipografia,
+ * a cor e a geometria medidas das capturas: tapa os cantos da caixa do vídeo com
+ * a cor do fundo (cantos arredondados) e desenha o rodapé.
+ */
+export async function imagemDoGancho(largura, altura, padY, texto, estilo = {}) {
   const { createCanvas } = await canvasComFontes();
   const canvas = createCanvas(largura, altura);
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, largura, altura);
+  const P = presetDoReel(estilo.preset);
+  const comPreset = P.caixa !== "auto";
+  const caixa = estilo.caixa || null;
+
+  /* Cantos arredondados: o retângulo da caixa menos o retângulo arredondado,
+     preenchido com a cor do fundo (o PNG vai por cima do vídeo no ffmpeg). */
+  if (comPreset && caixa && caixa.radius > 0 && caixa.videoW > 0 && caixa.videoH > 0) {
+    const R = Math.max(1, Math.min(caixa.radius, caixa.videoW / 2, caixa.videoH / 2));
+    const X0 = Math.round(caixa.padX || 0);
+    const Y0 = Math.round(caixa.padY || 0);
+    const X1 = X0 + caixa.videoW;
+    const Y1 = Y0 + caixa.videoH;
+    ctx.save();
+    ctx.fillStyle = caixa.fundo === "branco" ? "#FFFFFF" : "#000000";
+    const arcos = [
+      [X0, Y0, X0 + R, Y0 + R, -Math.PI / 2, Math.PI, true],
+      [X1, Y0, X1 - R, Y0 + R, -Math.PI / 2, 0, false],
+      [X0, Y1, X0 + R, Y1 - R, Math.PI, Math.PI / 2, true],
+      [X1, Y1, X1 - R, Y1 - R, Math.PI / 2, 0, true],
+    ];
+    ctx.beginPath();
+    for (const [px, py, ax, ay, inicio, fim, ccw] of arcos) {
+      ctx.moveTo(px, py);
+      ctx.arc(ax, ay, R, inicio, fim, ccw);
+      ctx.closePath();
+    }
+    ctx.fill();
+    ctx.restore();
+  }
+
+  /* Rodapé do preset (texto opcional, definido na conta do Instagram). */
+  const rodape = String((caixa && caixa.rodape) || "").trim();
+  if (comPreset && rodape && P.rodapeTamanho > 0) {
+    const tamRodape = Math.round(largura * P.rodapeTamanho);
+    ctx.save();
+    ctx.font = `700 ${tamRodape}px Inter, "Noto Color Emoji", "Helvetica Neue", Arial, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = (caixa && caixa.rodapeCor) || P.rodapeCor;
+    ctx.fillText(rodape, largura / 2, Math.round(altura * (P.rodapeY || 0.9355)));
+    ctx.restore();
+  }
+
   const frase = String(texto || "").trim();
   if (frase) {
-    const tam = Math.round(largura * 0.062);
-    ctx.font = `800 ${tam}px Inter, "Noto Color Emoji", "Helvetica Neue", Arial, sans-serif`;
-    ctx.fillStyle = "#000000";
+    const tam = Math.round(largura * (comPreset ? P.ganchoTamanho : 0.062));
+    ctx.font = `${comPreset ? 900 : 800} ${tam}px Inter, "Noto Color Emoji", "Helvetica Neue", Arial, sans-serif`;
+    ctx.fillStyle = comPreset ? (estilo.hookColor || P.ganchoCor) : "#000000";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     const max = largura * 0.84;
@@ -347,9 +433,9 @@ export async function imagemDoGancho(largura, altura, padY, texto) {
       } else atual = teste;
     }
     if (atual) linhas.push(atual);
-    const entre = tam * 1.25;
+    const entre = tam * (comPreset ? P.ganchoEntrelinha : 1.25);
     const total = linhas.length * entre;
-    const margem = altura * 0.06;
+    const margem = altura * (comPreset ? 0.065 : 0.06);
     const area = Math.max(total, padY - margem);
     const y0 = margem + (area - total) / 2 + entre / 2;
     linhas.forEach((l, n) => ctx.fillText(l, largura / 2, y0 + n * entre));
@@ -367,27 +453,46 @@ const tempoDoLog = (t) => {
 /**
  * Limpa os metadados, corta [inicio, fim] e monta o 9:16 com o gancho — os
  * mesmos filtros e opções do `YS` do app. Devolve {caminho, size, name}.
+ *
+ * `estilo` traz a formatação da conta do Instagram ({preset, bgMode, hookColor,
+ * footerText, footerColor}) e chega aqui pelo lote em massa (lote-massa.js).
+ * Sem preset, o servidor mantém o seu aspeto de sempre (fundo branco, gancho
+ * preto); com "escuro"/"claro" usa a geometria e as cores medidas do formato.
  */
-export async function processar(entrada, inicio, fim, resolucao, gancho, aoProgresso, corte, destino) {
+export async function processar(entrada, inicio, fim, resolucao, gancho, aoProgresso, corte, destino, estilo = {}) {
   const info = await sondar(entrada);
   const dur = Math.max(0.5, fim - inicio);
   const alvo = resolucao === "720" ? 720 : 1080;
   const vw = (corte && corte.vw) || info.largura || 1920;
   const vh = (corte && corte.vh) || info.altura || 1080;
-  const e = enquadramento(vw, vh, corte, alvo);
+  const P = presetDoReel(estilo.preset);
+  const comPreset = P.caixa !== "auto";
+  const e = enquadramento(vw, vh, corte, alvo, P.id);
   const pasta = await pastaTemporaria();
   try {
     const temGancho = !!String(gancho || "").trim();
+    const rodape = comPreset ? String(estilo.footerText || "").trim() : "";
+    // Os cantos arredondados e o rodapé também vivem no PNG do gancho: mesmo sem
+    // texto é preciso sobrepor a imagem.
+    const temOverlay = temGancho || (comPreset && (e.radius > 0 || !!rodape));
     const args = ["-v", "info", "-y", "-ss", inicio.toFixed(2), "-t", dur.toFixed(2), "-i", entrada];
-    if (temGancho) {
+    if (temOverlay) {
       const png = path.join(pasta, "gancho.png");
-      await fs.promises.writeFile(png, await imagemDoGancho(e.outWidth, e.outHeight, e.padY, gancho));
+      await fs.promises.writeFile(png, await imagemDoGancho(e.outWidth, e.outHeight, e.padY, gancho, {
+        preset: P.id,
+        hookColor: estilo.hookColor,
+        caixa: {
+          padX: e.padX, padY: e.padY, videoW: e.videoW, videoH: e.videoH,
+          radius: e.radius, fundo: P.fundo, rodape, rodapeCor: estilo.footerColor || P.rodapeCor,
+        },
+      }));
       args.push("-i", png);
     }
-    const indiceSilencio = temGancho ? 2 : 1;
+    const indiceSilencio = temOverlay ? 2 : 1;
     if (!info.temAudio) args.push("-f", "lavfi", "-t", dur.toFixed(2), "-i", "anullsrc=r=44100:cl=stereo");
-    const base = `[0:v]${e.hasCrop ? `crop=${e.cropW}:${e.cropH}:${e.cropX}:${e.cropY},` : ""}scale=${e.videoW}:${e.videoH},pad=${e.outWidth}:${e.outHeight}:${e.padX}:${e.padY}:white,setsar=1`;
-    const filtro = temGancho ? `${base}[b];[b][1:v]overlay=0:0[v]` : `${base}[v]`;
+    const corFundo = comPreset ? (P.fundo === "branco" ? "white" : "black") : "white";
+    const base = `[0:v]${e.hasCrop ? `crop=${e.cropW}:${e.cropH}:${e.cropX}:${e.cropY},` : ""}scale=${e.videoW}:${e.videoH},pad=${e.outWidth}:${e.outHeight}:${e.padX}:${e.padY}:${corFundo},setsar=1`;
+    const filtro = temOverlay ? `${base}[b];[b][1:v]overlay=0:0[v]` : `${base}[v]`;
     const saida = destino || path.join(pasta, "out.mp4");
     args.push(
       "-filter_complex", filtro, "-map", "[v]", "-map", info.temAudio ? "0:a:0?" : `${indiceSilencio}:a:0`,

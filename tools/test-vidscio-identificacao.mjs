@@ -96,11 +96,79 @@ check("app-pronto.html e 404.html sincronizados com index.html", html === appPro
 console.log("1. Corte de Formato 9:16 e Dimensões");
 {
   const modulo = /<script type="module">([\s\S]*?)<\/script>/.exec(html)[1];
-  const ehMatch = modulo.match(/function Eh\(r,o,a,i=720\)\{[\s\S]*?return\{outWidth[\s\S]*?\}\}/);
-  if (!ehMatch) throw new Error("Função Eh não encontrada no bundle.");
+  // Chavetas equilibradas: o `Eh` ganhou um parâmetro de preset e a regex antiga
+  // (que parava no primeiro `}}`) truncava a função.
+  const extrairEh = (fonte) => extrairFuncao2(fonte, "function Eh(");
+  function extrairFuncao2(fonte, inicio) {
+    const a = fonte.indexOf("function Eh(");
+    if (a < 0) return null;
+    let i = fonte.indexOf("{", a);
+    let nivel = 0;
+    let aspas = null;
+    for (; i < fonte.length; i++) {
+      const ch = fonte[i];
+      if (aspas) {
+        if (ch === "\\") { i++; continue; }
+        if (ch === aspas) aspas = null;
+        continue;
+      }
+      if (ch === '"' || ch === "'" || ch === "`") { aspas = ch; continue; }
+      if (ch === "{") nivel++;
+      else if (ch === "}" && --nivel === 0) return fonte.slice(a, i + 1);
+    }
+    return null;
+  }
+  // O Eh usa a tabela de presets e dois helpers do bundle — vão todos para o vm.
+  function extrairFuncao(fonte, inicio) {
+    const a = fonte.indexOf(inicio);
+    if (a < 0) return null;
+    let i = fonte.indexOf("{", a);
+    let nivel = 0;
+    let aspas = null;
+    for (; i < fonte.length; i++) {
+      const ch = fonte[i];
+      if (aspas) {
+        if (ch === "\\") { i++; continue; }
+        if (ch === aspas) aspas = null;
+        continue;
+      }
+      if (ch === '"' || ch === "'" || ch === "`") { aspas = ch; continue; }
+      if (ch === "{") nivel++;
+      else if (ch === "}" && --nivel === 0) return fonte.slice(a, i + 1);
+    }
+    return null;
+  }
+  function extrairTabela(fonte) {
+    const inicio = "const PRESETS_DO_REEL={";
+    const a = fonte.indexOf(inicio);
+    if (a < 0) return "";
+    let i = fonte.indexOf("{", a + inicio.length - 1);
+    let nivel = 0;
+    let aspas = null;
+    for (; i < fonte.length; i++) {
+      const ch = fonte[i];
+      if (aspas) {
+        if (ch === "\\") { i++; continue; }
+        if (ch === aspas) aspas = null;
+        continue;
+      }
+      if (ch === '"' || ch === "'" || ch === "`") { aspas = ch; continue; }
+      if (ch === "{") nivel++;
+      else if (ch === "}" && --nivel === 0) return fonte.slice(a, i + 1) + ";";
+    }
+    return "";
+  }
+  const ehCodigo = extrairEh(modulo);
+  if (!ehCodigo) throw new Error("Função Eh não encontrada no bundle.");
+  const codigoVm = [
+    extrairTabela(modulo),
+    extrairFuncao(modulo, "function presetDoReel("),
+    extrairFuncao(modulo, "function alvoDaCaixa("),
+    ehCodigo,
+  ].filter(Boolean).join("\n");
 
   const ctx = vm.createContext({ Math, Number });
-  vm.runInContext(ehMatch[0], ctx);
+  vm.runInContext(codigoVm, ctx);
 
   // Vídeo 16:9 (1920x1080) -> deve ser centralizado em 720x1280 com margem vertical equilibrada
   const r169 = ctx.Eh(1920, 1080, null, 720);
@@ -125,7 +193,9 @@ console.log("1. Corte de Formato 9:16 e Dimensões");
 // -----------------------------------------------------------------------------
 console.log("\n2. Estética Cinematográfica (Fundo Preto)");
 {
-  check("FFmpeg processa com fundo preto (pad=...:black)", html.includes(":black,setsar=1"));
+  // O fundo do pad passou a vir de uma variável: preto por omissão, branco só
+  // quando a conta escolhe o fundo branco (preset "claro" ou opção "Branco").
+  check("FFmpeg processa com fundo preto por omissão (pad=...:${__corFundo})", html.includes(",pad=${w.outWidth}:${w.outHeight}:${w.padX}:${w.padY}:${__corFundo},setsar=1") && html.includes('__corFundo=__fundoBranco?"white":"black"') && html.includes('__fundoBranco=__P.fundo==="branco"||bgMode==="branco"'));
   check("FFmpeg não usa mais fundo branco (:white)", !html.includes(":white,setsar=1"));
   check("Preview 9:16 usa container preto (bg-black)", html.includes('aspect-[9/16] w-full overflow-hidden rounded-xl border border-border bg-black'));
 }
@@ -138,7 +208,7 @@ console.log("\n3. Ganchos Virais e Tipografia Moderna");
   check("Gancho padrão não é o clichê genérico", !html.includes('overlayText:"Você precisa assistir esse filme 😳"'));
   check("Renderizador _h usa tipografia em negrito 900", html.includes('900 ${g}px "Inter", "Montserrat"'));
   check("Renderizador _h usa badge de alto contraste com cantos arredondados", html.includes('rgba(10, 10, 14, 0.78)'));
-  check("Renderizador _h usa texto branco puro com sombra", html.includes('#FFFFFF') && html.includes('shadowColor="rgba(0, 0, 0, 0.9)"'));
+  check("Renderizador _h usa texto branco puro com sombra (em fundo escuro)", html.includes('#FFFFFF') && html.includes('shadowColor=P.ganchoPill?"rgba(0, 0, 0, 0.9)":"rgba(0, 0, 0, 0.55)"') && html.includes('f.fillStyle=color||(P.ganchoPill?(ital?"rgba(255, 255, 255, 0.55)":"#FFFFFF"):P.ganchoCor)'));
 
   // Prompt do Hm deve conter fórmulas virais comprovadas
   check("Prompt do Hm ensina quebra de expectativa", html.includes("QUEBRA DE EXPECTATIVA"));

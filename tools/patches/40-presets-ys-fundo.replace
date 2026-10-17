@@ -1,0 +1,1 @@
+const __bgBlurred=__P.caixa==="auto"&&(bgMode==="desfocado"||bgMode==="blurred"||bgMode==="blur"||bgMode==="desfocad"), __fundoBranco=__P.fundo==="branco"||bgMode==="branco"||bgMode==="white", __corFundo=__fundoBranco?"white":"black", __crop=

@@ -1,0 +1,1 @@
+children:[d.jsxs("div",{className:qe("relative aspect-[9/16] w-full overflow-hidden rounded-xl border border-border shadow-sm",C.bg==="branco"?"bg-white":"bg-black"),children:[d.jsx("div",{className:"absolute overflow-hidden bg-black",style:{left:`${S}%`,top:`${T}%`,width:`${D}%`,height:`${O}%`,borderRadius:rd},children:

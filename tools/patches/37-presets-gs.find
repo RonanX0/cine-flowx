@@ -1,0 +1,1 @@
+function GS(r,o,a,i,color="#FFFFFF"){const c=document.createElement("canvas");_h(c,r,o,a,i,!1,color);

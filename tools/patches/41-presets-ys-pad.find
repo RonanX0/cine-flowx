@@ -1,0 +1,1 @@
+,pad=${w.outWidth}:${w.outHeight}:${w.padX}:${w.padY}:black,setsar=1`

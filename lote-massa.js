@@ -626,6 +626,28 @@
   }
 
   /**
+   * O estilo do Reel da conta ativa: preset (atual/escuro/claro), fundo, cor do
+   * gancho e rodapé. O app guarda isto na conta do Instagram (não nas chaves),
+   * por isso o lote em massa tem de o levar até ao FFmpeg — sem estes argumentos
+   * o `processar` usava sempre os valores por omissão.
+   */
+  function estiloDoReel(app, s) {
+    var conta = (app && app.account) || {};
+    var geral = s || {};
+    var tabela = (typeof window !== "undefined" && window.CineClipCore && window.CineClipCore.presets) || null;
+    var preset = String(conta.preset || conta.reelPreset || geral.preset || "atual");
+    if (preset !== "escuro" && preset !== "claro") preset = "atual";
+    var padrao = tabela && tabela[preset] ? tabela[preset] : null;
+    return {
+      preset: preset,
+      bgMode: String(conta.bgMode || conta.backgroundMode || geral.bgMode || (padrao && padrao.bgMode) || "preto"),
+      hookColor: String(conta.hookColor || conta.hookTextColor || geral.hookColor || (padrao && padrao.ganchoCor) || "#FFFFFF"),
+      footerText: String(conta.footerText || conta.rodapeTexto || geral.footerText || ""),
+      footerColor: String(conta.footerColor || conta.rodapeCor || geral.footerColor || (padrao && padrao.rodapeCor) || "#2DBD2C"),
+    };
+  }
+
+  /**
    * Leva um vídeo do ficheiro original até à fila do Agendador.
    * Lança um erro (com `tipo`) quando não pode continuar.
    */
@@ -839,10 +861,13 @@
 
     /* 4. Processar o vídeo -------------------------------------------------- */
     definirPasso(item, "A processar o vídeo… 0%", 0.25);
+    /* O preset/fundo/gancho/rodapé vêm da conta ativa — o FFmpeg do app recebe-os
+       nos argumentos 8..12 do `processar`. */
+    var estilo = estiloDoReel(app, s);
     var blob = await core.processar(ficheiro, 0, fim, s.resolution, gancho, function (fracao) {
       var pct = Math.max(0, Math.min(1, Number(fracao) || 0));
       definirPasso(item, "A processar o vídeo… " + Math.round(pct * 100) + "%", 0.25 + pct * 0.6);
-    }, corte);
+    }, corte, estilo.bgMode, estilo.hookColor, estilo.preset, estilo.footerText, estilo.footerColor);
     if (!blob || !blob.size) throw erroComTipo("O FFmpeg não devolveu o vídeo processado.", "processamento");
 
     /* 5. Legenda ------------------------------------------------------------- */
@@ -2462,6 +2487,7 @@
       parar: parar,
       processarItem: processarItem,
       faltaConfigurar: faltaConfigurar,
+      estiloDoReel: estiloDoReel,
       horarioLegivel: horarioLegivel,
       MAX_SEGUNDOS: MAX_SEGUNDOS,
       MAX_SIMULTANEOS: MAX_SIMULTANEOS,
