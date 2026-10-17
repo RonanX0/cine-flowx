@@ -357,9 +357,89 @@ if (canvasMod) {
   check("atual: nada tapado nos cantos (não há caixa extra)", pAtual.px(1, 403)[3] === 0);
 }
 
-console.log("\n" + "─".repeat(45));
-if (fail === 0) console.log(`✅ ${pass} passaram, 0 falharam`);
-else {
-  console.log(`❌ ${pass} passaram, ${fail} falharam`);
-  process.exit(1);
-}
+/* ------------------------------------------------------------------ 12 */
+console.log("\n12. Render real com FFmpeg (opcional)");
+import("node:child_process").then(async ({ execFileSync }) => {
+  const ffmpeg = process.env.CINECLIP_FFMPEG || "ffmpeg";
+  let temFfmpeg = false;
+  try {
+    execFileSync(ffmpeg, ["-version"], { stdio: "ignore" });
+    temFfmpeg = true;
+  } catch {
+    temFfmpeg = false;
+  }
+  const resumo = () => {
+    console.log("\n" + "─".repeat(45));
+    if (fail === 0) console.log(`✅ ${pass} passaram, 0 falharam`);
+    else {
+      console.log(`❌ ${pass} passaram, ${fail} falharam`);
+      process.exit(1);
+    }
+  };
+  if (!temFfmpeg) {
+    console.log("   ⏭  ffmpeg não está no PATH — secção saltada");
+    resumo();
+    return;
+  }
+  // O ffprobe velho de alguns ambientes não conhece `stream_side_data`; o
+  // servidor tem um caminho alternativo por `ffmpeg -i` (testado à parte).
+  process.env.CINECLIP_FFPROBE = process.env.CINECLIP_FFPROBE || "nenhum";
+  const osMod = await import("node:os");
+  const tmp = fs.mkdtempSync(path.join(osMod.tmpdir(), "cineclip-presets-"));
+  const fonte = path.join(tmp, "fonte.mp4");
+  execFileSync(ffmpeg, ["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=1920x1080:rate=30:duration=3",
+    "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", fonte], { stdio: "ignore" });
+
+  /** Um quadro do vídeo processado, em RGB cru (720×1280 = 2,7 MB). */
+  function quadro(caminho) {
+    const buf = execFileSync(ffmpeg, ["-v", "error", "-ss", "1", "-i", caminho, "-frames:v", "1",
+      "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], { maxBuffer: 16 * 1024 * 1024 });
+    const px = (x, y) => {
+      const i = (y * 720 + x) * 3;
+      return [buf[i], buf[i + 1], buf[i + 2]];
+    };
+    const conta = (teste, yDe, yAte, xDe = 0, xAte = 720) => {
+      let n = 0;
+      for (let y = yDe; y < yAte; y++) for (let x = xDe; x < xAte; x++) if (teste(px(x, y))) n++;
+      return n;
+    };
+    return { px, conta, bytes: buf.length };
+  }
+  const preto = ([r, g, b]) => r + g + b < 60;
+  const branco = ([r, g, b]) => r > 235 && g > 235 && b > 235;
+  const imagem = ([r, g, b]) => r + g + b > 90 && !(r > 235 && g > 235 && b > 235);
+
+  const estilos = {
+    escuro: { preset: "escuro", footerText: "Cenas rápidas" },
+    claro: { preset: "claro" },
+    atual: {},
+  };
+  const quadros = {};
+  for (const [nome, estilo] of Object.entries(estilos)) {
+    const destino = path.join(tmp, `out-${nome}.mp4`);
+    await video.processar(fonte, 0, 2.5, "720", "GANCHO DE TESTE BEM VISIVEL", null, null, destino, estilo);
+    quadros[nome] = quadro(destino);
+  }
+  check("os três renders saem em 720×1280", Object.values(quadros).every((q) => q.bytes === 720 * 1280 * 3));
+
+  const qE = quadros.escuro;
+  check("escuro: margem lateral preta (fundo do preset)", preto(qE.px(10, 640)) && preto(qE.px(710, 640)));
+  check("escuro: o canto da caixa vem arredondado (cunha preta sobre o vídeo)", preto(qE.px(40, 354)) && imagem(qE.px(60, 374)), JSON.stringify([qE.px(40, 354), qE.px(60, 374)]));
+  check("escuro: há imagem dentro da caixa 1:1", imagem(qE.px(360, 674)));
+  check("escuro: entre a caixa e o rodapé o fundo é preto", preto(qE.px(360, 1080)));
+  check("escuro: o gancho sai fluorescente no vídeo final", qE.conta(([r, g, b]) => r > 190 && g > 190 && b < 120, 100, 340) > 300);
+  check("escuro: o rodapé verde sai no vídeo final", qE.conta(([r, g, b]) => g > 120 && r < 160 && b < 130, 1160, 1230) > 100);
+
+  const qC = quadros.claro;
+  check("claro: fundo branco acima e abaixo da faixa", branco(qC.px(360, 100)) && branco(qC.px(360, 1100)));
+  check("claro: a faixa 4:3 vai de ponta a ponta", imagem(qC.px(5, 674)) && imagem(qC.px(714, 674)));
+  check("claro: o gancho sai preto no vídeo final", qC.conta(([r, g, b]) => r < 70 && g < 70 && b < 70, 150, 380) > 300);
+  check("claro: sem rodapé no vídeo final", qC.conta(([r, g, b]) => g > 120 && r < 160 && b < 130, 1000, 1270) === 0);
+
+  const qA = quadros.atual;
+  check("atual (servidor): mantém o fundo branco de sempre (faixas acima e abaixo)", branco(qA.px(360, 100)) && branco(qA.px(360, 1100)));
+  check("atual (servidor): imagem centrada na faixa do meio", imagem(qA.px(360, 605)));
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+  resumo();
+});

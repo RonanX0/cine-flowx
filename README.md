@@ -68,7 +68,7 @@ Para ver os três formatos lado a lado com o código real do bundle (sem instala
 
 ```bash
 python3 -m http.server 8080 --bind 0.0.0.0 --directory tools   # abre /amostra-presets.html
-npm run presets:test                                            # geometria + desenho + paridade app/servidor
+npm run presets:test                                            # geometria, desenho, paridade app/servidor e (com ffmpeg) o render real
 ```
 
 > A `tools/amostra-presets.html` vai buscar o `index.html` e extrai as funções verdadeiras
