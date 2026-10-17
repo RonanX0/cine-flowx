@@ -76,6 +76,27 @@ config =
   config.slice(0, config.indexOf(slotsGridStart)) +
   config.slice(config.indexOf(slotsGridEnd) + 1);
 
+// Formatação por conta (patch da base): estes dois campos ficaram fora do
+// .find antigo do Agendador, mas fazem parte da configuração de cada conta e
+// alimentam o processamento no Estúdio. Mantém-nos aqui para que regenerar o
+// patch 22 não os apague acidentalmente.
+const formatting =
+  ',d.jsxs("div",{className:"space-y-2",children:[d.jsx(er,{children:"Formatação do Reel (fundo e gancho)"}),d.jsxs("div",{className:"grid gap-3 sm:grid-cols-2",children:[d.jsxs("div",{className:"space-y-1.5",children:[d.jsx(er,{children:"Fundo do vídeo"}),d.jsx("select",{value:j.bgMode||j.backgroundMode||"preto",onChange:N=>ye({bgMode:N.target.value,backgroundMode:N.target.value}),className:"h-9 w-full rounded-md border border-border bg-background px-2 text-xs",children:[d.jsx("option",{value:"preto",children:"Preto"}),d.jsx("option",{value:"desfocado",children:"Desfocado"})]})]}),d.jsxs("div",{className:"space-y-1.5",children:[d.jsx(er,{children:"Cor da fonte do gancho"}),d.jsx("input",{type:"color",value:j.hookColor||j.hookTextColor||"#FFFFFF",onChange:N=>ye({hookColor:N.target.value,hookTextColor:N.target.value}),className:"h-9 w-full cursor-pointer rounded-md border border-border bg-background"})]})]})]})';
+const configSaveStart = ',d.jsx("div",{className:"flex justify-end pt-2",children:d.jsxs(Ae,{size:"sm",onClick:Y';
+if (count(config, configSaveStart) !== 1) throw new Error("CONFIG: botão de salvar não encontrado para os presets de formatação.");
+config = config.replace(configSaveStart, formatting + configSaveStart);
+for (const marker of [
+  "Formatação do Reel (fundo e gancho)",
+  "Fundo do vídeo",
+  "Cor da fonte do gancho",
+  "bgMode",
+  "backgroundMode",
+  "hookColor",
+  "hookTextColor",
+]) {
+  if (!config.includes(marker)) throw new Error(`CONFIG: controle de formatação ausente (${marker}).`);
+}
+
 // Selo da nuvem (patch 09) e botão "Reenviar p/ nuvem" (patch 10)
 const cloudBadge = cut("N.remoteVideoUrl?window.CineCloud", ',o.length>1&&d.jsx("select"', "CLOUD_BADGE");
 const reenviar = cut(
