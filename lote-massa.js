@@ -803,13 +803,14 @@
           kind: (ia && ia.tipo) || "movie",
           poster: ""
         };
-        ia.confianca = 100;
+        ia._naoIdentificado = true;
+      } else {
+        if (hashVideo) cacheIdentGuardar(hashVideo, { ia: ia, filme: filme });
       }
-      if (hashVideo) cacheIdentGuardar(hashVideo, { ia: ia, filme: filme });
     }
     var confianca = Number(ia.confianca) || 0;
     item.resultado = { titulo: filme.title, ano: filme.year, confianca: confianca };
-    if (confianca < CONFIANCA_MINIMA && !permitirPoucaCerteza) {
+    if (!ia._naoIdentificado && confianca < CONFIANCA_MINIMA && !permitirPoucaCerteza) {
       throw erroComTipo(
         'A IA acha que é "' + filme.title + (filme.year ? " (" + filme.year + ")" : "") + '", mas só com ' +
           confianca + "% de certeza. Confere no Estúdio ou liga “Agendar mesmo com pouca certeza”.",
@@ -833,17 +834,20 @@
       if (/^(gancho \d|opção \d|opcao \d|você precisa assistir|voce precisa assistir)/i.test(str)) return false;
       return true;
     }
-    var gancho = (ia.ganchos || [])
-      .map(limparGancho)
-      .find(eGanchoValido);
-    if (!gancho) {
-      try {
-        var g = await core.gerarGancho(s.nvidiaKey, quadros, s.lang, filme.title, s.geminiKey, audio);
-        gancho = ((g && g.ganchos) || [])
-          .map(limparGancho)
-          .find(eGanchoValido);
-        if (!cena && g && g.cena) cena = g.cena;
-      } catch (e) {}
+    var gancho = "";
+    if (!ia._naoIdentificado) {
+      gancho = (ia.ganchos || [])
+        .map(limparGancho)
+        .find(eGanchoValido);
+      if (!gancho) {
+        try {
+          var g = await core.gerarGancho(s.nvidiaKey, quadros, s.lang, filme.title, s.geminiKey, audio);
+          gancho = ((g && g.ganchos) || [])
+            .map(limparGancho)
+            .find(eGanchoValido);
+          if (!cena && g && g.cena) cena = g.cena;
+        } catch (e) {}
+      }
     }
     if (!gancho) {
       var poolVirais = [
