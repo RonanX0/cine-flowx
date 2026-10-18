@@ -107,7 +107,7 @@ check("o prompt não exige título duplicado entre parênteses", !html.includes(
 for (const f of ["app-pronto.html", "404.html"]) {
   check(`${f} é idêntico a index.html`, fs.readFileSync(path.join(root, f), "utf8") === html);
 }
-for (const nome of ["70-legenda-nvidia-tokens", "71-legenda-ug-orcamento", "72-legenda-normalizador", "73-legenda-completa", "74-legenda-aviso-corte", "75-legenda-pedido-completo"]) {
+for (const nome of ["67-legenda-gemini-orcamento", "68-legenda-nvidia-tokens", "69-legenda-ug-orcamento", "70-legenda-normalizador", "71-legenda-completa", "72-legenda-aviso-corte", "73-legenda-pedido-completo", "74-legenda-prompt-titulo", "75-legenda-exemplo-titulo"]) {
   const par = ["find", "replace"].map((e) => path.join(root, "tools", "patches", `${nome}.${e}`));
   check(`patch ${nome} versionado (find+replace)`, par.every((p) => fs.existsSync(p)));
 }
