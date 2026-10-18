@@ -177,10 +177,18 @@
     };
   }
 
+  function espalhar(q, n) {
+    q = (q || []).filter(Boolean);
+    if (q.length <= n) return q;
+    var saida = [];
+    for (var i = 0; i < n; i++) saida.push(q[Math.round((i * (q.length - 1)) / (n - 1))]);
+    return saida;
+  }
+
   async function perceber(h, o) {
     var op = o.opcoes || {};
     var gem = txt(op.geminiKey, 200);
-    var nv = txt(o.nvidiaKey, 200);
+    var alt = Prov.temAlgumaIA(o);
     var quadros = Array.isArray(o.frames) ? o.frames : [];
     var prompt = promptPercecao(o.identMode);
     var erro = null;
@@ -202,20 +210,33 @@
         if (r) return { provas: normalizarProvas(r), provedor: "gemini" };
       } catch (e) {
         erro = e;
-        if (!nv) throw e;
+        if (!alt) throw e;
       }
     }
-    if (nv && quadros.length) {
-      var r2 = json(await h.nvidiaVisao(nv, prompt, quadros, true));
-      if (r2) return { provas: normalizarProvas(r2), provedor: "nvidia" };
+    if (alt) {
+      // Sem Gemini (ou se ele falhou): o áudio vira texto no Whisper da Groq e os quadros vão para um modelo de visão.
+      var fala = "";
+      if (op.audioClip) {
+        try { fala = await Prov.transcrever(o, op.audioClip); } catch (e) {}
+      }
+      var p2 = prompt + (fala ? '\n\nTRANSCRIÇÃO AUTOMÁTICA DO ÁUDIO (feita por um programa; pode ter erros de nomes): "' + fala + '"\nUse-a para preencher "falas" e "nomes_ouvidos" — copie as falas como estão.' : "\n\n(Você não tem o áudio, só os quadros: não invente falas.)");
+      var r2 = null;
+      if (quadros.length || fala) {
+        r2 = json(await Prov.visao(o, p2, espalhar(quadros, 3), true));
+      }
+      if (r2) {
+        var provas = normalizarProvas(r2);
+        if (fala && !provas.falas.length) provas.falas = [fala.slice(0, 300)];
+        return { provas: provas, provedor: Prov.ultimo || "groq" };
+      }
     }
     if (erro) throw erro;
-    return { provas: normalizarProvas({}), provedor: gem ? "gemini" : "nvidia" };
+    return { provas: normalizarProvas({}), provedor: gem ? "gemini" : "groq" };
   }
 
   /* ------------------------------------------------------------- 2. pesquisa */
 
-  function promptPesquisa(p, pistas, modo) {
+  function promptPesquisa(p, pistas, modo, resultados) {
     var linhas = [];
     if (p.falas.length) linhas.push("- Falas ouvidas: " + p.falas.map(function (f) { return '"' + f + '"'; }).join(" | ") + (p.dublado ? " (parece dublado em português — a fala original deve ser outra; traduza para pesquisar)" : ""));
     if (p.nomes.length) linhas.push("- Nomes ditos/escritos: " + p.nomes.join(", "));
@@ -231,8 +252,9 @@
     if (pistas.dica) ext.push('- Dica do utilizador: "' + pistas.dica + '"');
     if (pistas.legenda) ext.push('- Legenda do post original' + (pistas.autor ? " (@" + String(pistas.autor).replace(/^@/, "") + ")" : "") + ': "' + pistas.legenda + '"');
     return (
-      "Você é um pesquisador de cinema e TV. Descubra de que FILME ou SÉRIE é este corte, usando a Pesquisa Google.\n\n" +
+      "Você é um pesquisador de cinema e TV. Descubra de que FILME ou SÉRIE é este corte, usando " + (resultados ? "os RESULTADOS DE BUSCA abaixo (e o que você sabe)" : "a Pesquisa Google") + ".\n\n" +
       "PROVAS TIRADAS DO VÍDEO:\n" + (linhas.join("\n") || "- (quase nenhuma prova)") + "\n" +
+      textoResultados(resultados) +
       (ext.length ? "\nPISTAS DE FORA (podem ajudar ou enganar — o nome do ficheiro às vezes é só do perfil ou do app):\n" + ext.join("\n") + "\n" : "") +
       "\nCOMO PESQUISAR:\n" +
       "1. Pesquise as falas entre aspas (no idioma original; se for dublado, traduza para inglês) junto com \"movie\", \"series\" ou \"quote\".\n" +
@@ -246,6 +268,47 @@
       "Responda SOMENTE com JSON válido:\n" +
       '{"candidatos": [{"titulo": "título em português do Brasil", "titulo_original": "", "ano": 0, "tipo": "movie ou tv", "temporada_episodio": "", "imdb_id": "", "confianca": 0, "provas": [""], "conflitos": [""]}]}'
     );
+  }
+
+  function textoResultados(resultados) {
+    if (!resultados || !resultados.length) return "";
+    var linhas = [];
+    resultados.forEach(function (r) {
+      if (!r.itens.length) return;
+      linhas.push('Busca: ' + r.q);
+      r.itens.slice(0, 5).forEach(function (it) { linhas.push("  • " + (it.titulo || "") + (it.trecho ? " — " + it.trecho : "")); });
+    });
+    return linhas.length ? "\nRESULTADOS DA BUSCA NA WEB (confira com as provas; ignore o que não bate):\n" + linhas.join("\n") + "\n" : "\n(A busca na web não trouxe resultados: use o que você sabe, com cautela.)\n";
+  }
+
+  /** Consultas para o Serper/DuckDuckGo, tiradas só das provas (sem IA). */
+  function montarConsultas(p, pistas) {
+    var q = [];
+    p.falas.slice(0, 2).forEach(function (f) {
+      var t = txt(f, 120);
+      if (t.split(" ").length >= 3) q.push('"' + t + '" movie OR series quote');
+    });
+    if (p.nomes.length) q.push(p.nomes.slice(0, 3).join(" ") + " characters movie OR series");
+    var atores = p.atores.filter(function (a) { return a.certeza >= 55; }).slice(0, 2).map(function (a) { return a.nome; });
+    if (atores.length) q.push(atores.join(" ") + " " + txt(p.ambiente || p.momento || p.roteiro, 70) + " movie scene");
+    if (p.texto) q.push(txt(p.texto, 80) + " filme");
+    if (pistas.dica) q.push(txt(pistas.dica, 80) + " filme série");
+    if (!q.length && p.roteiro) q.push(txt(p.roteiro, 110) + " movie scene");
+    var vistos = new Set();
+    return q.filter(function (x) { var k = norm(x); if (!k || vistos.has(k)) return false; vistos.add(k); return true; }).slice(0, 4);
+  }
+
+  /** Gemini mais forte (2.5 Pro) só nesta etapa — é onde o título certo se decide; o app cai no Flash se o Pro falhar. */
+  var MODELOS_GEMINI = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash-lite"];
+  async function geminiBusca(h, gem, partes) {
+    var forte = settingsAtuais().geminiBuscaForte !== false;
+    var antes = raiz.__ccGeminiModelos;
+    if (forte) raiz.__ccGeminiModelos = ["gemini-2.5-pro"].concat(MODELOS_GEMINI);
+    try {
+      return await h.gemini(gem, partes, true, true);
+    } finally {
+      raiz.__ccGeminiModelos = antes;
+    }
   }
 
   function normalizarCandidatos(v, origem) {
@@ -273,7 +336,7 @@
   async function pesquisar(h, o, provas) {
     var op = o.opcoes || {};
     var gem = txt(op.geminiKey, 200);
-    var nv = txt(o.nvidiaKey, 200);
+    var alt = Prov.temAlgumaIA(o);
     var pn = o.pistaNome;
     var pistas = {
       arquivo: pn && pn.titulo ? pn.titulo + (pn.ano ? " (" + pn.ano + ")" : "") : "",
@@ -282,16 +345,21 @@
       legenda: txt(op.legendaPost, 400),
       autor: txt(op.autorPost, 60),
     };
-    var prompt = promptPesquisa(provas, pistas, o.identMode);
     var r = null;
     if (gem) {
       try {
-        r = json(await h.gemini(gem, [{ text: prompt }], true, true));
+        r = json(await geminiBusca(h, gem, [{ text: promptPesquisa(provas, pistas, o.identMode) }]));
       } catch (e) {}
     }
-    if (!r && nv) {
+    if (!r && alt) {
+      // Sem a Pesquisa Google do Gemini: busca no Serper (ou DuckDuckGo) e a IA lê os resultados.
+      var chaves = Prov.chaves(o);
+      var consultas = montarConsultas(provas, pistas);
+      var resultados = await Promise.all(consultas.map(function (q) {
+        return Prov.buscar(q, chaves.serper).then(function (itens) { return { q: q, itens: itens }; }, function () { return { q: q, itens: [] }; });
+      }));
       try {
-        r = json(await h.nvidiaTexto(nv, prompt, true));
+        r = json(await Prov.texto(o, promptPesquisa(provas, pistas, o.identMode, resultados), true));
       } catch (e) {}
     }
     return normalizarCandidatos(r && r.candidatos, "pesquisa");
@@ -303,13 +371,12 @@
     o = o || {};
     var op = o.opcoes || {};
     var gem = txt(op.geminiKey, 200);
-    var nv = txt(o.nvidiaKey, 200);
     var pn = o.pistaNome || null;
-    if (!gem && !nv) {
+    if (!gem && !Prov.temAlgumaIA(o)) {
       if (pn && pn.titulo) {
         return montar({ provas: normalizarProvas({}), provedor: "dica" }, [candidatoDoArquivo(pn, 80)], o);
       }
-      throw new (h.Erro || Error)("Adiciona a tua chave Google Gemini (recomendada) ou NVIDIA nas configurações.");
+      throw new (h.Erro || Error)("Adiciona a tua chave Google Gemini (recomendada), Groq ou OpenRouter nas configurações.");
     }
 
     var visto = await perceber(h, o);
@@ -321,6 +388,19 @@
       candidatos.push({ titulo: p.titulo, titulo_original: p.titulo_original, ano: p.ano, tipo: p.tipo, confianca: 45, provas: p.motivo ? [p.motivo] : [], conflitos: [], origem: "palpite" });
     });
     if (pn && pn.titulo) candidatos.push(candidatoDoArquivo(pn, 40));
+    // O que o utilizador já corrigiu para este mesmo vídeo vale mais do que qualquer palpite da IA.
+    var lembrados = lembrar(op.fileName, visto.provas.falas);
+    if (lembrados.length) {
+      var rejeitados = new Set();
+      var certos = [];
+      lembrados.forEach(function (e) {
+        if (e.errado && e.errado.titulo) rejeitados.add(norm(e.errado.titulo));
+        certos.push({ titulo: e.certo.titulo, titulo_original: e.certo.original || e.certo.titulo, ano: e.certo.ano || 0, tipo: e.certo.tipo || "", confianca: 96, provas: ["Você já corrigiu este vídeo para este título", "Correção guardada pelo CineClip"], conflitos: [], origem: "memoria" });
+      });
+      certos.forEach(function (c) { rejeitados.delete(norm(c.titulo)); });
+      candidatos = candidatos.filter(function (c) { return !rejeitados.has(norm(c.titulo)) && !rejeitados.has(norm(c.titulo_original)); });
+      candidatos = certos.concat(candidatos);
+    }
     if (pn && Array.isArray(pn.alternativas)) {
       pn.alternativas.slice(0, 2).forEach(function (a) {
         candidatos.push({ titulo: a.titulo, titulo_original: a.titulo_original || a.titulo, ano: a.ano || 0, tipo: a.tipo || "", confianca: 25, provas: [], conflitos: [], origem: "arquivo" });
@@ -496,6 +576,7 @@
       var melhor = it.cands.reduce(function (m, c) { return (c.confianca || 0) > (m.confianca || 0) ? c : m; }, it.cands[0]);
       var t = (melhor.confianca || 40) * 0.5 - it.idx * 5 + (it.cands.length - 1) * 10;
       if (melhor.origem === "arquivo" && !temProvas) t += 25;
+      if (it.cands.some(function (c) { return c.origem === "memoria"; })) t += 140;
       t += it.exato ? 30 : 8;
       var a = melhor.ano, y = Number(it.item.year) || 0;
       if (a && y) {
@@ -544,6 +625,7 @@
     else if (provasOk === 1) conf = Math.max(base, 80);
     else if (temProvas && vencedor.creditos) conf = Math.min(base, 55);
     var doArquivo = vencedor.cands.some(function (c) { return c.origem === "arquivo"; });
+    if (vencedor.cands.some(function (c) { return c.origem === "memoria"; })) conf = Math.max(conf, 90);
     if (doArquivo && vencedor.exato && !temProvas) conf = Math.max(conf, 85);
     if (doArquivo && vencedor.exato && vencedor.cands.length > 1) conf = Math.max(conf, 90);
     conf = Math.round(Math.max(0, Math.min(99, conf)));
@@ -630,7 +712,8 @@
     );
   }
 
-  function promptEscrever(lang, cena, obra, instModo, evitar) {
+  function promptEscrever(lang, cena, obra, instModo, evitar, usuario) {
+    usuario = usuario || { bons: [], ruins: [] };
     var pt = lang === "pt-PT";
     var ctx = [];
     if (obra.titulo) ctx.push("Título: " + obra.titulo + (obra.ano ? " (" + obra.ano + ")" : ""));
@@ -652,7 +735,11 @@
       "- Usam o papel das pessoas (o policial, a detetive, o pai, a garota, o chefe), NUNCA nomes de personagens ou atores.\n" +
       "- São frases faladas, como " + (pt ? "um português" : "um brasileiro") + " escreveria no TikTok: 6 a 10 palavras, no máximo 52 caracteres, 1 emoji no fim.\n" +
       "- Variam o formato: situação tensa, revelação pela metade, pergunta para quem assiste, POV, contraste (\"Ele só queria X e acabou Y\"), aviso.\n\n" +
-      "EXEMPLOS DO ESTILO (são de OUTRAS cenas — não copie):\n- " + EXEMPLOS.join("\n- ") + "\n\n" +
+      (usuario.bons.length
+        ? "GANCHOS QUE O DONO DA PÁGINA APROVOU (são de OUTRAS cenas — imite o jeito, o ritmo e o tamanho, mas não copie):\n- " + usuario.bons.join("\n- ") + "\n\n"
+        : "") +
+      (usuario.bons.length < 5 ? "EXEMPLOS DO ESTILO (são de OUTRAS cenas — não copie):\n- " + EXEMPLOS.slice(0, usuario.bons.length ? 4 : EXEMPLOS.length).join("\n- ") + "\n\n" : "") +
+      (usuario.ruins.length ? "GANCHOS QUE O DONO DA PÁGINA REPROVOU (nunca escreva neste estilo):\n- " + usuario.ruins.join("\n- ") + "\n\n" : "") +
       "NUNCA ESCREVA:\n" +
       "- rótulos ou numeração (\"Momento:\", \"Gancho 1:\", \"1.\");\n" +
       "- descrições (\"A cena mostra…\", \"Nesta cena…\");\n" +
@@ -681,16 +768,17 @@
     );
   }
 
-  async function chamarTexto(h, gem, nv, prompt, jsonModo) {
+  async function chamarTexto(h, o, gem, prompt, jsonModo) {
+    var alt = Prov.temAlgumaIA(o);
     if (gem) {
       try {
         return await h.gemini(gem, [{ text: prompt }], false, jsonModo);
       } catch (e) {
-        if (!nv) throw e;
+        if (!alt) throw e;
       }
     }
-    if (nv) return await h.nvidiaTexto(nv, prompt, jsonModo);
-    throw new (h.Erro || Error)("Adiciona a tua chave Google Gemini ou NVIDIA nas configurações para gerar o gancho.");
+    if (alt) return await Prov.texto(o, prompt, jsonModo);
+    throw new (h.Erro || Error)("Adiciona a tua chave Google Gemini, Groq ou OpenRouter nas configurações para gerar o gancho.");
   }
 
   async function ganchos(h, o) {
@@ -699,7 +787,7 @@
     var modo = norm(ex.hookMode || ex.modo || o.modo || "auto").replace(/ /g, "_") || "auto";
     if (modo === "sem_gancho") return { cena: "", ganchos: [], modo: modo };
     var gem = txt(o.geminiKey, 200);
-    var nv = txt(o.nvidiaKey, 200);
+    var alt = Prov.temAlgumaIA(o);
     var quadros = Array.isArray(o.frames) ? o.frames : [];
     var obraObj = o.obra && typeof o.obra === "object" ? o.obra : null;
     var obra = {
@@ -731,8 +819,12 @@
             if (o.audio) partes.push({ inline_data: { mime_type: o.audio.mimeType, data: o.audio.base64 } });
           }
           r = json(await h.gemini(gem, partes, false, true));
-        } else if (nv && quadros.length) {
-          r = json(await h.nvidiaVisao(nv, promptCena(o.lang), quadros, true));
+        } else if (alt && (quadros.length || o.audio)) {
+          var falaAudio = "";
+          if (o.audio) { try { falaAudio = await Prov.transcrever(o, o.audio); } catch (e) {} }
+          var pc = promptCena(o.lang) + (falaAudio ? '\n\nTRANSCRIÇÃO AUTOMÁTICA DO ÁUDIO: "' + falaAudio + '"' : "");
+          r = json(await Prov.visao(o, pc, espalhar(quadros, 3), true));
+          if (r && falaAudio && !(r.falas && r.falas.length)) r.falas = [falaAudio.slice(0, 300)];
         }
         if (r) {
           cena.roteiro = txt(r.roteiro || r.cena, 900) || cena.roteiro;
@@ -741,14 +833,16 @@
           cena.falas = cena.falas || lista(r.falas, 4).join(" / ");
         }
       } catch (e) {
-        if (!cena.roteiro && !obra.sinopse && !nv && !gem) throw e;
+        if (!cena.roteiro && !obra.sinopse && !alt && !gem) throw e;
       }
     }
 
     // 2. Escrever 10.
     var instModo = modo !== "auto" && h.instrucaoModo ? txt(h.instrucaoModo(modo), 900).replace(/Crie 3 varia[cç][oõ]es/gi, "Crie variações") : "";
     var evitar = Array.isArray(ex.evitar) ? ex.evitar.slice(-8).map(function (x) { return txt(x, 80); }).filter(Boolean) : [];
-    var bruto = await chamarTexto(h, gem, nv, promptEscrever(o.lang, cena, obra, instModo, evitar), false);
+    var usuario = exemplosDoUsuario();
+    var bonsNorm = new Set(usuario.bons.map(norm));
+    var bruto = await chamarTexto(h, o, gem, promptEscrever(o.lang, cena, obra, instModo, evitar, usuario), false);
     var r2 = json(bruto);
     var escritos = r2 && Array.isArray(r2.ganchos)
       ? r2.ganchos
@@ -765,7 +859,7 @@
     escritos.forEach(function (g) {
       var s = limparGancho(h, g);
       var k = norm(s);
-      if (!k || vistos.has(k) || evitar.some(function (e) { return norm(e) === k; })) return;
+      if (!k || vistos.has(k) || bonsNorm.has(k) || evitar.some(function (e) { return norm(e) === k; })) return;
       if (!ganchoValido(h, s, proibidos)) return;
       vistos.add(k);
       candidatos.push(s);
@@ -780,7 +874,7 @@
     var ordem = candidatos.map(function (g, i) { return { g: g, i: i, nota: 0, fiel: 10 }; });
     if (candidatos.length > 1 && (cena.roteiro || cena.momento)) {
       try {
-        var r3 = json(await chamarTexto(h, gem, nv, promptJulgar(cena, candidatos), true));
+        var r3 = json(await chamarTexto(h, o, gem, promptJulgar(cena, candidatos), true));
         var notas = r3 && Array.isArray(r3.notas) ? r3.notas : [];
         notas.forEach(function (n) {
           var it = ordem[Number(n && n.i)];
@@ -806,11 +900,459 @@
     };
   }
 
+  /* ========================================================================
+   * PROVEDORES DE IA — Gemini (principal) → Groq (+Serper) → OpenRouter free (+DuckDuckGo)
+   *
+   * Groq e OpenRouter aceitam chamadas direto do browser. Serper e DuckDuckGo não
+   * (CORS), por isso, se a chamada direta falhar, o pedido vai pelo proxy do próprio
+   * site (/api/public/ia). Os modelos são descobertos pela lista da própria API
+   * (os nomes mudam), com uma lista de preferência e reserva.
+   * ====================================================================== */
+
+  var GROQ = "https://api.groq.com/openai/v1";
+  var OPENROUTER = "https://openrouter.ai/api/v1";
+  var cfgManual = {};
+  var cacheModelos = {};
+  var bloqueados = {};
+
+  function settingsAtuais() {
+    var s = {};
+    try {
+      var raw = raiz.localStorage && raiz.localStorage.getItem("cineclip.settings");
+      if (raw) s = JSON.parse(raw) || {};
+    } catch (e) {}
+    [raiz.__CineClipApp && raiz.__CineClipApp.settings, cfgManual].forEach(function (fonte) {
+      if (!fonte || typeof fonte !== "object") return;
+      Object.keys(fonte).forEach(function (k) {
+        if (fonte[k] != null && String(fonte[k]).trim() !== "") s[k] = fonte[k];
+      });
+    });
+    return s;
+  }
+  function chaveDe(nome, explicita) {
+    return txt(explicita || settingsAtuais()[nome], 300);
+  }
+  function erroHttp(msg, status, extra) {
+    var e = new Error(msg);
+    e.status = status || 0;
+    if (extra) e.retryAfter = extra;
+    return e;
+  }
+
+  async function http(url, init, opcoes) {
+    opcoes = opcoes || {};
+    var f = raiz.fetch ? raiz.fetch.bind(raiz) : fetch;
+    var ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    var timer = ctl ? setTimeout(function () { ctl.abort(); }, opcoes.timeout || 60000) : null;
+    var base = Object.assign({}, init || {});
+    if (ctl) base.signal = ctl.signal;
+    try {
+      var r;
+      try {
+        r = await f(url, base);
+      } catch (e) {
+        if (!opcoes.proxy || (e && e.name === "AbortError")) throw e;
+        r = await f("/api/public/ia", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: url, method: base.method || "POST", headers: base.headers || {}, body: base.body == null ? "" : base.body }),
+          signal: base.signal,
+        });
+      }
+      return r;
+    } catch (e) {
+      if (e && e.status) throw e;
+      throw erroHttp(e && e.name === "AbortError" ? "Tempo esgotado ao contactar " + (opcoes.nome || "o serviço") + "." : "Falha de rede ao contactar " + (opcoes.nome || "o serviço") + ".", 0);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+  async function ler(r, nome) {
+    if (r.ok) return r;
+    var corpo = "";
+    try { corpo = await r.text(); } catch (e) {}
+    var detalhe = "";
+    try { var j = JSON.parse(corpo); detalhe = (j.error && (j.error.message || j.error)) || j.message || ""; } catch (e) {}
+    var msg = r.status === 401 || r.status === 403 ? "A chave " + nome + " foi recusada (" + r.status + "). Confere se está certa." :
+      r.status === 429 ? nome + ": limite de pedidos atingido. Espera um pouco." :
+      r.status === 402 ? nome + ": sem créditos." :
+      nome + " respondeu " + r.status + (detalhe ? ": " + txt(detalhe, 160) : ".");
+    var ra = Number(r.headers && r.headers.get && r.headers.get("retry-after")) || 0;
+    throw erroHttp(msg, r.status, ra);
+  }
+
+  function ordenarPorPreferencia(ids, preferencias) {
+    var escolhidos = [];
+    preferencias.forEach(function (p) {
+      ids.forEach(function (id) {
+        if (escolhidos.indexOf(id) < 0 && (typeof p === "string" ? id === p : p.test(id))) escolhidos.push(id);
+      });
+    });
+    return escolhidos;
+  }
+
+  /* ---------------- Groq ---------------- */
+  var GROQ_TEXTO = ["openai/gpt-oss-120b", "llama-3.3-70b-versatile", "qwen/qwen3.8-27b", "openai/gpt-oss-20b", "llama-3.1-8b-instant"];
+  var GROQ_VISAO = ["qwen/qwen3.8-27b", "meta-models/muse-spark-open", "meta-llama/llama-4-scout-17b-16e-instruct", "meta-llama/llama-4-maverick-17b-128e-instruct", /vision|scout|maverick|-vl\b/i];
+  var GROQ_AUDIO = ["whisper-large-v3-turbo", "whisper-large-v3"];
+
+  async function groqModelos(chave) {
+    var c = cacheModelos.groq;
+    if (c && c.chave === chave && Date.now() - c.t < 600000) return c;
+    var ids = [];
+    try {
+      var r = await ler(await http(GROQ + "/models", { headers: { Authorization: "Bearer " + chave } }, { nome: "Groq", timeout: 20000 }), "Groq");
+      var d = await r.json();
+      ids = (d.data || []).map(function (m) { return m.id; }).filter(Boolean);
+    } catch (e) {
+      if (e.status === 401 || e.status === 403) throw e;
+    }
+    var c2 = {
+      chave: chave,
+      t: Date.now(),
+      texto: ids.length ? ordenarPorPreferencia(ids, GROQ_TEXTO) : GROQ_TEXTO.slice(0, 3),
+      visao: ids.length ? ordenarPorPreferencia(ids, GROQ_VISAO) : GROQ_VISAO.slice(0, 2),
+      audio: ids.length ? ordenarPorPreferencia(ids, GROQ_AUDIO) : GROQ_AUDIO.slice(),
+    };
+    if (!c2.texto.length) c2.texto = GROQ_TEXTO.slice(0, 3);
+    cacheModelos.groq = c2;
+    return c2;
+  }
+
+  function bloquear(modelo, segundos) {
+    bloqueados[modelo] = Date.now() + Math.max(15, Math.min(300, segundos || 60)) * 1000;
+  }
+  function livres(lista) {
+    var livre = lista.filter(function (m) { return !(bloqueados[m] > Date.now()); });
+    return livre.length ? livre : lista;
+  }
+
+  /** Chat compatível com OpenAI (Groq e OpenRouter). `mensagens` no formato OpenAI. */
+  async function chatOpenAI(base, nome, chave, modelos, mensagens, jsonModo, extraHeaders) {
+    var ultimo = null;
+    var lista = livres(modelos);
+    for (var i = 0; i < lista.length && i < 4; i++) {
+      var modelo = lista[i];
+      var corpo = { model: modelo, messages: mensagens, temperature: jsonModo ? 0.2 : 0.8, max_tokens: 2500 };
+      if (jsonModo) corpo.response_format = { type: "json_object" };
+      for (var tentativa = 0; tentativa < 2; tentativa++) {
+        try {
+          var headers = Object.assign({ "Content-Type": "application/json", Authorization: "Bearer " + chave }, extraHeaders || {});
+          var r = await ler(await http(base + "/chat/completions", { method: "POST", headers: headers, body: JSON.stringify(corpo) }, { nome: nome, timeout: 90000 }), nome);
+          var d = await r.json();
+          var ch = d && d.choices && d.choices[0];
+          var texto = (ch && ch.message && ch.message.content) || "";
+          if (Array.isArray(texto)) texto = texto.map(function (p) { return p && p.text || ""; }).join("");
+          texto = String(texto).replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+          if (!texto) throw erroHttp(nome + " devolveu uma resposta vazia.", 0);
+          return texto;
+        } catch (e) {
+          ultimo = e;
+          if (e.status === 401 || e.status === 403) throw e;
+          if (e.status === 400 && corpo.response_format) { delete corpo.response_format; continue; } // modelo sem modo JSON
+          if (e.status === 429) bloquear(modelo, e.retryAfter);
+          if (e.status === 404 || e.status === 402) bloquear(modelo, 600);
+          break;
+        }
+      }
+    }
+    throw ultimo || erroHttp(nome + ": não foi possível obter resposta.", 0);
+  }
+
+  function msgComImagens(prompt, quadros, max) {
+    var partes = [{ type: "text", text: prompt }];
+    (quadros || []).filter(Boolean).slice(0, max).forEach(function (q) {
+      partes.push({ type: "image_url", image_url: { url: q } });
+    });
+    return [{ role: "user", content: partes }];
+  }
+
+  async function groqTexto(chave, prompt, jsonModo) {
+    var m = await groqModelos(chave);
+    return chatOpenAI(GROQ, "Groq", chave, m.texto, [{ role: "user", content: prompt }], jsonModo);
+  }
+  async function groqVisao(chave, prompt, quadros, jsonModo) {
+    var m = await groqModelos(chave);
+    if (!m.visao.length) throw erroHttp("A tua conta Groq não lista nenhum modelo com visão.", 404);
+    // Os modelos de visão da Groq aceitam poucas imagens por pedido (3 no Qwen).
+    return chatOpenAI(GROQ, "Groq", chave, m.visao, msgComImagens(prompt, quadros, 3), jsonModo);
+  }
+
+  var EXT_AUDIO = { "audio/wav": "wav", "audio/x-wav": "wav", "audio/mpeg": "mp3", "audio/mp3": "mp3", "audio/mp4": "m4a", "audio/x-m4a": "m4a", "audio/aac": "m4a", "audio/webm": "webm", "audio/ogg": "ogg", "audio/flac": "flac" };
+
+  function bytesDeBase64(b64) {
+    var bin = atob(b64);
+    var u8 = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    return u8;
+  }
+  /** multipart/form-data montado à mão (funciona no browser e no servidor/jsdom). */
+  function multipart(campos, arquivo) {
+    var limite = "----cineclip" + Math.random().toString(16).slice(2);
+    var enc = new TextEncoder();
+    var partes = [];
+    Object.keys(campos).forEach(function (k) {
+      partes.push(enc.encode("--" + limite + '\r\nContent-Disposition: form-data; name="' + k + '"\r\n\r\n' + campos[k] + "\r\n"));
+    });
+    partes.push(enc.encode("--" + limite + '\r\nContent-Disposition: form-data; name="file"; filename="' + arquivo.nome + '"\r\nContent-Type: ' + arquivo.tipo + "\r\n\r\n"));
+    partes.push(arquivo.bytes);
+    partes.push(enc.encode("\r\n--" + limite + "--\r\n"));
+    var total = partes.reduce(function (n, p) { return n + p.length; }, 0);
+    var corpo = new Uint8Array(total);
+    var pos = 0;
+    partes.forEach(function (p) { corpo.set(p, pos); pos += p.length; });
+    return { corpo: corpo, tipo: "multipart/form-data; boundary=" + limite };
+  }
+
+  /** Whisper da Groq: devolve o texto falado no áudio (ou ""). */
+  async function groqTranscrever(chave, audio, idioma) {
+    if (!audio || !audio.base64) return "";
+    if (audio.base64.length > 33000000) return ""; // > ~24 MB: acima do limite grátis
+    var tipo = String(audio.mimeType || "audio/wav").split(";")[0].toLowerCase();
+    var ext = EXT_AUDIO[tipo] || "wav";
+    var bytes = bytesDeBase64(audio.base64);
+    var m = await groqModelos(chave);
+    var ultimo = null;
+    for (var i = 0; i < m.audio.length && i < 2; i++) {
+      try {
+        var campos = { model: m.audio[i], response_format: "json", temperature: "0" };
+        if (idioma) campos.language = idioma;
+        var mp = multipart(campos, { nome: "audio." + ext, tipo: tipo, bytes: bytes });
+        var r = await ler(await http(GROQ + "/audio/transcriptions", { method: "POST", headers: { Authorization: "Bearer " + chave, "Content-Type": mp.tipo }, body: mp.corpo }, { nome: "Groq", timeout: 90000 }), "Groq");
+        var d = await r.json();
+        return txt(d && d.text, 1500);
+      } catch (e) {
+        ultimo = e;
+        if (e.status === 401 || e.status === 403) throw e;
+      }
+    }
+    if (ultimo) throw ultimo;
+    return "";
+  }
+
+  /* ---------------- OpenRouter (modelos :free) ---------------- */
+  var OR_TEXTO_FIXOS = ["meta-llama/llama-3.3-70b-instruct:free", "openai/gpt-oss-120b:free", "google/gemma-3-27b-it:free"];
+  var OR_VISAO_FIXOS = ["google/gemma-3-27b-it:free", "nvidia/nemotron-3.5-super-vl:free"];
+  var OR_PREFERIDOS = [/llama-3\.3-70b/i, /gpt-oss-120b/i, /qwen.*(72|235|122|80|32)b/i, /deepseek/i, /gemma-3-27b/i, /nemotron/i];
+
+  async function orModelos() {
+    var c = cacheModelos.or;
+    if (c && Date.now() - c.t < 1800000) return c;
+    var texto = [], visao = [];
+    try {
+      var r = await ler(await http(OPENROUTER + "/models", {}, { nome: "OpenRouter", timeout: 25000 }), "OpenRouter");
+      var d = await r.json();
+      var livresLista = (d.data || []).filter(function (m) { return m && /:free$/.test(m.id || ""); });
+      var ids = livresLista.map(function (m) { return m.id; });
+      var porVisao = livresLista.filter(function (m) {
+        var im = m.architecture && m.architecture.input_modalities;
+        return Array.isArray(im) && im.indexOf("image") >= 0;
+      }).map(function (m) { return m.id; });
+      var porTexto = livresLista.filter(function (m) {
+        var im = m.architecture && m.architecture.input_modalities;
+        var om = m.architecture && m.architecture.output_modalities;
+        return (!Array.isArray(im) || im.indexOf("text") >= 0) && (!Array.isArray(om) || om.indexOf("text") >= 0);
+      }).map(function (m) { return m.id; });
+      var pref = ordenarPorPreferencia(porTexto, OR_PREFERIDOS);
+      texto = pref.concat(porTexto.filter(function (id) { return pref.indexOf(id) < 0; })).slice(0, 6);
+      visao = porVisao.slice(0, 5);
+      if (!ids.length) { texto = []; visao = []; }
+    } catch (e) {}
+    var c2 = { t: Date.now(), texto: texto.length ? texto : OR_TEXTO_FIXOS.slice(), visao: visao.length ? visao : OR_VISAO_FIXOS.slice() };
+    cacheModelos.or = c2;
+    return c2;
+  }
+  function orHeaders() {
+    var h = { "X-Title": "CineClip" };
+    try { if (raiz.location && /^https?:/.test(raiz.location.origin || "")) h["HTTP-Referer"] = raiz.location.origin; } catch (e) {}
+    return h;
+  }
+  async function orTexto(chave, prompt, jsonModo) {
+    var m = await orModelos();
+    return chatOpenAI(OPENROUTER, "OpenRouter", chave, m.texto, [{ role: "user", content: prompt }], jsonModo, orHeaders());
+  }
+  async function orVisao(chave, prompt, quadros, jsonModo) {
+    var m = await orModelos();
+    return chatOpenAI(OPENROUTER, "OpenRouter", chave, m.visao, msgComImagens(prompt, quadros, 4), jsonModo, orHeaders());
+  }
+
+  /* ---------------- Busca: Serper e DuckDuckGo ---------------- */
+  function limparHtml(s) {
+    return String(s || "")
+      .replace(/<[^>]+>/g, "")
+      .replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#x27;|&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&nbsp;/g, " ")
+      .replace(/\s+/g, " ").trim();
+  }
+  async function serperBuscar(chave, q) {
+    var r = await ler(await http("https://google.serper.dev/search", {
+      method: "POST",
+      headers: { "X-API-KEY": chave, "Content-Type": "application/json" },
+      body: JSON.stringify({ q: q, gl: "br", hl: "pt-br", num: 6 }),
+    }, { nome: "Serper", timeout: 25000, proxy: true }), "Serper");
+    var d = await r.json();
+    var saida = [];
+    if (d.answerBox) saida.push({ titulo: txt(d.answerBox.title, 120), trecho: txt(d.answerBox.snippet || d.answerBox.answer, 300) });
+    if (d.knowledgeGraph) saida.push({ titulo: txt(d.knowledgeGraph.title, 120) + (d.knowledgeGraph.type ? " (" + txt(d.knowledgeGraph.type, 40) + ")" : ""), trecho: txt(d.knowledgeGraph.description, 300) });
+    (d.organic || []).slice(0, 6).forEach(function (o) {
+      saida.push({ titulo: txt(o.title, 140), trecho: txt(o.snippet, 300) });
+    });
+    return saida.filter(function (x) { return x.titulo || x.trecho; });
+  }
+  async function ddgBuscar(q) {
+    var r = await ler(await http("https://html.duckduckgo.com/html/", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: "q=" + encodeURIComponent(q) + "&kl=br-pt",
+    }, { nome: "DuckDuckGo", timeout: 25000, proxy: true }), "DuckDuckGo");
+    var html = await r.text();
+    var saida = [];
+    var re = /<a[^>]+class="[^"]*result__a[^"]*"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<a[^>]+class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/a>/g;
+    var m;
+    while ((m = re.exec(html)) && saida.length < 6) {
+      saida.push({ titulo: txt(limparHtml(m[1]), 140), trecho: txt(limparHtml(m[2]), 300) });
+    }
+    return saida.filter(function (x) { return x.titulo || x.trecho; });
+  }
+  /** Serper quando há chave (resultado do Google); senão, ou se falhar, DuckDuckGo. */
+  async function buscar(q, serperKey) {
+    if (serperKey) {
+      try {
+        var a = await serperBuscar(serperKey, q);
+        if (a.length) return a;
+      } catch (e) {
+        if (e.status === 401 || e.status === 403) { /* chave errada: cai para o DuckDuckGo */ }
+      }
+    }
+    try { return await ddgBuscar(q); } catch (e) { return []; }
+  }
+
+  /* ---------------- Fachada usada pelo motor e pelo bundle ---------------- */
+  function chaves(o) {
+    o = o || {};
+    return { groq: chaveDe("groqKey", o.groqKey), openrouter: chaveDe("openrouterKey", o.openrouterKey), serper: chaveDe("serperKey", o.serperKey) };
+  }
+  function temAlgumaIA(o) {
+    var c = chaves(o);
+    return !!(c.groq || c.openrouter);
+  }
+
+  /** Texto: Groq → OpenRouter. */
+  async function textoAlternativo(o, prompt, jsonModo) {
+    var c = chaves(o), erro = null;
+    if (c.groq) { try { var t1 = await groqTexto(c.groq, prompt, jsonModo); Prov.ultimo = "groq"; return t1; } catch (e) { erro = e; } }
+    if (c.openrouter) { try { var t2 = await orTexto(c.openrouter, prompt, jsonModo); Prov.ultimo = "openrouter"; return t2; } catch (e) { erro = e; } }
+    throw erro || erroHttp("Adiciona uma chave Gemini, Groq ou OpenRouter nas configurações.", 401);
+  }
+  /** Visão: Groq → OpenRouter. */
+  async function visaoAlternativa(o, prompt, quadros, jsonModo) {
+    var c = chaves(o), erro = null;
+    if (!quadros || !quadros.length) return textoAlternativo(o, prompt, jsonModo);
+    if (c.groq) { try { var v1 = await groqVisao(c.groq, prompt, quadros, jsonModo); Prov.ultimo = "groq"; return v1; } catch (e) { erro = e; } }
+    if (c.openrouter) { try { var v2 = await orVisao(c.openrouter, prompt, quadros, jsonModo); Prov.ultimo = "openrouter"; return v2; } catch (e) { erro = e; } }
+    throw erro || erroHttp("Adiciona uma chave Gemini, Groq ou OpenRouter nas configurações.", 401);
+  }
+
+  async function testarChave(qual, chave) {
+    chave = txt(chave, 300);
+    if (!chave) throw new Error("Cola a chave primeiro.");
+    if (qual === "groq") {
+      if (!/^gsk_/.test(chave)) throw new Error('A chave Groq começa por "gsk_".');
+      var m = await groqModelos(chave);
+      if (!m.texto.length) throw new Error("A chave funciona, mas a conta não lista modelos.");
+    } else if (qual === "openrouter") {
+      if (!/^sk-or-/.test(chave)) throw new Error('A chave OpenRouter começa por "sk-or-".');
+      await ler(await http(OPENROUTER + "/key", { headers: { Authorization: "Bearer " + chave } }, { nome: "OpenRouter", timeout: 25000 }), "OpenRouter");
+    } else if (qual === "serper") {
+      var r = await serperBuscar(chave, "cinema");
+      if (!r) throw new Error("Sem resposta do Serper.");
+    }
+    return true;
+  }
+
+  var Prov = {
+    configurar: function (s) { cfgManual = s && typeof s === "object" ? s : {}; },
+    chaves: chaves,
+    temAlgumaIA: temAlgumaIA,
+    texto: textoAlternativo,
+    visao: visaoAlternativa,
+    transcrever: function (o, audio, idioma) {
+      var c = chaves(o);
+      return c.groq ? groqTranscrever(c.groq, audio, idioma) : Promise.resolve("");
+    },
+    buscar: buscar,
+    testar: testarChave,
+    _interno: { groqModelos: groqModelos, orModelos: orModelos, ddgBuscar: ddgBuscar, serperBuscar: serperBuscar, multipart: multipart, limpar: function () { cacheModelos = {}; bloqueados = {}; } },
+  };
+
+  /* ------------------------------------------- exemplos de ganchos do utilizador */
+  function linhasDe(v, max) {
+    return String(v == null ? "" : v).split(/\r?\n/).map(function (l) { return txt(l.replace(/^[\s\-•*\d.)]+/, ""), 90); }).filter(Boolean).slice(0, max);
+  }
+  function exemplosDoUsuario() {
+    var s = settingsAtuais();
+    return { bons: linhasDe(s.ganchosBons, 12), ruins: linhasDe(s.ganchosRuins, 8) };
+  }
+
+  /* ------------------------------------------------ memória de correções (aprender) */
+  var CHAVE_MEMORIA = "cineclip.motor.memoria";
+  function lerMemoria() {
+    try {
+      var m = JSON.parse(raiz.localStorage.getItem(CHAVE_MEMORIA) || "[]");
+      return Array.isArray(m) ? m : [];
+    } catch (e) { return []; }
+  }
+  function gravarMemoria(m) {
+    try { raiz.localStorage.setItem(CHAVE_MEMORIA, JSON.stringify(m.slice(-200))); } catch (e) {}
+  }
+  /** Chaves que identificam "o mesmo vídeo" entre sessões: nome do ficheiro e primeira fala. */
+  function chavesMemoria(fileName, fala) {
+    var ks = [];
+    var f = norm(String(fileName || "").replace(/\.[a-z0-9]{2,4}$/i, "").replace(/_(cineclip|clean)$/i, ""));
+    if (f.length >= 6 && !/^(video|corte|cena|tiktok|kwai|download|snaptik|ssstik)\b/.test(f)) ks.push("f:" + f);
+    var l = norm(Array.isArray(fala) ? fala[0] : fala).split(" ").slice(0, 10).join(" ");
+    if (l.length >= 18) ks.push("l:" + l);
+    return ks;
+  }
+  function lembrar(fileName, fala) {
+    var ks = chavesMemoria(fileName, fala);
+    if (!ks.length) return [];
+    return lerMemoria().filter(function (e) { return e.k.some(function (k) { return ks.indexOf(k) >= 0; }); });
+  }
+  /**
+   * Chamado quando o utilizador escolhe o filme à mão (ex.: "Não é esse (pesquisar)").
+   * Guarda "este vídeo é X (e não Y)": da próxima vez que o mesmo vídeo aparecer, X sobe e Y desce.
+   */
+  function aprender(info) {
+    try {
+      info = info || {};
+      var certo = info.certo || {};
+      var titulo = txt(certo.title || certo.titulo, 140);
+      if (!titulo) return false;
+      var ia = info.ia || {};
+      var ks = chavesMemoria(info.arquivo, ia.fala_do_audio || ia.falas);
+      if (!ks.length) return false;
+      var errado = info.errado && (info.errado.title || info.errado.titulo) ? { titulo: txt(info.errado.title || info.errado.titulo, 140), ano: ano(info.errado.year || info.errado.ano) } : null;
+      if (errado && norm(errado.titulo) === norm(titulo)) errado = null;
+      var m = lerMemoria().filter(function (e) { return !e.k.some(function (k) { return ks.indexOf(k) >= 0; }); });
+      m.push({
+        k: ks,
+        certo: { titulo: titulo, original: txt(certo.original || certo.original_title, 140), ano: ano(certo.year || certo.ano), tipo: tipo(certo.kind || certo.tipo || certo.media_type), id: certo.id || null },
+        errado: errado,
+        t: Date.now(),
+      });
+      gravarMemoria(m);
+      return true;
+    } catch (e) { return false; }
+  }
+
   raiz.CineClipMotor = {
     versao: VERSAO,
     identificar: identificar,
     escolher: escolher,
     ganchos: ganchos,
-    _interno: { json: json, norm: norm, normalizarProvas: normalizarProvas, limparGancho: limparGancho, ganchoValido: ganchoValido, atorBate: atorBate, nomeBate: nomeBate, promptPercecao: promptPercecao, promptPesquisa: promptPesquisa, promptEscrever: promptEscrever },
+    aprender: aprender,
+    configurar: function (s) { Prov.configurar(s); },
+    prov: Prov,
+    _interno: { json: json, norm: norm, normalizarProvas: normalizarProvas, limparGancho: limparGancho, ganchoValido: ganchoValido, atorBate: atorBate, nomeBate: nomeBate, promptPercecao: promptPercecao, promptPesquisa: promptPesquisa, promptEscrever: promptEscrever, montarConsultas: montarConsultas, lembrar: lembrar, exemplosDoUsuario: exemplosDoUsuario },
   };
 })(typeof window !== "undefined" ? window : globalThis);

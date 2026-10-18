@@ -75,7 +75,7 @@ function celular({ copiado = "", permissao = "prompt", bloquear = false, logado 
   const fila = [];
   lote.ambiente.app = () => ({
     logado,
-    settings: { nvidiaKey: "nv", tmdbKey: "tm" },
+    settings: { groqKey: "nv", tmdbKey: "tm" },
     account: { id: "acc", name: "@conta", dailySlots: ["12:00"] },
     atualizarFila() {},
     sincronizar: async () => { reg.sincronizacoes++; },

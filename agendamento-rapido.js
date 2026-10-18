@@ -348,8 +348,8 @@
     if (!app.account || !app.account.id) return "Escolhe uma conta do Instagram no topo do app.";
     var modoIdent = (estado.opcoes && estado.opcoes.modoIdentificacao) || s.identMode || "auto";
     if (!estado.opcoes.identificar || modoIdent === "sem_id") return null;
-    var temIA = !!String(s.nvidiaKey || "").trim() || !!String(s.geminiKey || "").trim();
-    if (!temIA && modoIdent !== "dica") return "Desliga «Identificar o filme com IA» ou adiciona a chave NVIDIA/Gemini nas configurações.";
+    var temIA = !!String(s.groqKey || "").trim() || !!String(s.openrouterKey || "").trim() || !!String(s.geminiKey || "").trim();
+    if (!temIA && modoIdent !== "dica") return "Desliga «Identificar o filme com IA» ou adiciona a chave Gemini/Groq/OpenRouter nas configurações.";
     if (!String(s.tmdbKey || "").trim()) return "Desliga «Identificar o filme com IA» ou adiciona a chave TMDB nas configurações — é ela que traz a capa.";
     return null;
   }
@@ -466,7 +466,7 @@
         ia = cacheHit.ia;
         filme = cacheHit.filme;
       } else {
-        ia = await core.identificar(s.nvidiaKey, quadros, s.lang || "pt-PT", {
+        ia = await core.identificar(s.groqKey, quadros, s.lang || "pt-PT", {
           useFileNameHint: s.useFileNameHint !== false,
           fileName: ficheiro.name,
           metaTitle: titulo !== "Reels" ? titulo : "",
@@ -547,7 +547,7 @@
       if (!item.legendaManual) {
         definirPasso(item, "A escrever a legenda…", 0.6);
         try {
-          legenda = await core.gerarLegenda(s.nvidiaKey, filme, s.lang || "pt-PT", {
+          legenda = await core.gerarLegenda(s.groqKey, filme, s.lang || "pt-PT", {
             cena: ia.cena || "",
             geminiKey: s.geminiKey,
           });

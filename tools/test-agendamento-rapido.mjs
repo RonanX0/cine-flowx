@@ -122,7 +122,7 @@ function cenario(window, opcoes = {}) {
     guardarHistorico: () => { chamadas.historico++; },
   };
   const app = {
-    settings: Object.assign({ nvidiaKey: "nv-key", geminiKey: "", tmdbKey: "tmdb-key", lang: "pt-BR" }, opcoes.settings || {}),
+    settings: Object.assign({ groqKey: "nv-key", geminiKey: "", tmdbKey: "tmdb-key", lang: "pt-BR" }, opcoes.settings || {}),
     account: { id: "acc_cena", name: "@cena.rapida", dailySlots: ["12:00", "18:00"] },
     accounts: [],
     atualizarFila: () => { chamadas.atualizarFila++; },
@@ -178,7 +178,7 @@ console.log("\nA2. Com a IA desligada: só legenda, sem capa");
 {
   const dom = await novoDom();
   const { window } = dom;
-  const c = cenario(window, { settings: { nvidiaKey: "", tmdbKey: "" } });
+  const c = cenario(window, { settings: { groqKey: "", tmdbKey: "" } });
   c.rapido.estado.opcoes.identificar = false;
   c.rapido.adicionarFicheiros([ficheiro(window, "cena-epica.mp4")]);
   await c.rapido.iniciar();
@@ -271,8 +271,8 @@ console.log("\nA8. O que falta configurar");
 {
   const dom = await novoDom();
   const { window } = dom;
-  const c = cenario(window, { settings: { nvidiaKey: "", tmdbKey: "" } });
-  check("sem chaves e com a IA ligada, diz o que falta", /chave NVIDIA\/Gemini/.test(c.rapido.faltaConfigurar() || ""), c.rapido.faltaConfigurar());
+  const c = cenario(window, { settings: { groqKey: "", tmdbKey: "" } });
+  check("sem chaves e com a IA ligada, diz o que falta", /chave Gemini\/Groq\/OpenRouter/.test(c.rapido.faltaConfigurar() || ""), c.rapido.faltaConfigurar());
   c.rapido.estado.opcoes.identificar = false;
   check("com a IA desligada, não falta nada", c.rapido.faltaConfigurar() === null, String(c.rapido.faltaConfigurar()));
   dom.window.close();
@@ -373,7 +373,7 @@ rapido.ambiente.core = () => Object.assign({}, coreReal, {
   gerarLegenda: async (k, filme) => `**${filme.title}** é incrível`,
 });
 rapido.ambiente.app = () => Object.assign({}, window.__CineClipApp, {
-  settings: Object.assign({}, window.__CineClipApp.settings, { nvidiaKey: "nv", tmdbKey: "tm" }),
+  settings: Object.assign({}, window.__CineClipApp.settings, { groqKey: "nv", tmdbKey: "tm" }),
 });
 await rapido.iniciar();
 

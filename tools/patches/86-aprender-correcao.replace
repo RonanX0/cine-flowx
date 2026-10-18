@@ -1,0 +1,1 @@
+bn=async F=>{try{const ue=await pg(S.tmdbKey,F);try{window.CineClipMotor&&window.CineClipMotor.aprender({certo:ue,errado:Pe,arquivo:X&&X.name,ia:bt})}catch(_){}Bt(ue),B(!1),Se("")}

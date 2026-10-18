@@ -202,8 +202,11 @@ async function fetchFalso(url, opts = {}) {
     return new Response(bytes, { status: 200, headers: { "content-type": "video/mp4", "content-length": String(bytes.length) } });
   }
   if (u.hostname === "www.tikwm.com") return json(200, { code: -1, msg: "não usado" });
-  // NVIDIA (pelo proxy do site)
-  if (u.origin === cfg.SITE && u.pathname === "/api/public/nvidia") {
+  // Groq (a chave está nas definições do cofre; chamada direta, sem proxy)
+  if (u.hostname === "api.groq.com" && u.pathname.endsWith("/models")) {
+    return json(200, { data: ["openai/gpt-oss-120b", "llama-3.3-70b-versatile", "qwen/qwen3.8-27b", "whisper-large-v3-turbo"].map((id) => ({ id })) });
+  }
+  if (u.hostname === "api.groq.com" && u.pathname.endsWith("/chat/completions")) {
     const corpo = JSON.parse(opts.body || "{}");
     const texto = JSON.stringify(corpo.messages);
     pedidosIA.push(texto.slice(0, 200));
@@ -248,7 +251,7 @@ const primeiroHorario = app.core.proximoHorario([], CONTA.dailySlots, CONTA.id);
 nuvem.cofre = cifrar({
   version: 1,
   updatedAt: agora,
-  settings: { nvidiaKey: "nv-teste", geminiKey: "", tmdbKey: "tmdb-teste", lang: "pt-BR", resolution: "720", overlayText: "O que acontece nessa cena deixou todo mundo em choque 😳", bold: true },
+  settings: { groqKey: "nv-teste", geminiKey: "", tmdbKey: "tmdb-teste", lang: "pt-BR", resolution: "720", overlayText: "O que acontece nessa cena deixou todo mundo em choque 😳", bold: true },
   accounts: [{ id: "acc_outra", name: "@outra", dailySlots: ["09:00"] }, CONTA],
   activeAccountId: "acc_outra",
   queue: [{ id: "reel_existente", accountId: "acc_cena", status: "scheduled", scheduledAt: primeiroHorario, title: "Já agendado", createdAt: agora }],
@@ -291,7 +294,7 @@ check("pouca certeza → «revisar», sem Reel", links.lk_duvida.estado === "rev
 check("vídeo apagado → «erro» com o motivo", links.lk_apagado.estado === "erro" && /não existe/.test(links.lk_apagado.erro || ""), links.lk_apagado.erro);
 check("o Reel existente continua lá", cofre.queue.some((r) => r.id === "reel_existente"));
 check("sinal de vida para o app («☁️ Servidor ligado»)", !!nuvem.claims[`cc_${cfg.VAULT_HASH}_servidor_nuvem`] && nuvem.claims[`cc_${cfg.VAULT_HASH}_servidor_nuvem`].owner === "servidor:teste");
-check("a IA foi chamada pelo proxy do site", pedidosIA.length >= 2);
+check("a IA foi chamada (Groq)", pedidosIA.length >= 2);
 
 /* ------------------------------------------------------------------ 4 */
 console.log("\n4. O vídeo que vai para o Instagram");

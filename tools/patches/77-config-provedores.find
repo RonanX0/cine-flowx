@@ -1,0 +1,1 @@
+d.jsx(_c,{id:"nv",label:"Chave da API NVIDIA (opcional se usar Gemini)",help:"Obter em build.nvidia.com",helpUrl:"https://build.nvidia.com/settings/api-keys",placeholder:"nvapi-...",value:c.nvidiaKey,onChange:f=>u({...c,nvidiaKey:f}),test:Qb}),

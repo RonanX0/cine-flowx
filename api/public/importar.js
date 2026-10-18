@@ -1,5 +1,5 @@
 import { Readable } from "node:stream";
-import { nvidiaCorsHeadersFor, nvidiaForbiddenOrigin } from "../../server/nvidia-proxy.mjs";
+import { iaCorsHeadersFor, iaForbiddenOrigin } from "../../server/ia-proxy.mjs";
 import { abrirVideo, ErroImportacao, LIMITE_BYTES, nomeDoFicheiro, resolverVideo } from "../../server/importar-video.mjs";
 
 /**
@@ -11,12 +11,12 @@ import { abrirVideo, ErroImportacao, LIMITE_BYTES, nomeDoFicheiro, resolverVideo
 export default async function handler(req, res, deps = {}) {
   const fetchFn = deps.fetchFn || fetch;
   const headers = req.headers || {};
-  const cors = nvidiaCorsHeadersFor(headers.origin, headers.host || headers["x-forwarded-host"]);
+  const cors = iaCorsHeadersFor(headers.origin, headers.host || headers["x-forwarded-host"]);
 
   if (!cors) {
-    Object.entries(nvidiaForbiddenOrigin.headers).forEach(([n, v]) => res.setHeader(n, v));
-    res.statusCode = nvidiaForbiddenOrigin.status;
-    return res.end(nvidiaForbiddenOrigin.body);
+    Object.entries(iaForbiddenOrigin.headers).forEach(([n, v]) => res.setHeader(n, v));
+    res.statusCode = iaForbiddenOrigin.status;
+    return res.end(iaForbiddenOrigin.body);
   }
   Object.entries({
     ...cors,

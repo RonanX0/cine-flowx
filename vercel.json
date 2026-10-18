@@ -23,8 +23,8 @@
     "api/public/importar.js": {
       "maxDuration": 60
     },
-    "api/public/nvidia.js": {
-      "maxDuration": 90
+    "api/public/ia.js": {
+      "maxDuration": 60
     },
     "api/nuvem.js": {
       "maxDuration": 300,
