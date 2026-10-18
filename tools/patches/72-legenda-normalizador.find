@@ -1,0 +1,5 @@
+function rS(r,o,a){const i=r.replace(/\r/g,"").replace(/```[a-z]*\n?/g,"").trim().split(`
+`).join(`
+`).split(/\n\s*\n/).map(p=>p.trim()).filter(Boolean),c=i.filter(p=>!/^QUER ASSISTIR/i.test(p)&&!p.startsWith("🎬")&&!/^#/.test(p));let u=((i.slice().reverse().find(p=>/^#/.test(p))??"").match(/#[\p{L}\p{N}_]+/gu)??[]).slice(0,4);u.length||(u=["#"+a.original.replace(/[^\p{L}\p{N}]/gu,""),a.kind==="tv"?"#Series":"#Filme"]);const f=c.map(p=>p.replace(/🎬/g,"").replace(/\n/g," "));return[o,`🎬 ${a.title} (${a.original})`,...f,u.join(" ")].join(`
+
+`)}

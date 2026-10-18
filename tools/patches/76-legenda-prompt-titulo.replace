@@ -1,0 +1,13 @@
+${_ccLinhaTituloLegenda(o)}
+
+{Parágrafo 1}
+
+{Parágrafo 2}
+
+{Parágrafo 3}
+
+#Hashtag1 #Hashtag2 #Hashtag3 #Hashtag4
+
+REGRAS:
+- Primeira linha literalmente: "${f}"
+- Linha do título exatamente: "${_ccLinhaTituloLegenda(o)}"

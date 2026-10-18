@@ -107,6 +107,38 @@ com `video_metadata`. O mesmo vídeo é reutilizado entre a identificação e o 
 upload). Se o upload falhar (CORS, rede, ficheiro gigante), o fluxo cai automaticamente para
 os frames + áudio como antes; o caminho NVIDIA continua a usar frames.
 
+### ✍️ A legenda (Passo 3) — porque é que ela saía incompleta
+
+A legenda é escrita pela IA (`gerarLegenda`) e depois **normalizada** para o formato fixo
+(`CTA` → `🎬 título (original)` → 3 parágrafos → linha de hashtags). Há três pontos que a partiam, e
+todos estão fechados:
+
+- **o normalizador apagava parágrafos**: descartava o bloco *inteiro* que começasse por
+  `QUER ASSISTIR`, `🎬` ou `#`. Se o modelo colasse o Parágrafo 1 à primeira linha (sem
+  linha em branco no meio) a legenda chegava ao Passo 3 **mais curta do que a IA escreveu**.
+  Agora as linhas de serviço são removidas linha a linha e o corpo é sempre preservado
+  (`tools/patches/72-legenda-normalizador`). Vantagens extras: o préâmbulo do modelo
+  ("Claro! Aqui está a legenda:") deixa de entrar no texto, os rótulos markdown
+  ("**Gancho:**") são limpos, as hashtags espalhadas pelo corpo vão todas para a última
+  linha (sem repetidas, máximo 4) e `título (título)` duplicado deixa de ser escrito.
+- **limite de tokens**: a NVIDIA recebia `max_tokens: 1200` para uma legenda de 200–280
+  palavras + CTA + hashtags — cortava a meio de uma frase. Passou a 4000 (e 8000 na
+  retentativa) (`70`/`71`). O `finishReason` do Gemini (`MAX_TOKENS`) e o `finish_reason`
+  da NVIDIA (`length`) passam a ser lidos (`68`).
+- **ninguém dava por isso**: nem o `MAX_TOKENS` nem uma legenda a meio do fraseado eram
+  detetados, e o Passo 3 dizia "Legenda gerada!". Agora `_ccLegendaIncompleta` verifica a
+  estrutura (parágrafos, contagem de palavras, frase terminada); se estiver corta, o app
+  **pede uma vez mais** com a ordem explícita de não cortar nada e fica com a melhor das
+  duas (`73`/`75`). Se mesmo assim vier incompleta, o aviso diz porquê (limite de tokens
+  ou formato) em vez de um sucesso falso (`74`); se vier só conversa em vez de legenda,
+  isso é um erro e não uma legenda agendada.
+
+Limite do Instagram: **2200 caracteres** por legenda. O contador embaixo do editor do
+Passo 3 mostra caracteres/palavras/hashtags e fica a vermelho fora do alvo.
+
+Testes: `npm run legenda:test` (bundle real em jsdom, IA fingida: corte, retentativa,
+normalização e orçamento de tokens).
+
 ### 🔗 Importar do TikTok ou do Kwai
 
 No painel do upload em massa há uma caixa para **colar links** do TikTok ou do Kwai (um por
@@ -402,6 +434,7 @@ npm test               # nuvem + worker + robô 24h + proxy NVIDIA + Instagram +
 npm run cloudflare:renovar # renova o Worker na Cloudflare e verifica o que ficou online
 npm run build          # gera dist/ para deploy estático
 npm run patch:full     # reconstrói/verifica o bundle e reaplica os patches
+npm run legenda:test     # legenda completa: normalizador, orçamento de tokens e retentativa
 npm run patch:agendador # regenera e aplica o layout do Agendador (tools/agendador-ui/)
 ```
 

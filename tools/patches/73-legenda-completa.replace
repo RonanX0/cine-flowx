@@ -1,0 +1,15 @@
+if(!h)h=await ug(x,g,!1,lg,4000);
+let _ccLeg=rS(h||"",f,o);
+if(_ccLegendaIncompleta(_ccLeg).incompleta){
+  /* Chegou cortada (limite de tokens, parágrafo a meio do fraseado ou o formato
+     a faltar). Pede UMA vez mais, com a ordem explícita de não cortar nada e —
+     só na NVIDIA — com mais espaço. Se a segunda vier melhor, fica a segunda;
+     senão fica a primeira, para nunca se perder uma resposta utilizável. */
+  let _ccH2="";_ccCortado=!1;
+  if(v)try{_ccH2=await ju(v,[{text:g+_ccPedidoCompleto}],!1,!1)}catch(_){_ccH2=""}
+  if(!_ccH2&&x)try{_ccH2=await ug(x,g+_ccPedidoCompleto,!1,lg,8000)}catch(_){_ccH2=""}
+  const _ccL2=_ccH2?rS(_ccH2,f,o):"";
+  if(_ccL2&&(!_ccLegendaIncompleta(_ccL2).incompleta||_ccPalavras(_ccL2)>_ccPalavras(_ccLeg)))_ccLeg=_ccL2;
+}
+if(_ccLegendaIncompleta(_ccLeg).palavras<20)throw new ft("A IA não devolveu a legenda (resposta vazia ou cortada no limite de tokens). Tenta de novo — ou liga a outra chave (Google Gemini / NVIDIA) nas configurações.");
+return _ccLeg}

@@ -1,0 +1,5 @@
+/* A legenda é o texto mais longo que o app pede (200–280 palavras + a linha de
+   CTA + as hashtags): os 1200 tokens de sempre ficavam juste e a resposta vinha
+   cortada ao meio sem que nada o dissesse. 4000 dá margem a qualquer modelo da
+   lista, e o finish_reason "length" passa a marcar _ccCortado. */
+async function qc(r,o,a=!1,i=lg[0],c=4000){var v,x,h;const u=ig(r),p=await(await Ka("NVIDIA","/api/public/nvidia",{method:"POST",headers:{"Content-Type":"application/json",Authorization:`Bearer ${u}`},body:JSON.stringify({model:i,messages:[{role:"user",content:o}],temperature:a?.15:.65,max_tokens:a?800:c})},9e4)).json(),_ccNf=_ccMarcarCorte(((p==null?void 0:p.choices)==null?void 0:p.choices[0].finishReason)||""),g=((h=

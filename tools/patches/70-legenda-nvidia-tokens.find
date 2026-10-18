@@ -1,0 +1,1 @@
+async function qc(r,o,a=!1,i=lg[0],c=1200){var v,x,h;const u=ig(r),p=await(await Ka("NVIDIA","/api/public/nvidia",{method:"POST",headers:{"Content-Type":"application/json",Authorization:`Bearer ${u}`},body:JSON.stringify({model:i,messages:[{role:"user",content:o}],temperature:a?.15:.65,max_tokens:a?800:c})},9e4)).json(),g=((h=

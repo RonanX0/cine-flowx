@@ -1,0 +1,4 @@
+/* Reforço enviado na retentativa da legenda: diz ao modelo, sem ambiguidades,
+   que a resposta tem de vir inteira e enumera as peças obrigatórias. */
+const _ccPedidoCompleto="\n\nATENÇÃO — NÃO CORTES A RESPOSTA: a legenda tem de vir COMPLETA, por esta ordem e sem faltar nenhuma peça: (1) a primeira linha literal, (2) a linha \"🎬 título (título original)\", (3) o Parágrafo 1 completo, (4) o Parágrafo 2 completo, (5) o Parágrafo 3 completo e (6) a última linha com exatamente 4 hashtags. Se precisares de encurtar, encurta as frases dentro de cada parágrafo — nunca saltes um parágrafo. Não escrevas introduções, explicações nem pedidos de desculpa: só a legenda final.";
+async function oS(r,o,a,i){var w;

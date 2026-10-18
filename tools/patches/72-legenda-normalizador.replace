@@ -1,0 +1,74 @@
+/* ==========================================================================
+   Legenda — normalizador (substitui o rS do bundle).
+
+   O formato fixo passa a ser imposto LINHA A LINHA. Antes, qualquer bloco que
+   começasse por "QUER ASSISTIR", "🎬" ou "#" era apagado INTEIRO: se o modelo
+   colava o Parágrafo 1 à primeira linha (sem linha em branco por meio), ou
+   punha o título e o parágrafo no mesmo bloco, o parágrafo desaparecia e a
+   legenda chegava ao Passo 3 mais curta do que aquilo que a IA escreveu.
+   Em paralelo: as introduções do modelo ("Claro! Aqui está a legenda:"), os
+   rótulos markdown ("**Gancho:**") e as hashtags espalhadas pelo corpo passam
+   a ser limpas linha a linha, e as hashtags vão sempre para a última linha
+   (no máximo 4, sem repetidas).
+   ========================================================================== */
+const _ccHashtagRe=/#[\p{L}\p{N}_]+/gu;
+const _ccLegendaServico=/^(claro|certo|com certeza|sem problema|aqui tens|aqui tem|aqui está|aqui esta|aqui ficam|aqui seguem|segue a legenda|segue abaixo|legenda final|legenda gerada|legenda pronta|legenda sugerida|desculpa|sinto muito|não (consigo|consego|posso|me é possível)|nota:|observação:|dica:|resposta:|output:|texto final)/i;
+const _ccLegendaRotulo=/^\**\s*(gancho|par[áa]grafo(s)?\s*\d*|p\d+|bloco\s*\d+|sec[cç][ãa]o\s*\d*|corpo|fecho|encerramento|cta|hashtags?|tags?)\s*\**\s*[:\-–—]\s*\**\s*/i;
+const _ccLegendaTituloLinha=/^🎬\s*[^.!?\n]{1,100}$/;
+function _ccPalavras(r){const t=String(r==null?"":r).trim();return t?t.split(/\s+/).length:0}
+function _ccLegendaTags(r){return String(r==null?"":r).match(_ccHashtagRe)||[]}
+function _ccLinhaTituloLegenda(r){
+  const t=String(r&&r.title||"").trim(),o=String(r&&r.original||"").trim();
+  return "🎬 "+(t||"Clipe de filme")+(o&&o!==t?" ("+o+")":"");
+}
+function rS(r,o,a){
+  const titulo=_ccLinhaTituloLegenda(a),cta=String(o==null?"":o).trim();
+  const bruto=String(r==null?"":r).replace(/\r/g,"").replace(/```[a-z]*\n?/g,"");
+  const corpo=[],tags=[],vistos=new Set();
+  for(const bloco of bruto.split(/\n\s*\n/)){
+    const mantidas=[];
+    for(const linha of bloco.split("\n")){
+      let l=String(linha||"").trim()
+        .replace(/^(?:#{1,6}\s+|>\s*|[-*•]\s+)+/,"")
+        .replace(_ccLegendaRotulo,"")
+        .replace(/^\**\s*[:\-–—]\s*\**\s*/,"")
+        .trim();
+      if(!l)continue;
+      if(/^QUER ASSISTIR/i.test(l))continue;
+      if(l===titulo||_ccLegendaTituloLinha.test(l))continue;
+      if(l.length<=90&&_ccLegendaServico.test(l))continue;
+      const achadas=l.match(_ccHashtagRe)||[];
+      for(const tag of achadas){const k=tag.toLowerCase();if(!vistos.has(k)){vistos.add(k);tags.push(tag)}}
+      const resto=l.replace(_ccHashtagRe," ").replace(/🎬/g," ").replace(/\s+/g," ").trim();
+      if(resto)mantidas.push(resto);
+    }
+    if(!mantidas.length)continue;
+    const par=mantidas.join(" ").replace(/\s+/g," ").trim();
+    if(par&&corpo.indexOf(par)<0)corpo.push(par);
+  }
+  let finais=tags.slice(0,4);
+  if(finais.length<2){
+    const base=String(a&&(a.original||a.title)||"Filme").replace(/[^\p{L}\p{N}]/gu,"");
+    finais=[...new Set([].concat(finais,[base?"#"+base:"",a&&a.kind==="tv"?"#Series":"#Filme"]))].filter(t=>t&&t.length>1).slice(0,4);
+  }
+  return [cta||"QUER ASSISTIR A ESTE FILME? LINK NA BIO! 🎬",titulo].concat(corpo,[finais.join(" ")]).join("\n\n");
+}
+/* Está completa? — é o que dispara a retentativa e o aviso do Passo 3. Um
+   corte por falta de tokens deixa quase sempre menos de três parágrafos, uma
+   contagem de palavras muito abaixo do pedido (200–280) e a última frase a
+   meio. Um "sim" errado custa só uma chamada extra, um "não" errado publica a
+   legenda cortada. */
+function _ccLegendaIncompleta(r){
+  const t=String(r==null?"":r).trim(),blocos=t.split(/\n\s*\n/).map(x=>x.trim()).filter(Boolean);
+  const corpo=blocos.filter(x=>!/^QUER ASSISTIR/i.test(x)&&!/^🎬/.test(x)&&!/^#/.test(x));
+  const palavras=_ccPalavras(corpo.join(" ")),ultimo=corpo.length?corpo[corpo.length-1].trim():"";
+  const semFim=ultimo.length>30&&_ccPalavras(ultimo)<70&&!/[.!?:…”"')\]]$/.test(ultimo);
+  return {palavras,tags:_ccLegendaTags(t).length,blocos:corpo.length,semFim,incompleta:!t||corpo.length<3||palavras<120||semFim&&palavras<170};
+}
+
+/* _ccCortado passa a 1 quando a última resposta da IA foi CORTADA no limite de
+   tokens ("MAX_TOKENS" no Gemini, finish_reason "length" na NVIDIA). É o que
+   falta para o app deixar de tratar uma legenda truncada como sucesso. */
+let _ccCortado=!1;
+function _ccLerCorte(){const v=_ccCortado;_ccCortado=!1;return v}
+function _ccMarcarCorte(t){const f=String(t||"");if(f==="MAX_TOKENS"||f==="length")_ccCortado=!0;return f}
