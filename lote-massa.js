@@ -920,10 +920,15 @@
             personagens: ia.personagens,
             textoTela: ia.texto_na_tela,
             sinopse: filme && filme.overview ? filme.overview : "",
+            momento: ia.momento_forte || "",
+            emocao: ia.emocao || "",
+            atores: ia.atores || [],
             evitar: ganchosJaUsados.slice(-8),
             hookMode: modoGancho,
           };
-          var g = await core.gerarGancho(s.nvidiaKey, quadros, s.lang, filme.title, s.geminiKey, audio, videoIA, contextoGancho);
+          // Com o roteiro da cena já visto na identificação, o gancho não precisa de rever o vídeo.
+          var jaViuCena = String(cena || "").length >= 60;
+          var g = await core.gerarGancho(s.nvidiaKey, jaViuCena ? [] : quadros, s.lang, filme && filme.id ? filme : filme.title, s.geminiKey, jaViuCena ? null : audio, jaViuCena ? null : videoIA, contextoGancho);
           gancho = ((g && g.ganchos) || [])
             .map(limparGancho)
             .find(eGanchoValido);

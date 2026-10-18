@@ -115,7 +115,7 @@ export function criarTrabalhador({ cfg, app, pastaDados, registo: guardaRegisto,
       return { largura: s.largura, altura: s.altura, duracao: s.duracao };
     };
     lote.estado.opcoes.agendarComPoucaCerteza = !!cfg.AGENDAR_POUCA_CERTEZA || !!(entrada && entrada.forcar);
-    const item = { id: "nuvem", ficheiro, nome: ficheiro.name, bytes: ficheiro.size, estado: "a_processar", passo: "", progresso: 0, erro: "", resultado: null };
+    const item = { id: "nuvem_" + ((entrada && entrada.id) || Date.now()), ficheiro, nome: ficheiro.name, bytes: ficheiro.size, estado: "a_processar", passo: "", progresso: 0, erro: "", resultado: null };
     const reel = await lote.processarItem(item, conta);
     return { reel: reel || reels[0], resultado: item.resultado };
   }
@@ -194,6 +194,18 @@ export function criarTrabalhador({ cfg, app, pastaDados, registo: guardaRegisto,
       const { reel } = await processarComOApp(ficheiro, cofre, conta, entrada);
       if (!reel) throw new Error("O fluxo terminou sem Reel.");
       const final = reel.videoBlob;
+      if (!final || !final.caminho) {
+        // O app reconheceu o vídeo (mesmo conteúdo) como já agendado e devolveu esse Reel:
+        // não há vídeo novo para enviar — só liga o link a ele.
+        if (reel.id && (reel.remoteVideoUrl || (cofre.queue || []).some((r) => r && r.id === reel.id))) {
+          await alterarCofre((c) => marcarLink(c, entrada.id, "feito", { reelId: reel.id }));
+          delete registo.tentativas[entrada.id];
+          await gravarRegisto(registo);
+          log(`  ↺ já estava agendado: "${reel.title || reel.id}"`);
+          return;
+        }
+        throw new Error("O vídeo final não foi gerado.");
+      }
       const bytes = await fs.promises.readFile(final.caminho);
       const enviado = await enviarVideoR2(cfg, bytes, reel.videoFileName, { fetchFn });
       const pronto = { ...reel, remoteVideoUrl: enviado.url, cloudProvider: "r2", videoSize: bytes.length, origem: "nuvem", linkOrigem: entrada.url, updatedAt: agora() };

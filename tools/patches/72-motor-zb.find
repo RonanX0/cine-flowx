@@ -1,0 +1,2 @@
+  const u=a==="pt-PT"?"Escreve os campos 'cena' e 'ganchos' em Português de Portugal.":"Escreva os campos 'cena' e 'ganchos' em Português do Brasil.";
+  const focoDialogo=

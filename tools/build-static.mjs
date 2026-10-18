@@ -42,7 +42,7 @@ const appPath = path.join(root, "index.html");
 const PAGINAS = ["index.html", "app-pronto.html", "404.html"];
 /** Ficheiros copiados tal e qual. */
 const ESTATICOS = [
-  "nuvem-duravel.js", "lote-massa.js", "agendamento-rapido.js", "_redirects", "_headers",
+  "nuvem-duravel.js", "motor-ia.js", "lote-massa.js", "agendamento-rapido.js", "_redirects", "_headers",
   // App instalável no Android (menu Compartilhar do TikTok/Kwai)
   "manifest.webmanifest", "sw.js", "icone-192.png", "icone-512.png", "icone-maskable-512.png",
 ];
@@ -50,6 +50,8 @@ const ESTATICOS = [
 const TAG_NUVEM = '<script src="nuvem-duravel.js"></script>';
 /** Upload em massa (código legível fora do bundle) — também com cache-busting. */
 const TAG_LOTE = '<script src="lote-massa.js"></script>';
+/** Motor de identificação e ganchos (código legível fora do bundle) — idem. */
+const TAG_MOTOR = '<script src="motor-ia.js"></script>';
 /** Aba «⚡ Agendamento rápido» (código legível fora do bundle) — idem. */
 const TAG_RAPIDO = '<script src="agendamento-rapido.js"></script>';
 
@@ -89,6 +91,7 @@ function descobrirVersao(fallback) {
 
 const hashNuvem = hash(fs.readFileSync(path.join(root, "nuvem-duravel.js")));
 const hashLote = hash(fs.readFileSync(path.join(root, "lote-massa.js")));
+const hashMotor = hash(fs.readFileSync(path.join(root, "motor-ia.js")));
 const hashRapido = hash(fs.readFileSync(path.join(root, "agendamento-rapido.js")));
 const hashApp = hash(html);
 const versao = descobrirVersao(hashApp);
@@ -112,6 +115,7 @@ const carimbo = {
   app: hashApp,
   nuvem: hashNuvem,
   lote: hashLote,
+  motor: hashMotor,
   rapido: hashRapido,
   ig2207077: temCorrecao2207077,
 };
@@ -127,6 +131,7 @@ const scriptCarimbo =
 function prepararPagina(fonte) {
   return fonte
     .replace(TAG_NUVEM, `${scriptCarimbo}\n    <script src="nuvem-duravel.js?v=${hashNuvem}"></script>`)
+    .replace(TAG_MOTOR, `<script src="motor-ia.js?v=${hashMotor}"></script>`)
     .replace(TAG_LOTE, `<script src="lote-massa.js?v=${hashLote}"></script>`)
     .replace(TAG_RAPIDO, `<script src="agendamento-rapido.js?v=${hashRapido}"></script>`);
 }
