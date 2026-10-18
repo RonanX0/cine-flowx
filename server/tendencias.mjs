@@ -119,17 +119,36 @@ function normalizar(v, origem, agoraMs) {
   return item;
 }
 
+const UA =
+  "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36";
+
+/** Diz o motivo REAL da falha (rede, bloqueio, HTTP) em vez de um genérico «sem ligação». */
+function motivoDaFalha(e) {
+  if (e && (e.name === "TimeoutError" || e.name === "AbortError")) return "demorou demais";
+  const causa = e && e.cause && (e.cause.code || e.cause.message);
+  return "rede: " + String((causa || (e && e.message) || "falhou")).slice(0, 80);
+}
+
 async function pedirJson(url, fetchFn) {
   let ultimo = "sem resposta";
   for (let tentativa = 0; tentativa < 2; tentativa++) {
     try {
-      const r = await fetchFn(url, { headers: { "User-Agent": "Mozilla/5.0 (compatible; CineClip/1.0)", Accept: "application/json" }, signal: AbortSignal.timeout(TIMEOUT_MS) });
-      const j = await r.json();
+      const r = await fetchFn(url, {
+        headers: { "User-Agent": UA, Accept: "application/json, text/plain, */*", Referer: TIKWM + "/", "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8" },
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      });
+      const texto = await r.text();
+      let j = null;
+      try {
+        j = JSON.parse(texto);
+      } catch {}
       if (j && j.code === 0 && j.data) return j.data;
-      ultimo = (j && j.msg) || `código ${j && j.code}`;
+      if (j) ultimo = j.msg || `código ${j.code}`;
+      else if (/cloudflare|just a moment|captcha|challenge/i.test(texto)) ultimo = `bloqueado pelo anti-robô (HTTP ${r.status})`;
+      else ultimo = `resposta inesperada (HTTP ${r.status})`;
       if (!/limit|second|frequen/i.test(ultimo)) break;
     } catch (e) {
-      ultimo = e && e.name === "TimeoutError" ? "demorou demais" : "sem ligação";
+      ultimo = motivoDaFalha(e);
     }
     await esperar(PAUSA_MS + 400);
   }
