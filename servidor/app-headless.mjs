@@ -30,7 +30,7 @@ export async function arrancarApp({ site = "https://cine-flowx.vercel.app", raiz
   try {
     Object.defineProperty(window, "crypto", { value: globalThis.crypto, configurable: true });
   } catch {}
-  // As chamadas do app (NVIDIA pelo proxy /api/public/nvidia, Gemini, TMDB) saem do
+  // As chamadas do app (busca pelo proxy /api/public/ia, Groq, OpenRouter, Gemini, TMDB) saem do
   // servidor; os endereços relativos resolvem-se contra o site publicado.
   window.fetch = (url, opts) => fetchFn(new URL(String(url), site + "/").toString(), opts);
   window.AbortSignal = globalThis.AbortSignal;

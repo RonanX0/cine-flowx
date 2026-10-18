@@ -140,7 +140,7 @@ function cenario(window, opcoes = {}) {
     ganchoPadrao: "O que acontece nessa cena deixou todo mundo em choque 😳",
   };
   const app = {
-    settings: Object.assign({ nvidiaKey: "nv-key", geminiKey: "", tmdbKey: "tmdb-key", lang: "pt-BR", resolution: "720", overlayText: "Texto padrão" }, opcoes.settings || {}),
+    settings: Object.assign({ groqKey: "nv-key", geminiKey: "", tmdbKey: "tmdb-key", lang: "pt-BR", resolution: "720", overlayText: "Texto padrão" }, opcoes.settings || {}),
     account: { id: "acc_cena", name: "@cena.oculta", dailySlots: slots },
     accounts: [],
     atualizarFila: () => { chamadas.atualizarFila++; },
@@ -270,13 +270,13 @@ console.log("\nA3b. Modo Sem Identificação (sem_id) + Modo Sem Gancho (sem_gan
 console.log("\nA4. Chaves em falta");
 {
   const dom = novoDom();
-  const c = cenario(dom.window, { settings: { nvidiaKey: "", geminiKey: "", tmdbKey: "" } });
+  const c = cenario(dom.window, { settings: { groqKey: "", geminiKey: "", tmdbKey: "" } });
   dom.window.CineLote.abrir();
   c.lote.adicionarFicheiros([ficheiro(dom.window, "longo.mp4")]);
   await c.lote.iniciar();
   check("não processa nada", c.chamadas.identificar === 0 && c.fila.length === 0);
   const texto = dom.window.document.querySelector(".cl-painel").textContent;
-  check("explica que falta a chave da IA", /chave NVIDIA ou Google Gemini/.test(texto));
+  check("explica que falta a chave da IA", /chave Google Gemini, Groq ou OpenRouter/.test(texto));
   check("oferece «Abrir configurações»", /Abrir configurações/.test(texto));
   const c2 = cenario(dom.window, { settings: { tmdbKey: "" } });
   check("explica que falta a chave TMDB", /chave TMDB/.test(c2.lote.faltaConfigurar() || ""));
@@ -424,7 +424,7 @@ lote.ambiente.core = () => Object.assign({}, coreReal, {
   gerarLegenda: async (k, filme) => `**${filme.title}** é incrível`,
 });
 lote.ambiente.app = () => Object.assign({}, window.__CineClipApp, {
-  settings: Object.assign({}, window.__CineClipApp.settings, { nvidiaKey: "nv", tmdbKey: "tm" }),
+  settings: Object.assign({}, window.__CineClipApp.settings, { groqKey: "nv", tmdbKey: "tm" }),
 });
 await lote.iniciar();
 

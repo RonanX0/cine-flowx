@@ -5,7 +5,7 @@
  * Estúdio faz passo a passo:
  *
  *   1. lê o vídeo e usa só os primeiros 90 segundos;
- *   2. identifica o filme/série com a IA (NVIDIA/Gemini) + TMDB;
+ *   2. identifica o filme/série com a IA (Gemini/Groq/OpenRouter) + TMDB;
  *   3. cria um gancho (texto do topo) com a IA a partir da cena;
  *   4. limpa os metadados e formata em 9:16 com o gancho (FFmpeg);
  *   5. gera a legenda com a IA;
@@ -615,8 +615,8 @@
     if (!core || !app) return "O app ainda está a carregar. Tenta de novo dentro de alguns segundos.";
     var s = app.settings || {};
     var modoIdent = (estado.opcoes && estado.opcoes.modoIdentificacao) || s.identMode || "auto";
-    var temIA = !!String(s.nvidiaKey || "").trim() || !!String(s.geminiKey || "").trim();
-    if (!temIA && modoIdent !== "sem_id") return "Adiciona a tua chave NVIDIA ou Google Gemini nas configurações — a IA identifica o filme e cria o gancho e a legenda.";
+    var temIA = !!String(s.groqKey || "").trim() || !!String(s.openrouterKey || "").trim() || !!String(s.geminiKey || "").trim();
+    if (!temIA && modoIdent !== "sem_id") return "Adiciona a tua chave Google Gemini, Groq ou OpenRouter nas configurações — a IA identifica o filme e cria o gancho e a legenda.";
     if (!String(s.tmdbKey || "").trim() && modoIdent !== "sem_id") return "Adiciona a tua chave TMDB nas configurações — é ela que confirma o filme e traz o pôster e a sinopse.";
     if (!app.account || !app.account.id) return "Escolhe uma conta do Instagram no topo do app.";
     return null;
@@ -664,6 +664,8 @@
       ? ctx.agendarComPoucaCerteza
       : !!(estado.opcoes && estado.opcoes.agendarComPoucaCerteza);
     var s = app.settings || {};
+    // Chaves de Groq/OpenRouter/Serper e exemplos de ganchos: o motor lê-as daqui (no servidor não há localStorage do app).
+    try { if (window.CineClipMotor && window.CineClipMotor.configurar) window.CineClipMotor.configurar(s); } catch (e) {}
     var modoIdent = (ctx && ctx.modoIdentificacao) || (estado.opcoes && estado.opcoes.modoIdentificacao) || s.identMode || "auto";
     var modoGancho = (ctx && ctx.modoGancho) || (estado.opcoes && estado.opcoes.modoGancho) || s.hookMode || "auto";
     var ficheiro = item.ficheiro;
@@ -793,7 +795,7 @@
         identMode: modoIdent,
         hookMode: modoGancho,
       };
-      ia = await core.identificar(s.nvidiaKey, quadros, s.lang, optsIdent);
+      ia = await core.identificar(s.groqKey, quadros, s.lang, optsIdent);
       if (!ia || (!ia.titulo && !(ia.atores && ia.atores.length) && !ia.imdb_id)) {
         if (permitirPoucaCerteza) {
           var fallbackTit = dicaLink || tituloMetadados || baseLimpo || "Cena de Filme";
@@ -808,7 +810,7 @@
       if (!filme && ia && ia.provedor === "dica" && modoIdent === "dica") {
         definirPasso(item, "Nome não encontrado — a analisar o vídeo…", 0.12);
         try {
-          var iaCompleta = await core.identificar(s.nvidiaKey, quadros, s.lang, Object.assign({}, optsIdent, { identMode: "auto" }));
+          var iaCompleta = await core.identificar(s.groqKey, quadros, s.lang, Object.assign({}, optsIdent, { identMode: "auto" }));
           if (iaCompleta && (iaCompleta.titulo || iaCompleta.imdb_id || (iaCompleta.atores && iaCompleta.atores.length))) {
             ia = iaCompleta;
             filme = await core.procurarTmdb(s.tmdbKey, ia);
@@ -928,7 +930,7 @@
           };
           // Com o roteiro da cena já visto na identificação, o gancho não precisa de rever o vídeo.
           var jaViuCena = String(cena || "").length >= 60;
-          var g = await core.gerarGancho(s.nvidiaKey, jaViuCena ? [] : quadros, s.lang, filme && filme.id ? filme : filme.title, s.geminiKey, jaViuCena ? null : audio, jaViuCena ? null : videoIA, contextoGancho);
+          var g = await core.gerarGancho(s.groqKey, jaViuCena ? [] : quadros, s.lang, filme && filme.id ? filme : filme.title, s.geminiKey, jaViuCena ? null : audio, jaViuCena ? null : videoIA, contextoGancho);
           gancho = ((g && g.ganchos) || [])
             .map(limparGancho)
             .find(eGanchoValido);
@@ -970,7 +972,7 @@
 
     /* 5. Legenda ------------------------------------------------------------- */
     definirPasso(item, "A escrever a legenda…", 0.88);
-    var legenda = await core.gerarLegenda(s.nvidiaKey, filme, s.lang, {
+    var legenda = await core.gerarLegenda(s.groqKey, filme, s.lang, {
       cena: cena,
       hookText: gancho,
       geminiKey: s.geminiKey,

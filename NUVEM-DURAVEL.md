@@ -480,7 +480,7 @@ npm run worker:test   # 72 verificações do Worker REAL (cloudflare/r2-worker.j
                       # /v/:key (bytes, Range 206, HEAD, 304, 404) e a coerência do wrangler.toml
 npm test              # inclui os testes das claims no cliente: R2 (mock), Drive, modo
                       # compatível, expiração/takeover, dono errado a tentar libertar,
-                      # backend antigo — além do proxy NVIDIA, publicação IG e build
+                      # backend antigo — além do proxy de busca, publicação IG e build
 ```
 
 > ⚠️ **Se já tens o Worker instalado, faz `npx wrangler deploy` outra vez.** Até à versão

@@ -103,7 +103,7 @@ function ligar(window, { semApp = false } = {}) {
   const fila = [];
   const reg = { baixados: [], sincronizacoes: 0, processados: [] };
   const app = {
-    settings: { nvidiaKey: "nv", tmdbKey: "tm", lang: "pt-BR", resolution: "720" },
+    settings: { groqKey: "nv", tmdbKey: "tm", lang: "pt-BR", resolution: "720" },
     account: { id: "acc", name: "@conta", dailySlots: ["12:00"] },
     atualizarFila() {},
     sincronizar: async () => { reg.sincronizacoes++; },

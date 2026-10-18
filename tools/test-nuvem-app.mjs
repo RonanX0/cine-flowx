@@ -67,7 +67,7 @@ function celular({ url = "https://cine-flowx.vercel.app/", servidor = true, opco
   const fila = [];
   lote.ambiente.app = () => ({
     logado: true,
-    settings: { nvidiaKey: "nv", tmdbKey: "tm" },
+    settings: { groqKey: "nv", tmdbKey: "tm" },
     account: { id: "acc_cena", name: "@cena.oculta", dailySlots: ["12:00"] },
     atualizarFila() {},
     sincronizar: async () => { reg.sincronizacoes++; reg.ordem.push("sincronizar"); },

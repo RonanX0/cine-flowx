@@ -290,7 +290,7 @@ if (!JSDOM) {
   const { window } = dom;
   window.eval(fs.readFileSync(path.join(root, "lote-massa.js"), "utf8"));
   const lote = window.CineLote._interno;
-  lote.ambiente.app = () => ({ settings: { nvidiaKey: "k", tmdbKey: "t" }, account: { id: "acc", name: "@conta" } });
+  lote.ambiente.app = () => ({ settings: { groqKey: "k", tmdbKey: "t" }, account: { id: "acc", name: "@conta" } });
   lote.ambiente.core = () => ({});
   const pedidos = [];
   lote.ambiente.baixarLink = async (link, progresso) => {

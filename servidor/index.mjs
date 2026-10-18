@@ -105,7 +105,7 @@ async function testar() {
   else mal("sem Cloudflare R2: o servidor precisa dele para guardar os vídeos");
   if (cofre) {
     const s = cofre.settings || {};
-    s.nvidiaKey || s.geminiKey ? ok("chave de IA (NVIDIA/Gemini)") : mal("sem chave NVIDIA nem Gemini nas definições do app");
+    s.geminiKey || s.groqKey || s.openrouterKey ? ok("chave de IA (Gemini/Groq/OpenRouter)") : mal("sem chave Gemini, Groq nem OpenRouter nas definições do app");
     s.tmdbKey ? ok("chave TMDB") : mal("sem chave TMDB nas definições do app");
     ok(`${(cofre.accounts || []).length} conta(s) do Instagram`);
     const espera = (cofre.linksCelular || []).filter((e) => e.destino === "nuvem" && e.estado === "pendente").length;

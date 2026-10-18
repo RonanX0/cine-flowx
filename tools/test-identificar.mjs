@@ -81,7 +81,7 @@ const fetchFalso = async (url, opts) => {
     }
     return json({ models: [{ name: "models/gemini-2.5-flash", supportedGenerationMethods: ["generateContent"] }] });
   }
-  if (u.pathname === "/api/public/nvidia") return json({ choices: [{ message: { content: "{}" } }] });
+  if (u.pathname === "/api/public/ia") return json({ choices: [{ message: { content: "{}" } }] });
   return json({});
 };
 

@@ -1,6 +1,6 @@
 # CineClip 🎬
 
-Aplicação web **100% no navegador** que limpa metadados de vídeos, corta até 2:30, formata em **9:16** com texto de *hook* no topo, identifica o filme/série via **NVIDIA Vision + TMDB** (ou com o Gemini a *assistir ao vídeo*) e gera uma legenda pronta para publicar.
+Aplicação web **100% no navegador** que limpa metadados de vídeos, corta até 2:30, formata em **9:16** com texto de *hook* no topo, identifica o filme/série via **Gemini (ou Groq / OpenRouter grátis) + TMDB** (ou com o Gemini a *assistir ao vídeo*) e gera uma legenda pronta para publicar.
 
 ## Estrutura do Projeto
 
@@ -12,8 +12,8 @@ Aplicação web **100% no navegador** que limpa metadados de vídeos, corta até
 - `apps-script/cineclip-cloud-drive.js` e `cloudflare/r2-worker.js` — backends do Google Drive e Cloudflare R2
 - `tools/` — servidor de preview, mocks, testes e ferramentas para reaplicar os patches do bundle
 - `tools/renovar-cloudflare.mjs` — renova o backend Cloudflare (`npm run cloudflare:renovar`):deploy + verificação do link `/v/:key`, das claims e do espaço no R2
-- `vite.config.ts` — servidor de desenvolvimento e proxy local para NVIDIA
-- `api/public/nvidia.js` e `netlify/functions/nvidia.mjs` — proxy NVIDIA para deploys Vercel e Netlify (CORS só para o próprio domínio e localhost; para outros domínios define `ALLOWED_ORIGINS` no painel da Vercel/Netlify)
+- `vite.config.ts` — servidor de desenvolvimento
+- `api/public/ia.js` e `netlify/functions/ia.mjs` — proxy só para as buscas (Serper e DuckDuckGo, que não aceitam CORS) nos deploys Vercel e Netlify (CORS só para o próprio domínio e localhost; para outros domínios define `ALLOWED_ORIGINS` no painel da Vercel/Netlify)
 - `_headers` (Netlify / Cloudflare Pages), `netlify.toml` e `vercel.json` — revalidação do HTML, para um deploy novo não ficar preso na cache do browser
 
 ## Como executar localmente
@@ -38,8 +38,8 @@ npm run preview
 > ao browser — ver *[Ainda apanhas o 2207077?](#ainda-apanhas-o-2207077-confirma-que-estás-na-versão-nova)*.
 > Para testar o app com mocks locais da nuvem em `/drive-api` e `/cloud-api`, usa
 > `npm run nuvem`; esse servidor não precisa de `npm install`. Vercel e Netlify têm proxy
-> NVIDIA incluído. GitHub Pages serve apenas arquivos estáticos e não executa `/api/`; a
-> identificação que depende da NVIDIA precisa de um backend em Vercel/Netlify (ou outro host).
+> busca (Serper/DuckDuckGo) incluída. GitHub Pages serve apenas arquivos estáticos e não executa `/api/`; a
+> busca na web (Serper/DuckDuckGo) precisa de um backend em Vercel/Netlify (ou outro host).
 
 ## 🎨 Formatação do Reel (presets)
 
@@ -94,7 +94,7 @@ vez; o painel pode ser fechado (fica um atalho no canto) e o botão **Parar** in
   rever (*Abrir no Estúdio*), a não ser que ligues *Agendar mesmo com pouca certeza*.
 - Vídeos em **H.265/HEVC** (comuns nos downloads do TikTok) dão erro claro: o navegador não
   consegue ler a imagem. Converte-os para H.264 antes.
-- Precisa das chaves NVIDIA ou Gemini e TMDB nas configurações.
+- Precisa de uma chave de IA (Gemini, Groq ou OpenRouter) e da TMDB nas configurações. Ordem: Gemini → Groq (+ Serper) → OpenRouter free (+ DuckDuckGo).
 
 ### 🎬 A IA assiste ao vídeo (Gemini File API)
 
@@ -105,7 +105,7 @@ enviar o **vídeo em si** (File API: upload do ficheiro uma vez, até 2 GB) em v
 queimadas, atores e ação — só o intervalo escolhido (ex.: os primeiros 90 s) é contabilizado
 com `video_metadata`. O mesmo vídeo é reutilizado entre a identificação e o gancho (cache do
 upload). Se o upload falhar (CORS, rede, ficheiro gigante), o fluxo cai automaticamente para
-os frames + áudio como antes; o caminho NVIDIA continua a usar frames.
+os frames + áudio como antes; os caminhos Groq/OpenRouter usam até 3 quadros + a transcrição do áudio (Whisper da Groq).
 
 ### 🔗 Importar do TikTok ou do Kwai
 
@@ -118,7 +118,7 @@ descarrega cada vídeo e ele entra na lista do lote como se tivesse sido escolhi
 - **Kwai:** procura o `.mp4` na página. O Kwai não tem forma oficial de fazer isto e pode
   mudar a página a qualquer momento.
 - Segurança: só aceita links do TikTok/Kwai e só descarrega dos servidores dessas plataformas;
-  o CORS segue a regra do proxy da NVIDIA. Limite de 300 MB por vídeo.
+  o CORS segue a mesma regra do proxy de busca. Limite de 300 MB por vídeo.
 - Use só com vídeos que os autores autorizaram repostar.
 
 Testes: `npm run importar:test` (páginas simuladas; não vai à Internet).
@@ -398,7 +398,7 @@ anti-apagão da fila, migração automática dos cofres antigos e selos honestos
 npm run nuvem          # app + mocks em http://localhost:4173 (/drive-api e /cloud-api) — testar sem contas
 npm run nuvem:test     # testes ponta-a-ponta da camada de nuvem (arranca os mocks sozinho)
 npm run robo:test      # guarda da publicação automática: o Robô 24h gerado tem de ser o robô a sério
-npm test               # nuvem + worker + robô 24h + proxy NVIDIA + Instagram + Agendador + build
+npm test               # nuvem + worker + robô 24h + proxy de busca + Instagram + Agendador + build
 npm run cloudflare:renovar # renova o Worker na Cloudflare e verifica o que ficou online
 npm run build          # gera dist/ para deploy estático
 npm run patch:full     # reconstrói/verifica o bundle e reaplica os patches

@@ -1,1 +1,1 @@
-o.provedor==="dica"?"Pelo nome (sem IA de vídeo)":o.provedor==="direto"?"Direto (sem identificação)":o.provedor==="consenso"?"Gemini + NVIDIA (VidScio)":
+o.provedor==="dica"?"Pelo nome (sem IA de vídeo)":o.provedor==="direto"?"Direto (sem identificação)":o.provedor==="consenso"?"Gemini + Groq":

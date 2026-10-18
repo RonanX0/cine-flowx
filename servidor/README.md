@@ -19,7 +19,7 @@ de dar problema e o processamento é bem mais rápido.
 - **Cloudflare R2 configurado no CineClip** (Configurações → Nuvem durável). O servidor guarda
   os vídeos lá.
 - **Robô 24h ativo** (Agendador → Robô 24h). É ele que publica.
-- Chaves de IA (NVIDIA ou Gemini) e TMDB nas configurações do app — o servidor usa as mesmas.
+- Chaves de IA (Gemini, Groq ou OpenRouter) e TMDB nas configurações do app — o servidor usa as mesmas.
 
 ## Opção 0: Vercel (grátis, sem servidor) — recomendado
 
@@ -214,4 +214,4 @@ escolha** para os próximos irem direto. A opção aparece quando o app vê o se
 - Configuração em `/etc/cineclip/config.json` (só root e o utilizador `cineclip` leem).
   Opções extra: `INTERVALO_S`, `AGENDAR_POUCA_CERTEZA`, `SITE`, `NOME_SERVIDOR`.
 - Testes: `npm run servidor:test` (ponta a ponta com FFmpeg e o código real do app; R2,
-  TikTok, NVIDIA e TMDB simulados) e `npm run nuvem:app:test`.
+  TikTok, Groq e TMDB simulados) e `npm run nuvem:app:test`.
