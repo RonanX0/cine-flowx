@@ -1,0 +1,4 @@
+provisorio:!0};
+  /* ==CINECLIP-MOTOR-IA== candidatos conferidos com o elenco (atores e personagens) no TMDB */
+  if(typeof window!=="undefined"&&window.CineClipMotor&&(o.motor===2||o.provedor==="dica"))return window.CineClipMotor.escolher(_ccMotorH(),r,o);
+  const a=o.ano?Number(String(o.ano).slice(0,4)):0;

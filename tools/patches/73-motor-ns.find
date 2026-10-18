@@ -1,0 +1,2 @@
+provisorio:!0};
+  const a=o.ano?Number(String(o.ano).slice(0,4)):0;

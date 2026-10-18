@@ -76,7 +76,7 @@ check("o prompt principal proíbe numerar/rótular (PROIBIDO numerar)", html.inc
 check("o prompt NVIDIA proíbe rótulos no início do gancho", html.includes('SEM rótulos como "Gancho 1" ou "1." no início'));
 check("o prompt VidScio tem a regra 7 dos ganchos", html.includes('7. GANCHOS ("ganchos")'));
 check("os exemplos dos prompts são frases reais prontas a publicar", html.includes("Ele achou que estava no controle até isso acontecer 😳"));
-check("Hm: ganchos do JSON passam por _gcLimpaLista", html.includes("let k=_gcLimpaLista(brutoG.map(C=>C.t))"));
+check("Hm: ganchos do JSON passam por _gcLimpaLista", html.includes("k=_gcLimpaLista(Array.isArray(_.ganchos)?_.ganchos:[])"));
 check("Hm: fallback de linhas passa por _gcLimpa", html.includes(".map(_=>_gcLimpa(_)).filter(_=>_.length>=8"));
 check("_vsParseIA: ganchos do VidScio passam por _gcLimpaLista", html.includes("ganchos:Array.isArray(k.ganchos)?_gcLimpaLista(k.ganchos):void 0"));
 check("CineClipCore exporta limparGancho/limparGanchos", html.includes("limparGancho:_gcLimpa,limparGanchos:_gcLimpaLista"));
@@ -248,7 +248,7 @@ console.log("\n4. Motor de Identificação e TMDB");
   check("o Estúdio passa o vídeo à identificação (Zb)", html.includes("audioClip:Pt,video:X?{data:X,"));
   check("o Estúdio passa o vídeo ao gancho (Hm)", html.includes('S.geminiKey,ue,{data:X,mimeType:(X&&X.type)||"video/mp4"'));
   check("lote-massa prepara o vídeo para a IA", loteSrc.includes("core.videoParaIA") && loteSrc.includes("video: videoIA"));
-  check("lote-massa passa o vídeo ao gerarGancho", loteSrc.includes("s.geminiKey, audio, videoIA, contextoGancho)"));
+  check("lote-massa passa o vídeo ao gerarGancho (quando a identificação ainda não viu a cena)", loteSrc.includes("jaViuCena ? null : videoIA, contextoGancho)"));
   check("o servidor também prepara o vídeo para a IA", fs.readFileSync(path.join(root, "servidor", "video.mjs"), "utf8").includes("export async function videoParaIA"));
 }
 

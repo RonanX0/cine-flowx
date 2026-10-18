@@ -1,0 +1,1 @@
+if(mNorm==="sem_gancho")return{cena:"",ganchos:[],modo:"sem_gancho"};const ctx=_gcContextoObra(i)

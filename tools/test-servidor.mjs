@@ -100,6 +100,25 @@ execFileSync("ffmpeg", ["-v", "error", "-y",
   "-map", "[v]", "-map", "1:a", "-c:v", "libx265", "-preset", "ultrafast", "-x265-params", "log-level=error", "-tag:v", "hvc1",
   "-c:a", "aac", "-metadata", "title=VIDEO DO AUTOR", "-metadata", "comment=baixado do tiktok", fonte]);
 const bytesFonte = fs.readFileSync(fonte);
+// Cada vídeo do TikTok tem um conteúdo diferente: o app reconhece vídeos repetidos
+// (mesmo conteúdo = já agendado), por isso links diferentes precisam de vídeos diferentes.
+const PADROES = { "7400000000000000002": "smptebars", "7400000000000000003": "rgbtestsrc", "7400000000000000004": "testsrc" };
+const bytesPorId = {};
+function bytesDoVideo(id) {
+  const padrao = PADROES[id];
+  if (!padrao) return bytesFonte;
+  if (!bytesPorId[id]) {
+    const f = path.join(tmp, `tiktok_${id}.mp4`);
+    execFileSync("ffmpeg", ["-v", "error", "-y",
+      "-f", "lavfi", "-i", `${padrao}=size=1080x1040:rate=30:duration=8`,
+      "-f", "lavfi", "-i", "sine=frequency=440:duration=8",
+      "-filter_complex", "[0:v]pad=1080:1920:0:440:black,format=yuv420p[v]",
+      "-map", "[v]", "-map", "1:a", "-c:v", "libx265", "-preset", "ultrafast", "-x265-params", "log-level=error", "-tag:v", "hvc1",
+      "-c:a", "aac", f]);
+    bytesPorId[id] = fs.readFileSync(f);
+  }
+  return bytesPorId[id];
+}
 
 /* -------------------------------------------- serviços simulados (HTTP) */
 const R2 = cfg.R2_WORKER_URL;
@@ -170,7 +189,7 @@ async function fetchFalso(url, opts = {}) {
   }
   // TikTok
   if (u.hostname === "vm.tiktok.com") {
-    const id = u.pathname.includes("duvida") ? "7400000000000000002" : u.pathname.includes("apagado") ? "apagado" : "7400000000000000001";
+    const id = u.pathname.includes("duvida") ? "7400000000000000002" : u.pathname.includes("apagado") ? "apagado" : u.pathname.includes("ZMv1") ? "7400000000000000003" : u.pathname.includes("ZMv2") ? "7400000000000000004" : "7400000000000000001";
     return new Response(null, { status: 301, headers: { location: `https://www.tiktok.com/@autor/video/${id}` } });
   }
   if (u.hostname === "www.tiktok.com") {
@@ -179,7 +198,8 @@ async function fetchFalso(url, opts = {}) {
     return new Response(paginaTikTok(id, "autor"), { status: 200, headers: { "content-type": "text/html" } });
   }
   if (u.hostname === "v16.tiktokcdn.com") {
-    return new Response(bytesFonte, { status: 200, headers: { "content-type": "video/mp4", "content-length": String(bytesFonte.length) } });
+    const bytes = bytesDoVideo(u.pathname.split("/").pop().replace(/\.mp4$/, ""));
+    return new Response(bytes, { status: 200, headers: { "content-type": "video/mp4", "content-length": String(bytes.length) } });
   }
   if (u.hostname === "www.tikwm.com") return json(200, { code: -1, msg: "não usado" });
   // NVIDIA (pelo proxy do site)
@@ -188,7 +208,15 @@ async function fetchFalso(url, opts = {}) {
     const texto = JSON.stringify(corpo.messages);
     pedidosIA.push(texto.slice(0, 200));
     let conteudo;
-    if (/especialista mundial em identificação/.test(texto)) {
+    if (/NÃO tente adivinhar o nome da obra/.test(texto)) {
+      conteudo = JSON.stringify({ falas: [], nomes_ouvidos: [], atores: [], roteiro: "Um homem olha para a cerca alta no quintal e percebe que ela não foi feita para prender os animais.", momento_forte: "Ele percebe para que serve a cerca", emocao: "medo", palpites: [] });
+    } else if (/pesquisador de cinema e TV/.test(texto)) {
+      conteudo = JSON.stringify({ candidatos: [/7400000000000000002/.test(texto) ? respostasIA.duvida : respostasIA.normal] });
+    } else if (/Escreva 10 ganchos diferentes/.test(texto)) {
+      conteudo = JSON.stringify({ ganchos: ["Ele achou que a cerca era para os animais 😱", "A cerca do quintal escondia outra coisa 😨"] });
+    } else if (/editor-chefe/.test(texto)) {
+      conteudo = JSON.stringify({ notas: [{ i: 0, fiel: 9, curiosidade: 9, clareza: 9 }, { i: 1, fiel: 8, curiosidade: 6, clareza: 8 }] });
+    } else if (/especialista mundial em identificação/.test(texto)) {
       conteudo = JSON.stringify(/7400000000000000002/.test(texto) ? respostasIA.duvida : respostasIA.normal);
     } else if (/GANCHOS VIRAIS/.test(texto)) {
       conteudo = JSON.stringify({ cena: "cena", ganchos: [{ texto: "Ele achou que a cerca era para os animais 😱", nota: 9 }, { texto: "Gancho reserva 🔥", nota: 5 }] });
@@ -311,7 +339,7 @@ console.log("\n6. «Agendar mesmo assim» depois de rever");
   await trabalhador.ciclo();
   const depois = await decifrar(nuvem.cofre, cfg.ENCRYPTION_KEY_B64);
   const ligado = depois.linksCelular.find((x) => x.id === "lk_duvida");
-  check("o servidor agenda o vídeo de pouca certeza quando o utilizador manda", ligado.estado === "feito" && depois.queue.some((r) => r.id === ligado.reelId && r.title === "Talvez Este"), JSON.stringify(ligado));
+  check("o servidor agenda o vídeo de pouca certeza quando o utilizador manda", ligado.estado === "feito" && depois.queue.some((r) => r.id === ligado.reelId && r.title === "Talvez Este"), JSON.stringify(ligado) + " :: " + JSON.stringify(depois.queue.map((r) => [r.id, r.title])));
 }
 
 /* ------------------------------------------------------------------ 7 */
@@ -367,7 +395,7 @@ console.log("\n7. Nuvem na Vercel (api/nuvem.js): sem servidor ligado, 1 link po
   let depois = await decifrar(nuvem.cofre, cfg.ENCRYPTION_KEY_B64);
   const v1 = depois.linksCelular.find((e) => e.id === "lk_v1");
   const v2 = depois.linksCelular.find((e) => e.id === "lk_v2");
-  check("os dois links ficam agendados com Reel", v1.estado === "feito" && v2.estado === "feito" && depois.queue.some((r) => r.id === v1.reelId) && depois.queue.some((r) => r.id === v2.reelId));
+  check("os dois links ficam agendados com Reel", v1.estado === "feito" && v2.estado === "feito" && depois.queue.some((r) => r.id === v1.reelId) && depois.queue.some((r) => r.id === v2.reelId), JSON.stringify([v1, v2, depois.queue.map((r) => [r.id, r.title])]));
   if (ffmpegVercel !== "ffmpeg") {
     const ultimo = Object.keys(nuvem.videos).pop();
     const fim = path.join(tmp, "vercel.mp4");

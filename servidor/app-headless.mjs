@@ -48,6 +48,7 @@ export async function arrancarApp({ site = "https://cine-flowx.vercel.app", raiz
   window.localStorage.setItem("cineclip.lote.opcoes", JSON.stringify({ botaoColar: false, avisarLinkCopiado: false, processarLinksDoCelular: false }));
 
   window.eval(fs.readFileSync(path.join(raiz, "nuvem-duravel.js"), "utf8"));
+  window.eval(fs.readFileSync(path.join(raiz, "motor-ia.js"), "utf8"));
   window.eval(fs.readFileSync(path.join(raiz, "lote-massa.js"), "utf8"));
   window.eval(modulo);
 
