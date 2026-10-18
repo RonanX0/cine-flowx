@@ -27,7 +27,7 @@
       "maxDuration": 60
     },
     "api/public/tendencias.js": {
-      "maxDuration": 60
+      "maxDuration": 120
     },
     "api/nuvem.js": {
       "maxDuration": 300,
