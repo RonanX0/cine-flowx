@@ -782,7 +782,7 @@
       ia = cacheHit.ia;
       filme = cacheHit.filme;
     } else {
-      ia = await core.identificar(s.nvidiaKey, quadros, s.lang, {
+      var optsIdent = {
         useFileNameHint: s.useFileNameHint !== false,
         fileName: ficheiro.name,
         metaTitle: tituloMetadados,
@@ -792,7 +792,8 @@
         video: videoIA,
         identMode: modoIdent,
         hookMode: modoGancho,
-      });
+      };
+      ia = await core.identificar(s.nvidiaKey, quadros, s.lang, optsIdent);
       if (!ia || (!ia.titulo && !(ia.atores && ia.atores.length) && !ia.imdb_id)) {
         if (permitirPoucaCerteza) {
           var fallbackTit = dicaLink || tituloMetadados || baseLimpo || "Cena de Filme";
@@ -802,6 +803,18 @@
         }
       }
       filme = await core.procurarTmdb(s.tmdbKey, ia);
+      // «Rápido por Nome» vai direto ao TMDB, sem a IA de vídeo. Se o nome não bateu
+      // com nenhum título, cai para a análise completa em vez de falhar.
+      if (!filme && ia && ia.provedor === "dica" && modoIdent === "dica") {
+        definirPasso(item, "Nome não encontrado — a analisar o vídeo…", 0.12);
+        try {
+          var iaCompleta = await core.identificar(s.nvidiaKey, quadros, s.lang, Object.assign({}, optsIdent, { identMode: "auto" }));
+          if (iaCompleta && (iaCompleta.titulo || iaCompleta.imdb_id || (iaCompleta.atores && iaCompleta.atores.length))) {
+            ia = iaCompleta;
+            filme = await core.procurarTmdb(s.tmdbKey, ia);
+          }
+        } catch (e) {}
+      }
       if (!filme && Array.isArray(ia.alternativas) && ia.alternativas.length) {
         for (var altIdx = 0; altIdx < ia.alternativas.length; altIdx++) {
           var altCand = ia.alternativas[altIdx];
@@ -891,10 +904,13 @@
     }
     var gancho = "";
     if (modoGancho !== "sem_gancho") {
+      // O gancho feito DEPOIS de saber o filme (sinopse + cena + fala) sai bem melhor do
+      // que o rascunho da identificação; esse rascunho fica só de reserva.
+      var rascunhoIA = "";
       if (modoGancho === "auto" || ia.modo_gancho === modoGancho) {
-        gancho = (ia.ganchos || [])
+        rascunhoIA = (ia.ganchos || [])
           .map(limparGancho)
-          .find(eGanchoValido);
+          .find(eGanchoValido) || "";
       }
       if (!gancho) {
         try {
@@ -914,6 +930,7 @@
           if (!cena && g && g.cena) cena = g.cena;
         } catch (e) {}
       }
+      if (!gancho && rascunhoIA) gancho = rascunhoIA;
       if (!gancho) {
         var cenaLimpa = String(cena || "").trim().replace(/[.!?]+$/, "");
         var titLimpo = String((filme && filme.title) || "").trim();

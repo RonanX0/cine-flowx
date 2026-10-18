@@ -1,0 +1,7 @@
+  if(identMode==="dica"&&pistaNome&&pistaNome.titulo){
+    const pKey=((w=i==null?void 0:i.geminiKey)==null?void 0:w.trim())||"",gKey=(r==null?void 0:r.trim())||"";
+    if(!pKey&&!gKey){
+      return{titulo:pistaNome.titulo,titulo_original:pistaNome.titulo,ano:pistaNome.ano,tipo:pistaNome.tipo||"movie",temporada_episodio:pistaNome.temporada_episodio,confianca:88,atores:[],personagens:[],cena:"",ganchos:hookMode==="sem_gancho"?[]:(_GC_POOL_MODO[hookMode]||_GC_POOL_MODO.auto).slice(),provedor:"dica",acordo_provedores:!0,alternativas:pistaNome.alternativas||[],modo_identificacao:"dica",modo_gancho:hookMode};
+    }
+  }
+
