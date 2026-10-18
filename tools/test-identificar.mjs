@@ -106,6 +106,14 @@ vm.runInContext(corta("async function Hm(", "async function Zb(") + ";" + corta(
   check("se a IA não devolver JSON, aproveita as linhas", g.ganchos[0] === "Ele não devia ter atendido aquele telefone 😨", JSON.stringify(g.ganchos));
 }
 
+{
+  resposta = JSON.stringify({ analise: { momento: "ele abre a porta", emocao: "medo", gatilho: "o que há lá dentro?", visual: "porta vermelha" }, cena: "Ele abre uma porta", ganchos: [{ texto: "Ele abriu a porta errada 😨", nota: 6 }, { texto: "Havia algo atrás da porta vermelha 😱", nota: 9 }, { texto: "Ninguém devia ter ouvido isso 👀", nota: 7 }] });
+  const g = await ctx2.Hm("", ["m", "q"], "pt-BR", { title: "X", year: "2020", genres: [], overview: "" }, "k", null, {});
+  check("ganchos com nota: o de nota mais alta vem primeiro", g.ganchos[0] === "Havia algo atrás da porta vermelha 😱" && g.ganchos[1] === "Ninguém devia ter ouvido isso 👀", JSON.stringify(g.ganchos));
+  check("devolve a análise da cena (momento, emoção, gatilho, visual)", g.analise && g.analise.emocao === "medo");
+  check("o prompt pede a análise antes dos ganchos e notas rigorosas", /ANALISE ANTES DE ESCREVER/.test(prompt) && /"gatilho"/.test(prompt) && /seja rigoroso/.test(prompt));
+}
+
 console.log("\n3. Modelos do Gemini");
 {
   const fonte = /const f=p=>\{\/\* ==CINECLIP-GEMINI-MODELOS==[\s\S]*?\};/.exec(s)[0];
@@ -113,6 +121,25 @@ console.log("\n3. Modelos do Gemini");
   const ordem = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3.6-flash", "gemini-3.6-flash-lite", "gemini-3.6-pro", "gemini-3.6-flash-preview-09-2026", "gemini-2.5-pro"].sort((a, b) => f(b) - f(a));
   check("o flash mais recente primeiro", ordem[0] === "gemini-3.6-flash", ordem.join(" > "));
   check("versão nova antes da antiga", ordem.indexOf("gemini-3.6-flash-lite") < ordem.indexOf("gemini-2.5-flash"), ordem.join(" > "));
+}
+
+console.log("\n4. Identificar direto pelo nome (sem IA)");
+{
+  const fonte = corta("function fg(", "async function Hm(") + ";" + corta("async function cineclipPorNome(", "function fg(");
+  vm.runInContext(fonte + ";this.fg=fg;this.cineclipPorNome=cineclipPorNome;", ctx);
+  const por = (o) => ctx.cineclipPorNome("k", o);
+  let r = await por({ userHint: "Interestelar" });
+  check("dica com o nome do filme → TMDB direto", r && r.title === "Interestelar" && r.verificacao.porNome === true, r && r.title);
+  r = await por({ fileName: "Interstellar 2014.mp4" });
+  check("nome do ficheiro com título e ano → direto", r && r.title === "Interestelar", r && r.title);
+  r = await por({ fileName: "Duna 1984.mp4" });
+  check("o ano do nome escolhe a versão certa (1984, não a mais popular)", r && String(r.year) === "1984", JSON.stringify(r && { t: r.title, y: r.year, id: r.id }));
+  r = await por({ fileName: "VID_20240101.mp4" });
+  check("nome sem título (VID_…) → não adivinha", r === null);
+  r = await por({ userHint: "Matthew McConaughey" });
+  check("dica que é nome de ator → não força um filme (a IA decide)", r === null);
+  r = await por({ fileName: "interestelar_cena.mp4" });
+  check("ignora palavras soltas como «cena» no nome do ficheiro", r && r.title === "Interestelar", r && r.title);
 }
 
 console.log("\n─────────────────────────────────────────────");

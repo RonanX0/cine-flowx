@@ -98,6 +98,7 @@ function cenario(window, opcoes = {}) {
       if (nome === "sem-gancho.mp4") return { titulo: "Sem Gancho", confianca: 90, cena: "", ganchos: [] };
       return { titulo: "Filme " + nome, confianca: 92, cena: "cena de " + nome, ganchos: ["Gancho de " + nome + " 😳", "outro"] };
     },
+    identificarPorNome: async (chave, o) => (/Interestelar/.test(o.fileName) ? { title: "Interestelar", original: "Interstellar", year: "2014", poster: "https://img/p.jpg", kind: "movie", genres: [], overview: "" } : null),
     procurarTmdb: async (chave, ia) => ({ title: ia.titulo, original: ia.titulo + " (orig)", year: 2024, poster: "https://img/p.jpg", kind: "movie", genres: [], overview: "" }),
     gerarGancho: async (k, q, l, filme) => {
       chamadas.gerarGancho++;
@@ -209,6 +210,18 @@ console.log("\nA2. Sem gancho na identificação → pede um gancho à IA");
   await c.lote.iniciar();
   check("chama a IA de ganchos", c.chamadas.gerarGancho === 1);
   check("usa o gancho gerado", c.fila[0]?.hookText === "Gancho gerado 🔥", c.fila[0]?.hookText);
+  dom.window.close();
+}
+
+console.log("\nA2b. Nome do ficheiro claro → direto ao TMDB, sem a IA de vídeo");
+{
+  const dom = novoDom();
+  const c = cenario(dom.window);
+  c.lote.adicionarFicheiros([ficheiro(dom.window, "Interestelar 2014.mp4")]);
+  await c.lote.iniciar();
+  check("não chama a IA de identificação", c.chamadas.identificar === 0, String(c.chamadas.identificar));
+  check("agenda como Interestelar", c.fila[0]?.title === "Interestelar", c.fila[0]?.title);
+  check("o gancho ainda é criado (com o filme conhecido)", c.chamadas.gerarGancho === 1);
   dom.window.close();
 }
 

@@ -9,8 +9,12 @@ extra=[ex.cena?`O que acontece na cena (visto antes): ${String(ex.cena).slice(0,
 g=`Você é o editor de uma página de cortes de filmes e séries com milhões de seguidores no Reels e no TikTok. Sua tarefa é escrever o GANCHO: a frase curta que aparece em cima do vídeo 9:16 e faz a pessoa PARAR de rolar e assistir até o fim.
 ${p}${info}${extra?"\n"+extra:""}
 
-1. Olhe os quadros (e ouça o áudio, se houver) e descreva a cena em 1–2 frases no campo "cena".
-2. Escreva 6 ganchos diferentes e escolha o melhor.
+ANALISE ANTES DE ESCREVER (preencha o campo "analise"):
+- "momento": o instante mais forte desta cena (o que o espectador VÊ ou OUVE e não consegue ignorar).
+- "emocao": a emoção dominante (medo, choque, raiva, tristeza, tensão, humor…).
+- "gatilho": a pergunta que fica na cabeça de quem assiste (o que vai acontecer? quem é? por quê?).
+- "visual": um detalhe concreto que aparece nos quadros e prova o que você disse.
+Depois descreva a cena em 1–2 frases no campo "cena" e escreva 6 ganchos de formatos diferentes, dando a cada um uma nota de 1 a 10 (10 = faria a pessoa parar de rolar na hora; seja rigoroso: nota alta só para gancho concreto, específico desta cena e com curiosidade).
 
 COMO É UM BOM GANCHO:
 - 5 a 11 palavras, no máximo 60 caracteres, terminando com 1 emoji que combine com a emoção (😳 😱 🔥 💔 😨 🤯 😢 👀 😤).
@@ -29,11 +33,10 @@ PROIBIDO:
 - Os 6 começando do mesmo jeito.
 
 Responda SOMENTE com JSON válido:
-{"cena": "o que acontece na cena", "ganchos": ["...", "...", "...", "...", "...", "..."], "melhor": 0}
-("melhor" é o índice, de 0 a 5, do gancho que mais faria você parar de rolar.)`;
+{"analise": {"momento": "...", "emocao": "...", "gatilho": "...", "visual": "..."}, "cena": "o que acontece na cena", "ganchos": [{"texto": "...", "nota": 8}, {"texto": "...", "nota": 6}, {"texto": "...", "nota": 7}, {"texto": "...", "nota": 5}, {"texto": "...", "nota": 9}, {"texto": "...", "nota": 6}]}`;
 let v="";const x=(c==null?void 0:c.trim())||"",h=(r==null?void 0:r.trim())||"";if(x)try{const w=o.length>1?o.slice(1,7):o,_=[{text:g}];for(const k of w){const C=cg(k);C&&_.push({inline_data:C})}u&&_.push({inline_data:{mime_type:u.mimeType,data:u.base64}}),v=await ju(x,_,!1,!1)}catch(w){if(!h)throw w}if(!v&&h)try{v=await dg(h,g,o,!1)}catch(w){if(w instanceof ft&&(w.status===401||w.status===403))throw w;v=await ug(h,g,!1)}
 const limpar=w=>String(w||"").replace(/^\s*\d+[.)]\s+/,"").replace(/^[\s"'“”«»\-–•]+|["'“”«»\s]+$/g,"").replace(/#[\p{L}\p{N}_]+/gu,"").replace(/\s{2,}/g," ").trim(),
 generico=/precisa assistir|que cena|filme incr[ií]vel|n[aã]o vai acreditar|assista at[eé] o final|momento exato em que tudo mudou/i,
 bons=w=>{const l=[...new Set(w.map(limpar).filter(Boolean))];const ok=l.filter(k=>k.length<=72&&!generico.test(k));return ok.length?ok:l};
-try{const w=v.match(/\{[\s\S]*\}/),_=JSON.parse(w?w[0]:v);let k=Array.isArray(_.ganchos)?_.ganchos.map(C=>String(C)):[];const m=Number(_.melhor);if(Number.isInteger(m)&&m>0&&m<k.length)k=[k[m],...k.slice(0,m),...k.slice(m+1)];k=bons(k);return{cena:String(_.cena??"").trim(),ganchos:k.length?k:["Ninguém estava preparado para o que acontece aqui 😳"]}}catch{const w=bons(v.split(`
+try{const w=v.match(/\{[\s\S]*\}/),_=JSON.parse(w?w[0]:v);const bruto=Array.isArray(_.ganchos)?_.ganchos.map((C,n)=>C&&typeof C==="object"?{t:String(C.texto??C.gancho??""),n:Number(C.nota)||0,i:n}:{t:String(C),n:0,i:n}):[];/* os melhores primeiro: pela nota que a IA deu (desempate pela ordem); formato antigo usa "melhor" */bruto.sort((C,P)=>P.n-C.n||C.i-P.i);let k=bruto.map(C=>C.t);const m=Number(_.melhor);if(!bruto.some(C=>C.n)&&Number.isInteger(m)&&m>0&&m<k.length)k=[k[m],...k.slice(0,m),...k.slice(m+1)];k=bons(k);return{cena:String(_.cena??"").trim(),analise:_.analise&&typeof _.analise==="object"?_.analise:void 0,ganchos:k.length?k:["Ninguém estava preparado para o que acontece aqui 😳"]}}catch{const w=bons(v.split(`
 `).filter(_=>_.length>12&&_.length<95&&!_.trim().startsWith("{")));return{cena:"",ganchos:w.slice(0,6).length?w.slice(0,6):["Ninguém estava preparado para o que acontece aqui 😳"]}}}

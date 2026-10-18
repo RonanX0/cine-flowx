@@ -1,0 +1,1 @@
+o.provedor==="nome"?"Pelo nome (TMDB)":o.provedor==="gemini"?"Gemini (Vídeo + Áudio + Google)":"NVIDIA Vision"

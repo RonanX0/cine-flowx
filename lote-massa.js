@@ -450,7 +450,14 @@
       }
     }
     var post = ficheiro.cineclipPost || {};
-    var ia = await core.identificar(s.nvidiaKey, quadros, s.lang, {
+    // 1) Nome do ficheiro claro (ex.: «Interestelar 2014.mp4»)? Vai direto ao TMDB, sem a IA de vídeo.
+    var porNome = null;
+    if (core.identificarPorNome && s.tmdbKey) {
+      try {
+        porNome = await core.identificarPorNome(s.tmdbKey, { fileName: ficheiro.name, metaTitle: tituloMetadados, userHint: "" });
+      } catch (e) {}
+    }
+    var ia = porNome ? { titulo: porNome.title, titulo_original: porNome.original, ano: porNome.year, confianca: 100, atores: [], personagens: [], alternativas: [], provedor: "nome" } : await core.identificar(s.nvidiaKey, quadros, s.lang, {
       fileName: ficheiro.name,
       metaTitle: tituloMetadados,
       userHint: "",
@@ -462,7 +469,7 @@
     if (!ia || (!ia.titulo && !(ia.atores && ia.atores.length))) {
       throw erroComTipo("A IA não conseguiu identificar o filme deste clipe.", "identificacao");
     }
-    var filme = await core.procurarTmdb(s.tmdbKey, ia);
+    var filme = porNome || (await core.procurarTmdb(s.tmdbKey, ia));
     if (!filme) {
       throw erroComTipo(
         'Não encontrei "' + (ia.titulo || ia.titulo_original || "o filme") + '" no TMDB.',
