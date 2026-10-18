@@ -1,0 +1,6 @@
+  /* ==CINECLIP-DICA-DIRETO== modo «Rápido por Nome»: com um título legível no nome do ficheiro/dica, vai DIRETO ao TMDB — não chama a IA de vídeo (que reanalisava quadros e diálogo e ainda podia contrariar o nome). O gancho é feito depois, já com o filme confirmado. Se o TMDB não achar, quem chamou refaz em modo IA completa. */
+  if(identMode==="dica"&&pistaNome&&pistaNome.titulo){
+    const temIA=Boolean(((w=i==null?void 0:i.geminiKey)==null?void 0:w.trim())||(r==null?void 0:r.trim()));
+    return{titulo:pistaNome.titulo,titulo_original:pistaNome.titulo,ano:pistaNome.ano,tipo:pistaNome.tipo||"movie",temporada_episodio:pistaNome.temporada_episodio,confianca:88,atores:[],personagens:[],cena:"",ganchos:hookMode==="sem_gancho"||temIA?[]:(_GC_POOL_MODO[hookMode]||_GC_POOL_MODO.auto).slice(),provedor:"dica",acordo_provedores:!0,alternativas:pistaNome.alternativas||[],modo_identificacao:"dica",modo_gancho:hookMode};
+  }
+

@@ -99,14 +99,17 @@ function cenario(window, opcoes = {}) {
       chamadas.identificar++;
       chamadas.videoRecebido = info.video || null;
       const nome = info.fileName;
+      if (info.identMode === "dica") return { titulo: "Nome Estranho", confianca: 88, provedor: "dica", ganchos: [] };
       if (nome === "duvida.mp4") return { titulo: "Talvez Este", confianca: 50, cena: "cena incerta", ganchos: ["Gancho incerto 🤔"] };
       if (nome === "sem-gancho.mp4") return { titulo: "Sem Gancho", confianca: 90, cena: "", ganchos: [] };
       return { titulo: "Filme " + nome, confianca: 92, cena: "cena de " + nome, ganchos: ["Gancho de " + nome + " 😳", "outro"] };
     },
-    procurarTmdb: async (chave, ia) => ({ title: ia.titulo, original: ia.titulo + " (orig)", year: 2024, poster: "https://img/p.jpg", kind: "movie", genres: [], overview: "" }),
+    procurarTmdb: async (chave, ia) => ia.titulo === "Nome Estranho" ? null : ({ title: ia.titulo, original: ia.titulo + " (orig)", year: 2024, poster: "https://img/p.jpg", kind: "movie", genres: [], overview: "" }),
     gerarGancho: async (chave, quadros, lang, titulo, geminiKey, audio, video) => {
       chamadas.gerarGancho++;
       chamadas.videoGancho = video || null;
+      // O gancho agora é feito depois do TMDB, com o filme certo (o título chega como 4.º argumento).
+      if (/^Filme /.test(String(titulo))) return { cena: "cena gerada", ganchos: ["Gancho de " + String(titulo).replace(/^Filme /, "") + " 😳"] };
       return { cena: "cena gerada", ganchos: ["Gancho gerado 🔥"] };
     },
     processar: async (f, inicio, fim, resolucao, gancho, progresso, corte) => {
@@ -225,6 +228,18 @@ console.log("\nA2b. Com Gemini: o vídeo vai para a IA («assistir» em vez de f
   check("a identificação recebe o vídeo", !!c.chamadas.videoRecebido && c.chamadas.videoRecebido.mimeType === "video/mp4" && c.chamadas.videoRecebido.fim === 70, JSON.stringify(c.chamadas.videoRecebido));
   check("o gerarGancho recebe o vídeo (7.º argumento)", !!c.chamadas.videoGancho && c.chamadas.videoGancho.mimeType === "video/mp4", JSON.stringify(c.chamadas.videoGancho));
   check("usa o gancho gerado", c.fila[0]?.hookText === "Gancho gerado 🔥", c.fila[0]?.hookText);
+  dom.window.close();
+}
+
+console.log("\nA2b. Modo «Rápido por Nome»: se o TMDB não acha o nome, cai para a IA completa");
+{
+  const dom = novoDom();
+  const c = cenario(dom.window);
+  c.lote.estado.opcoes.modoIdentificacao = "dica";
+  c.lote.adicionarFicheiros([ficheiro(dom.window, "Nome Estranho.mp4")]);
+  await c.lote.iniciar();
+  check("chamou a identificação 2 vezes (nome, depois IA completa)", c.chamadas.identificar === 2, String(c.chamadas.identificar));
+  check("agendou com o filme da IA completa", c.fila[0]?.title === "Filme Nome Estranho.mp4", c.fila[0]?.title);
   dom.window.close();
 }
 
