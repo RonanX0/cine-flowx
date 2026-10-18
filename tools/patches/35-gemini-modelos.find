@@ -1,0 +1,1 @@
+const f=p=>p==="gemini-2.5-flash"?100:p==="gemini-2.5-flash-lite"?95:/^gemini-3.*flash/i.test(p)?92:/^gemini-2\.5-flash/i.test(p)?90:p==="gemini-2.5-pro"?85:/^gemini-2\.5-pro/i.test(p)?80:p==="gemini-2.0-flash"?75:/flash/i.test(p)?70:/pro/i.test(p)?60:50;

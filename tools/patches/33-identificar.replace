@@ -1,0 +1,38 @@
+async function Zb(r,o,a="pt-BR",i){/* ==CINECLIP-IDENTIFICAR== pistas separadas (nome do ficheiro, legenda do post), personagens e confiança honesta */
+const opc=i||{},pistaFicheiro=[opc.userHint&&String(opc.userHint).trim(),fg(opc.fileName,opc.metaTitle)].filter(Boolean).join(" | "),legendaPost=String(opc.legendaPost||"").replace(/\s+/g," ").trim().slice(0,400),autorPost=String(opc.autorPost||"").trim().slice(0,60),
+u=a==="pt-PT"?"Escreve os campos 'cena' e 'ganchos' em Português de Portugal.":"Escreva os campos 'cena' e 'ganchos' em Português do Brasil.",
+pistas=[pistaFicheiro?`- Nome do ficheiro / dica do utilizador: "${pistaFicheiro}"`:"",legendaPost?`- Legenda do post original${autorPost?` (perfil @${autorPost.replace(/^@/,"")})`:""}: "${legendaPost}" — às vezes traz o nome do filme ou uma hashtag com ele; muitas vezes é só "#filme #cenas". Nunca confies só nela.`:""].filter(Boolean).join("\n"),
+f=`Você é o maior especialista mundial em identificação de filmes e séries de TV a partir de clipes de vídeo e áudio.${pistas?`
+PISTAS (podem ajudar ou enganar — confirma sempre com o que vês e ouves):
+${pistas}`:""}
+
+Analise TODOS os quadros da cena e ESCUTE ATENTAMENTE O ÁUDIO (se anexado) seguindo rigorosamente estes passos:
+1. ÁUDIO E DIÁLOGO ("fala_do_audio"): Transcreva as frases principais ditas no áudio (mesmo se estiver dublado em português ou no idioma original).
+2. PERSONAGENS ("personagens"): Liste os NOMES DE PERSONAGENS ditos no áudio ou escritos na tela (ex.: "Cooper", "Murph"). São a melhor prova do título — não invente.
+3. ATORES ("atores"): Nome real dos atores/atrizes que reconhece com segurança nos quadros (só o nome, sem o personagem). Se não reconhecer ninguém, deixe vazio.
+4. TEXTO NA TELA ("texto_na_tela"): Leia qualquer legenda, placa, crachá, jornal ou logotipo visível.
+5. PESQUISA E CRUZAMENTO: Cruze diálogo + personagens + atores + figurino/cenário/época (use a Pesquisa Google se disponível) para descobrir exatamente qual é o filme ou série. Confirme que os atores e personagens são DESSE título e do ANO certo (cuidado com remakes, sequências e filmes parecidos do mesmo ator).
+6. ALTERNATIVAS ("alternativas"): Até 5 outros títulos possíveis, com o ano.
+7. CONFIANÇA ("confianca", 0–100): 90+ só se tiver prova clara (personagem/diálogo/texto inconfundível ou atores + cena reconhecida). Se for palpite pelo género, pelo clima ou só por um ator parecido, no máximo 55.
+${u}
+
+Responda SOMENTE com um objeto JSON válido neste formato exato (sem texto fora do JSON):
+{
+  "fala_do_audio": "resumo ou transcrição do diálogo ouvido no áudio",
+  "personagens": ["Nome do personagem 1"],
+  "atores": ["Nome do Ator 1", "Nome do Ator 2"],
+  "texto_na_tela": "qualquer legenda ou texto lido na imagem",
+  "cena": "descrição de 1 a 2 frases sobre o que acontece nesta cena",
+  "tipo": "movie",
+  "titulo": "título oficial em português",
+  "titulo_original": "título original exato em inglês ou idioma nativo",
+  "ano": 2019,
+  "confianca": 92,
+  "ganchos": ["Gancho 1 sobre a cena 😳", "Gancho 2 🔥", "Gancho 3 😱"],
+  "alternativas": [
+    {"titulo": "Opção 2", "titulo_original": "Original Title 2", "ano": 2021},
+    {"titulo": "Opção 3", "titulo_original": "Original Title 3", "ano": 2017}
+  ]
+}`,p=String(opc.geminiKey||"").trim(),g=(r==null?void 0:r.trim())||"";let v="",x="nvidia";if(p)try{const _=o.length>1?o.slice(1,7):o,k=[{text:f}];for(const C of _){const S=cg(C);S&&k.push({inline_data:S})}opc.audioClip&&k.push({inline_data:{mime_type:opc.audioClip.mimeType,data:opc.audioClip.base64}}),v=await ju(p,k,!0,!0),x="gemini"}catch(_){if(!g)throw _}if(!v){if(!g)throw new ft("Adiciona a tua chave Google Gemini (recomendada) ou NVIDIA nas configurações.");v=await dg(g,f,o,!0),x="nvidia"}
+const lista=T=>Array.isArray(T)?T.map(D=>String(D).trim()).filter(D=>D&&!/^(nenhum|nenhuma|desconhecido|desconhecida|n\/a|none|unknown)$/i.test(D)):[];
+try{const _=v.match(/\{[\s\S]*\}/),k=JSON.parse(_?_[0]:v),C=lista(k.atores),P=lista(k.personagens),S=Array.isArray(k.alternativas)?k.alternativas.map(T=>({titulo:String((T==null?void 0:T.titulo)||(T==null?void 0:T.titulo_original)||"").trim(),titulo_original:T!=null&&T.titulo_original?String(T.titulo_original).trim():void 0,ano:T==null?void 0:T.ano})).filter(T=>T.titulo):[];return{titulo:String(k.titulo||k.titulo_original||"").trim(),titulo_original:k.titulo_original?String(k.titulo_original).trim():void 0,ano:k.ano,tipo:k.tipo==="tv"||k.tipo==="series"||k.tipo==="serie"?"tv":k.tipo==="movie"?"movie":void 0,confianca:Number(k.confianca)||0,atores:C,personagens:P,fala_do_audio:k.fala_do_audio?String(k.fala_do_audio).trim():void 0,texto_na_tela:k.texto_na_tela?String(k.texto_na_tela).trim():void 0,cena:k.cena?String(k.cena).trim():void 0,ganchos:Array.isArray(k.ganchos)?k.ganchos.map(T=>String(T).trim()).filter(Boolean):void 0,provedor:x,alternativas:S}}catch{throw new ft("Não foi possível interpretar a resposta de identificação.")}}

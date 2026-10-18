@@ -190,8 +190,8 @@ async function fetchFalso(url, opts = {}) {
     let conteudo;
     if (/especialista mundial em identificação/.test(texto)) {
       conteudo = JSON.stringify(/7400000000000000002/.test(texto) ? respostasIA.duvida : respostasIA.normal);
-    } else if (/GANCHOS VIRAIS/.test(texto)) {
-      conteudo = JSON.stringify({ cena: "cena", ganchos: ["Gancho reserva 🔥"] });
+    } else if (/GANCHOS VIRAIS|ganchos diferentes e escolha o melhor/.test(texto)) {
+      conteudo = JSON.stringify({ cena: "cena", ganchos: ["Ele achou que a cerca era para os animais 😱", "outro gancho"], melhor: 0 });
     } else {
       conteudo = "QUER ASSISTIR A ESTE FILME? LINK NA BIO! 🎬\n\nEle achou que estava seguro.\n\nA cena que **muda tudo**.\n\n#Filme #Suspense";
     }

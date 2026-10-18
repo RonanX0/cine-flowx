@@ -1,0 +1,1 @@
+const f=p=>{/* ==CINECLIP-GEMINI-MODELOS== o Gemini mais recente primeiro (flash > pro > lite na mesma versão) */const m=/^gemini-(\d+(?:\.\d+)?)-(flash|pro)(-lite)?(.*)$/i.exec(p);if(!m)return/flash/i.test(p)?40:30;const ver=parseFloat(m[1])||0,tipo=m[2].toLowerCase()==="flash"?(m[3]?10:30):20;return ver*100+tipo-(/preview|exp/i.test(m[4]||"")?5:0)};

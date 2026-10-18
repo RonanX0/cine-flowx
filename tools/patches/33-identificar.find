@@ -1,0 +1,28 @@
+async function Zb(r,o,a="pt-BR",i){var h,w;const c=[(h=i==null?void 0:i.userHint)==null?void 0:h.trim(),fg(i==null?void 0:i.fileName,i==null?void 0:i.metaTitle)].filter(Boolean).join(" | "),u=a==="pt-PT"?"Escreve os campos 'cena' e 'ganchos' em Português de Portugal.":"Escreva os campos 'cena' e 'ganchos' em Português do Brasil.",f=`Você é o maior especialista mundial em identificação de filmes e séries de TV a partir de clipes de vídeo e áudio.${c?`
+PISTA IMPORTANTE (nome do ficheiro / dica do utilizador): "${c}".`:""}
+
+Analise TODOS os quadros da cena e ESCUTE ATENTAMENTE O ÁUDIO (se anexado) seguindo rigorosamente estes passos:
+1. ÁUDIO E DIÁLOGO ("fala_do_audio"): Transcreva as frases principais ditas no áudio (mesmo se estiver dublado em português ou no idioma original). Preste atenção especial a nomes próprios de personagens, lugares, empresas ou citações famosas faladas na cena.
+2. ATORES E PERSONAGENS ("atores"): Identifique o nome real dos atores/atrizes visíveis nos quadros e, se souber, o nome do personagem que interpretam.
+3. TEXTO NA TELA ("texto_na_tela"): Leia qualquer legenda, placa, crachá, jornal ou logotipo visível.
+4. PESQUISA E CRUZAMENTO: Cruze o diálogo ouvido no áudio + os atores reconhecidos + o figurino/cenário (use a Pesquisa Google se disponível) para descobrir exatamente qual é o filme ou série de TV.
+5. ALTERNATIVAS ("alternativas"): Liste até 6 outros filmes ou séries possíveis (especialmente outros títulos estrelados pelos mesmos atores reconhecidos ou com temática idêntica).
+${u}
+
+Responda SOMENTE com um objeto JSON válido neste formato exato (sem texto fora do JSON):
+{
+  "fala_do_audio": "resumo ou transcrição do diálogo ouvido no áudio",
+  "atores": ["Nome do Ator 1", "Nome do Ator 2"],
+  "texto_na_tela": "qualquer legenda ou texto lido na imagem",
+  "cena": "descrição de 1 a 2 frases sobre o que acontece nesta cena",
+  "tipo": "movie",
+  "titulo": "título oficial em português",
+  "titulo_original": "título original exato em inglês ou idioma nativo",
+  "ano": 2019,
+  "confianca": 92,
+  "ganchos": ["Gancho 1 sobre a cena 😳", "Gancho 2 🔥", "Gancho 3 😱"],
+  "alternativas": [
+    {"titulo": "Opção 2", "titulo_original": "Original Title 2", "ano": 2021},
+    {"titulo": "Opção 3", "titulo_original": "Original Title 3", "ano": 2017}
+  ]
+}`,p=((w=i==null?void 0:i.geminiKey)==null?void 0:w.trim())||"",g=(r==null?void 0:r.trim())||"";let v="",x="nvidia";if(p)try{const _=o.length>1?o.slice(1,7):o,k=[{text:f}];for(const C of _){const S=cg(C);S&&k.push({inline_data:S})}i!=null&&i.audioClip&&k.push({inline_data:{mime_type:i.audioClip.mimeType,data:i.audioClip.base64}}),v=await ju(p,k,!0,!0),x="gemini"}catch(_){if(!g)throw _}if(!v){if(!g)throw new ft("Adiciona a tua chave Google Gemini (recomendada) ou NVIDIA nas configurações.");v=await dg(g,f,o,!0),x="nvidia"}try{const _=v.match(/\{[\s\S]*\}/),k=JSON.parse(_?_[0]:v),C=Array.isArray(k.atores)?k.atores.map(T=>String(T).trim()).filter(T=>T&&!/^nenhum|desconhecido|n\/a$/i.test(T)):[],S=Array.isArray(k.alternativas)?k.alternativas.map(T=>({titulo:String((T==null?void 0:T.titulo)||(T==null?void 0:T.titulo_original)||"").trim(),titulo_original:T!=null&&T.titulo_original?String(T.titulo_original).trim():void 0,ano:T==null?void 0:T.ano})).filter(T=>T.titulo):[];return{titulo:String(k.titulo||k.titulo_original||"").trim(),titulo_original:k.titulo_original?String(k.titulo_original).trim():void 0,ano:k.ano,tipo:k.tipo==="tv"||k.tipo==="series"||k.tipo==="serie"?"tv":k.tipo==="movie"?"movie":void 0,confianca:Number(k.confianca)||0,atores:C,fala_do_audio:k.fala_do_audio?String(k.fala_do_audio).trim():void 0,texto_na_tela:k.texto_na_tela?String(k.texto_na_tela).trim():void 0,cena:k.cena?String(k.cena).trim():void 0,ganchos:Array.isArray(k.ganchos)?k.ganchos.map(T=>String(T).trim()).filter(Boolean):void 0,provedor:x,alternativas:S}}catch{throw new ft("Não foi possível interpretar a resposta de identificação.")}}

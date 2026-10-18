@@ -99,8 +99,11 @@ function cenario(window, opcoes = {}) {
       return { titulo: "Filme " + nome, confianca: 92, cena: "cena de " + nome, ganchos: ["Gancho de " + nome + " 😳", "outro"] };
     },
     procurarTmdb: async (chave, ia) => ({ title: ia.titulo, original: ia.titulo + " (orig)", year: 2024, poster: "https://img/p.jpg", kind: "movie", genres: [], overview: "" }),
-    gerarGancho: async () => {
+    gerarGancho: async (k, q, l, filme) => {
       chamadas.gerarGancho++;
+      const t = filme && filme.title;
+      // O gancho agora é feito depois do TMDB, com o filme certo.
+      if (t && t !== "Sem Gancho") return { cena: "cena gerada", ganchos: ["Gancho de " + String(t).replace(/^Filme /, "") + " 😳"] };
       return { cena: "cena gerada", ganchos: ["Gancho gerado 🔥"] };
     },
     processar: async (f, inicio, fim, resolucao, gancho, progresso, corte) => {

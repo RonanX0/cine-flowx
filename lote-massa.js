@@ -186,7 +186,10 @@
       }
     };
     var nome = ler("X-Cineclip-Nome") || "video_importado.mp4";
-    return new File(partes, nome, { type: "video/mp4" });
+    var ficheiro = new File(partes, nome, { type: "video/mp4" });
+    // A legenda do post (muitas vezes com o nome do filme ou uma hashtag) ajuda a IA.
+    ficheiro.cineclipPost = { legenda: ler("X-Cineclip-Titulo"), autor: ler("X-Cineclip-Autor") };
+    return ficheiro;
   }
 
   /** Links do TikTok/Kwai num texto colado (um por linha, sem repetidos). */
@@ -446,10 +449,13 @@
         audio = null;
       }
     }
+    var post = ficheiro.cineclipPost || {};
     var ia = await core.identificar(s.nvidiaKey, quadros, s.lang, {
       fileName: ficheiro.name,
       metaTitle: tituloMetadados,
       userHint: "",
+      legendaPost: post.legenda || "",
+      autorPost: post.autor || "",
       geminiKey: s.geminiKey,
       audioClip: audio,
     });
@@ -464,11 +470,21 @@
       );
     }
     var confianca = Number(ia.confianca) || 0;
+    // Conferência com o elenco do TMDB (patch 34): os atores que a IA reconheceu e os
+    // personagens que ela ouviu estão mesmo neste filme?
+    var verif = filme.verificacao || {};
+    var motivo = "";
+    if (verif.atores >= 1 && verif.atoresNoElenco === 0 && !verif.personagensNoElenco) {
+      confianca = Math.min(confianca, 50);
+      motivo = " Os atores que a IA reconheceu (" + (ia.atores || []).slice(0, 3).join(", ") + ") não estão no elenco deste título.";
+    } else if (verif.personagensNoElenco >= 1) {
+      confianca = Math.max(confianca, 70);
+    }
     item.resultado = { titulo: filme.title, ano: filme.year, confianca: confianca };
     if (confianca < CONFIANCA_MINIMA && !estado.opcoes.agendarComPoucaCerteza) {
       throw erroComTipo(
         'A IA acha que é "' + filme.title + (filme.year ? " (" + filme.year + ")" : "") + '", mas só com ' +
-          confianca + "% de certeza. Confere no Estúdio ou liga “Agendar mesmo com pouca certeza”.",
+          confianca + "% de certeza." + motivo + " Confere no Estúdio ou liga “Agendar mesmo com pouca certeza”.",
         "revisar"
       );
     }
@@ -476,17 +492,23 @@
     /* 3. Gancho ------------------------------------------------------------ */
     definirPasso(item, "A criar o gancho…", 0.2);
     var cena = ia.cena || "";
-    var gancho = (ia.ganchos || []).find(function (g) {
-      return g && String(g).trim();
-    });
+    // O gancho é feito DEPOIS de saber o filme: com a sinopse, os géneros, a cena e a
+    // fala, sai bem mais certeiro do que o rascunho da identificação (que fica de reserva).
+    var gancho = "";
+    try {
+      var g = await core.gerarGancho(s.nvidiaKey, quadros, s.lang, filme, s.geminiKey, audio, {
+        cena: ia.cena || "",
+        fala: ia.fala_do_audio || "",
+      });
+      gancho = ((g && g.ganchos) || []).find(function (x) {
+        return x && String(x).trim();
+      }) || "";
+      if (!cena && g && g.cena) cena = g.cena;
+    } catch (e) {}
     if (!gancho) {
-      try {
-        var g = await core.gerarGancho(s.nvidiaKey, quadros, s.lang, filme.title, s.geminiKey, audio);
-        gancho = ((g && g.ganchos) || []).find(function (x) {
-          return x && String(x).trim();
-        });
-        if (!cena && g && g.cena) cena = g.cena;
-      } catch (e) {}
+      gancho = (ia.ganchos || []).find(function (x) {
+        return x && String(x).trim();
+      }) || "";
     }
     gancho = String(gancho || s.overlayText || core.ganchoPadrao || "").trim();
     item.resultado.gancho = gancho;

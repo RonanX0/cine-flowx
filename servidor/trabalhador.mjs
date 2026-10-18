@@ -74,7 +74,8 @@ export function criarTrabalhador({ cfg, app, pastaDados, registo: guardaRegisto,
     await pipeline(Readable.fromWeb(resposta.body), fs.createWriteStream(destino));
     const st = await fs.promises.stat(destino);
     if (!st.size) throw new Error("O vídeo veio vazio.");
-    return { caminho: destino, name: nome, size: st.size };
+    // A legenda do post vai como pista para a IA (igual ao que o app faz com o link).
+    return { caminho: destino, name: nome, size: st.size, cineclipPost: { legenda: info.titulo || "", autor: info.autor || "" } };
   }
 
   /** O fluxo do lote do app (lote-massa.js) com as peças do servidor. */
