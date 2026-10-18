@@ -137,6 +137,14 @@ function desenhar(preset, texto, geo, { rodape = "", rodapeCor = "", cor = "" } 
 }
 
 /* ------------------------------------------------------------------ 1 */
+/* Seletor de cor (gancho e rodapé): grava uma vez ao parar de mexer, não a cada movimento. */
+{
+  const htmlCor = fs.readFileSync(path.join(root, "index.html"), "utf8");
+  check("cor do gancho: grava só depois de parar de mexer (debounce)", htmlCor.includes("window.__ccCorH=setTimeout(()=>ye({hookColor:v,hookTextColor:v}),700)"));
+  check("cor do rodapé: idem", htmlCor.includes("window.__ccCorF=setTimeout(()=>ye({footerColor:v,rodapeCor:v}),700)"));
+  check("os seletores já não regravam o cofre a cada evento", !htmlCor.includes("onChange:N=>ye({hookColor:N.target.value,hookTextColor:N.target.value})") && !htmlCor.includes("onChange:N=>ye({footerColor:N.target.value,rodapeCor:N.target.value})"));
+}
+
 console.log("\n1. A tabela de presets (medidas das capturas)");
 check("três presets: atual, escuro e claro", ["atual", "escuro", "claro"].every((k) => PRESETS_DO_REEL[k]), Object.keys(PRESETS_DO_REEL).join(","));
 check("escuro = caixa 1:1 com margens e cantos arredondados", PRESETS_DO_REEL.escuro.caixa === "quadrado" && PRESETS_DO_REEL.escuro.margem === 0.05 && PRESETS_DO_REEL.escuro.raio > 0);
