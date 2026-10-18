@@ -87,6 +87,15 @@ console.log("\n⏱️ Limite de pedidos do tikwm: tenta outra vez");
   check("o segundo pedido passa", r.itens.length === 1 && n === 2, `${r.itens.length} / ${n}`);
 }
 
+console.log("\n🩺 Motivo real da falha");
+{
+  const via = async (fetchFn) => (await buscarTendencias({ tags: "filmes" }, { fetchFn, agora: AGORA, pausa: 0 })).estados[0].erro;
+  check("bloqueio anti-robô (HTML do Cloudflare)", /bloqueado pelo anti-robô \(HTTP 403\)/.test(await via(async () => new Response("<html>Just a moment...</html>", { status: 403 }))));
+  check("resposta que não é JSON", /resposta inesperada \(HTTP 502\)/.test(await via(async () => new Response("Bad gateway", { status: 502 }))));
+  check("falha de rede mostra a causa (ex.: DNS)", /rede: ENOTFOUND/.test(await via(async () => { const e = new TypeError("fetch failed"); e.cause = { code: "ENOTFOUND" }; throw e; })));
+  check("manda User-Agent de browser e Referer", await (async () => { let h; await buscarTendencias({ tags: "filmes" }, { fetchFn: async (u, o) => { h = o.headers; return new Response(JSON.stringify({ code: 0, data: { videos: [] } })); }, agora: AGORA, pausa: 0 }); return /Chrome/.test(h["User-Agent"]) && /tikwm/.test(h.Referer); })());
+}
+
 console.log("\n🌐 Endpoint");
 {
   const resp = () => ({ headers: {}, setHeader(n, v) { this.headers[n.toLowerCase()] = v; }, end(b) { this.body = b; } });
