@@ -96,6 +96,26 @@ console.log("\n🩺 Motivo real da falha");
   check("manda User-Agent de browser e Referer", await (async () => { let h; await buscarTendencias({ tags: "filmes" }, { fetchFn: async (u, o) => { h = o.headers; return new Response(JSON.stringify({ code: 0, data: { videos: [] } })); }, agora: AGORA, pausa: 0 }); return /Chrome/.test(h["User-Agent"]) && /tikwm/.test(h.Referer); })());
 }
 
+console.log("\n🧰 Apify (quando o tikwm bloqueia)");
+{
+  const chamadas = [];
+  const itemApify = (id, o = {}) => ({ id, text: "Cena de \"Gladiador\" 🎬", createTime: h(5), playCount: 1_200_000, diggCount: 90_000, commentCount: 800, shareCount: 12_000, authorMeta: { name: "cortes" + id, nickName: "Cortes" }, videoMeta: { duration: 45, coverUrl: "https://x/c.jpg" }, ...o });
+  const fetchApify = async (url, opts) => {
+    chamadas.push({ url, opts });
+    return new Response(JSON.stringify([itemApify("11"), itemApify("12", { playCount: 5 }), { error: "x" }]), { status: 200 });
+  };
+  const r = await buscarTendencias({ tags: "filmes,cenasdefilme", perfis: "conta1", apifyToken: "apify_api_x", minViews: 1000 }, { fetchFn: fetchApify, agora: AGORA, pausa: 0 });
+  check("faz UMA execução para tudo e não toca no tikwm", chamadas.length === 1 && /api\.apify\.com\/v2\/acts\/clockworks~tiktok-scraper\/run-sync-get-dataset-items\?token=apify_api_x/.test(chamadas[0].url), chamadas.map((c) => c.url).join(" "));
+  const entrada = JSON.parse(chamadas[0].opts.body);
+  check("manda hashtags e perfis, sem baixar vídeos", JSON.stringify(entrada.hashtags) === JSON.stringify(["filmes", "cenasdefilme"]) && JSON.stringify(entrada.profiles) === JSON.stringify(["conta1"]) && entrada.shouldDownloadVideos === false);
+  check("converte para o mesmo formato (link, views, capa, nome provável)", r.itens.length === 1 && r.itens[0].url === "https://www.tiktok.com/@cortes11/video/11" && r.itens[0].views === 1_200_000 && r.itens[0].capa === "https://x/c.jpg" && r.itens[0].candidatos.some((c) => c.titulo === "Gladiador"), JSON.stringify(r.itens[0]));
+  check("estado mostra o Apify como fonte", r.estados.length === 1 && r.estados[0].fonte === "Apify" && r.estados[0].ok);
+  const erro = async (status, corpo = "{}") => (await buscarTendencias({ tags: "filmes", apifyToken: "t" }, { fetchFn: async () => new Response(corpo, { status }), agora: AGORA, pausa: 0 })).estados[0].erro;
+  check("401 → token recusado", /token do Apify recusado/.test(await erro(401)));
+  check("402 → sem crédito", /sem crédito/.test(await erro(402)));
+  check("outro erro mostra o HTTP e a mensagem", /HTTP 500: boom/.test(await erro(500, JSON.stringify({ error: { message: "boom" } }))));
+}
+
 console.log("\n🌐 Endpoint");
 {
   const resp = () => ({ headers: {}, setHeader(n, v) { this.headers[n.toLowerCase()] = v; }, end(b) { this.body = b; } });
@@ -103,6 +123,10 @@ console.log("\n🌐 Endpoint");
   const pedir = async (req) => { const r = resp(); await handler({ method: "GET", headers: { host: "cine-flowx.vercel.app" }, ...req }, r, { fetchFn: fetchFalso, pausa: 0, semCache: true }); return r; };
   let r = await pedir({ url: "/api/public/tendencias?tags=filmes&min=1000&dias=60" });
   check("200 com itens", r.statusCode === 200 && JSON.parse(r.body).itens.length >= 0 && JSON.parse(r.body).estados.length === 1, r.body);
+  let tokenVisto = "";
+  const rr = resp();
+  await handler({ method: "GET", url: "/api/public/tendencias?tags=filmes", headers: { host: "cine-flowx.vercel.app", "x-apify-token": "apify_api_zzz" } }, rr, { fetchFn: async (u) => { tokenVisto = String(u); return new Response("[]", { status: 200 }); }, pausa: 0, semCache: true });
+  check("o token do Apify vai por cabeçalho (não por URL do site) e chega ao Apify", /api\.apify\.com/.test(tokenVisto) && /apify_api_zzz/.test(tokenVisto));
   r = await pedir({ url: "/api/public/tendencias" });
   check("sem tags nem perfis → 400", r.statusCode === 400);
   r = await pedir({ method: "POST", url: "/api/public/tendencias?tags=a1" });

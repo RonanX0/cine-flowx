@@ -24,10 +24,10 @@ function criar({ tmdbKey = "tmdb-k", resposta } = {}) {
   const dom = new JSDOM('<!doctype html><body><div id="cc-tendencias-monte"></div></body>', { url: "https://exemplo.test/", runScripts: "outside-only", pretendToBeVisual: true });
   const w = dom.window;
   const chamadas = { api: [], tmdb: [], levar: [] };
-  w.fetch = async (url) => {
+  w.fetch = async (url, init) => {
     const u = new URL(String(url), "https://exemplo.test");
     if (u.pathname === "/api/public/tendencias") {
-      chamadas.api.push(u.search);
+      chamadas.api.push(u.search); chamadas.cabecalhos = init && init.headers;
       const r = resposta ? resposta() : { status: 200, corpo: { geradoEm: Date.now(), estados: [{ fonte: "#cenasdefilme", ok: true }], itens: JSON.parse(JSON.stringify(ITENS)) } };
       return { ok: r.status === 200, status: r.status, json: async () => r.corpo };
     }
@@ -109,6 +109,27 @@ console.log("\n⚠️ Erros");
   [...c.w.document.querySelectorAll("button")].find((b) => /Buscar tendências/.test(b.textContent)).click();
   await dormir(50);
   check("sem hashtag nem perfil não busca e avisa", /pelo menos uma hashtag/.test(c.texto()));
+}
+
+console.log("\n🧰 Token do Apify");
+{
+  const c = criar();
+  c.w.document.getElementById("cc-tendencias-monte").className = "";
+  await dormir(900);
+  check("sem token não manda o cabeçalho", !c.chamadas.cabecalhos);
+  const campo = [...c.w.document.querySelectorAll(".ct-campo input")].find((i) => i.type === "password");
+  check("há um campo de senha para o token", !!campo);
+  campo.value = "apify_api_abc"; campo.dispatchEvent(new c.w.Event("input"));
+  [...c.w.document.querySelectorAll("button")].find((b) => /Buscar tendências/.test(b.textContent)).click();
+  await dormir(200);
+  check("com token manda X-Apify-Token", c.chamadas.cabecalhos && c.chamadas.cabecalhos["X-Apify-Token"] === "apify_api_abc", JSON.stringify(c.chamadas.cabecalhos));
+  check("o token fica guardado só neste aparelho", /apify_api_abc/.test(c.w.localStorage.getItem("cineclip.tendencias.opcoes") || ""));
+}
+{
+  const c = criar({ resposta: () => ({ status: 200, corpo: { geradoEm: Date.now(), estados: [{ fonte: "#a", ok: false, erro: "bloqueado pelo anti-robô (HTTP 403)" }], itens: [] } }) });
+  c.w.document.getElementById("cc-tendencias-monte").className = "";
+  await dormir(900);
+  check("bloqueado e sem token → sugere o Apify", /token do Apify/.test(c.texto()) && /bloqueado pelo anti-robô/.test(c.texto()));
 }
 
 console.log("\n─────────────────────────────────────────────");

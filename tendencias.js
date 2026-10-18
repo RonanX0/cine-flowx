@@ -28,7 +28,7 @@
   var CHAVE_RESULTADO = "cineclip.tendencias.resultado";
   var VALIDADE_RESULTADO_MS = 10 * 60 * 1000;
   var SUGESTOES = ["cenasdefilme", "filmes", "movieclips", "cortesdefilmes", "melhorescenas", "seriesetv"];
-  var OPCOES_OMISSAO = { tags: "cenasdefilme, filmes, movieclips", perfis: "", dias: 7, minViews: 20000, esconderUsados: true };
+  var OPCOES_OMISSAO = { tags: "cenasdefilme, filmes, movieclips", perfis: "", dias: 7, minViews: 20000, esconderUsados: true, apifyKey: "" };
 
   var estado = {
     opcoes: lerJson(CHAVE_OPCOES, OPCOES_OMISSAO),
@@ -122,6 +122,7 @@
   function consultaDosFiltros() {
     var o = estado.opcoes;
     var q = new URLSearchParams();
+    if (String(o.apifyKey || "").trim()) q.set("via", "apify");
     if (String(o.tags || "").trim()) q.set("tags", o.tags);
     if (String(o.perfis || "").trim()) q.set("perfis", o.perfis);
     q.set("dias", String(o.dias || 7));
@@ -150,7 +151,8 @@
     estado.aviso = "";
     desenhar();
     try {
-      var r = await fetch("/api/public/tendencias?" + q + (forcar ? "&fresco=1" : ""));
+      var token = String(estado.opcoes.apifyKey || "").trim();
+      var r = await fetch("/api/public/tendencias?" + q + (forcar ? "&fresco=1" : ""), token ? { headers: { "X-Apify-Token": token } } : undefined);
       if (!r.ok) {
         var msg = "";
         try {
@@ -178,8 +180,9 @@
     estado.jaBuscou = true;
     var falhas = estado.estados.filter(function (e) { return !e.ok; });
     if (!estado.itens.length) {
+      var semToken = !String(estado.opcoes.apifyKey || "").trim();
       estado.aviso = falhas.length === estado.estados.length && falhas.length
-        ? "Nenhuma fonte respondeu (" + falhas[0].erro + "). O serviço do TikTok pode estar limitando — tenta daqui a pouco."
+        ? "Nenhuma fonte respondeu (" + falhas[0].erro + ")." + (semToken ? " O serviço grátis bloqueia servidores com frequência: cola abaixo um token do Apify (tem crédito grátis todo mês) para buscar de forma estável." : "")
         : "Nada passou nos filtros. Baixa o mínimo de visualizações ou aumenta os dias.";
     } else if (falhas.length) {
       estado.aviso = "Algumas fontes falharam: " + falhas.map(function (f) { return f.fonte + " (" + f.erro + ")"; }).join(", ") + ".";
@@ -363,6 +366,14 @@
     });
     return el("label", { className: "ct-campo" }, [el("span", { text: rotulo }), inp]);
   }
+  function campoSenha(rotulo, chave, ph) {
+    var inp = el("input", { type: "password", value: estado.opcoes[chave] || "", placeholder: ph || "", autocomplete: "off" });
+    inp.addEventListener("input", function () {
+      estado.opcoes[chave] = inp.value;
+      gravarOpcoes();
+    });
+    return el("label", { className: "ct-campo" }, [el("span", { text: rotulo }), inp]);
+  }
   function campoLista(rotulo, chave, opcoes) {
     var sel = el("select", {}, opcoes.map(function (o) {
       var opt = el("option", { value: String(o[0]), text: o[1] });
@@ -439,6 +450,12 @@
         campoLista("Postados nos últimos", "dias", [[1, "1 dia"], [3, "3 dias"], [7, "7 dias"], [14, "14 dias"], [30, "30 dias"]]),
         campoLista("Mínimo de views", "minViews", [[5000, "5 mil"], [20000, "20 mil"], [50000, "50 mil"], [100000, "100 mil"], [500000, "500 mil"]]),
         el("button", { type: "button", className: "ct-btn ct-prim", disabled: estado.carregando ? true : null, onClick: function () { buscar(true); }, text: estado.carregando ? "A buscar… (pode levar uns 10 s)" : "🔥 Buscar tendências" }),
+      ]),
+      campoSenha("Token do Apify (opcional, mais estável)", "apifyKey", "apify_api_..."),
+      el("p", { className: "ct-meta", style: "margin:0" }, [
+        "O serviço grátis do TikTok costuma bloquear servidores. O ",
+        el("a", { href: "https://console.apify.com/account/integrations", target: "_blank", rel: "noreferrer", text: "Apify", style: "color:inherit;text-decoration:underline" }),
+        " resolve isso: conta grátis com crédito mensal (confere o preço atual lá). O token fica só neste aparelho.",
       ]),
       el("label", { className: "ct-opcao" }, [esconder, el("span", { text: "Esconder os que já levei" })]),
     ]));

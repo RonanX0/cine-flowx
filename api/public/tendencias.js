@@ -4,6 +4,7 @@ import { buscarTendencias } from "../../server/tendencias.mjs";
 /**
  * GET /api/public/tendencias?tags=cenasdefilme,filmes&perfis=conta1&dias=7&min=20000
  * Devolve os cortes mais «hypados» do TikTok (ver server/tendencias.mjs).
+ * Com o cabeçalho X-Apify-Token usa o Apify (estável, pago por uso); sem ele, o tikwm.
  * CORS: o próprio site, localhost e ALLOWED_ORIGINS (como o proxy de busca).
  */
 const cache = new Map(); // instâncias quentes da Vercel guardam o resultado 10 min
@@ -37,12 +38,13 @@ export default async function handler(req, res, deps = {}) {
   if (req.query && typeof req.query === "object") q = { ...req.query, ...q };
   if (!q.tags && !q.perfis) return responder(400, { error: "Indica pelo menos uma hashtag (tags) ou um perfil (perfis)." });
 
-  const chave = JSON.stringify([q.tags, q.perfis, q.dias, q.min, q.max]);
+  const apifyToken = String(headers["x-apify-token"] || "").trim();
+  const chave = JSON.stringify([q.tags, q.perfis, q.dias, q.min, q.max, apifyToken ? "apify" : "tikwm"]);
   const guardado = cache.get(chave);
   if (guardado && Date.now() - guardado.t < VALIDADE_MS && !q.fresco && !deps.semCache) return responder(200, { ...guardado.dados, daCache: true });
 
   try {
-    const dados = await buscarTendencias({ tags: q.tags, perfis: q.perfis, dias: q.dias, minViews: q.min, max: q.max }, { fetchFn: deps.fetchFn, pausa: deps.pausa });
+    const dados = await buscarTendencias({ tags: q.tags, perfis: q.perfis, dias: q.dias, minViews: q.min, max: q.max, apifyToken }, { fetchFn: deps.fetchFn, pausa: deps.pausa });
     if (dados.itens.length) cache.set(chave, { t: Date.now(), dados });
     return responder(200, dados);
   } catch {

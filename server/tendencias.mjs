@@ -155,6 +155,70 @@ async function pedirJson(url, fetchFn) {
   throw new Error(ultimo);
 }
 
+
+/* ------------------------------------------------------------------ Apify */
+
+const APIFY_ATOR = "clockworks~tiktok-scraper";
+const APIFY_TIMEOUT_MS = 110_000;
+
+/** Um item do clockworks/tiktok-scraper → o mesmo formato do tikwm (para o resto não mudar). */
+function deApify(v) {
+  const meta = v.authorMeta || {};
+  const video = v.videoMeta || {};
+  const criado = Number(v.createTime) || Math.floor(Date.parse(v.createTimeISO || "") / 1000) || 0;
+  return {
+    video_id: v.id,
+    title: v.text || "",
+    origin_cover: video.coverUrl || video.originalCoverUrl || "",
+    duration: Number(video.duration) || 0,
+    play_count: v.playCount,
+    digg_count: v.diggCount,
+    comment_count: v.commentCount,
+    share_count: v.shareCount,
+    create_time: criado,
+    author: { unique_id: meta.name || meta.uniqueId || "", nickname: meta.nickName || meta.name || "" },
+  };
+}
+
+async function buscarNoApify(token, tags, perfis, fetchFn) {
+  const url = `https://api.apify.com/v2/acts/${APIFY_ATOR}/run-sync-get-dataset-items?token=${encodeURIComponent(token)}`;
+  let r;
+  try {
+    r = await fetchFn(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        hashtags: tags,
+        profiles: perfis,
+        resultsPerPage: 25,
+        shouldDownloadVideos: false,
+        shouldDownloadCovers: false,
+        shouldDownloadSubtitles: false,
+        shouldDownloadSlideshowImages: false,
+      }),
+      signal: AbortSignal.timeout(APIFY_TIMEOUT_MS),
+    });
+  } catch (e) {
+    throw new Error(motivoDaFalha(e));
+  }
+  if (r.status === 401 || r.status === 403) throw new Error("token do Apify recusado — confere se colaste o token certo");
+  if (r.status === 402) throw new Error("o Apify ficou sem crédito este mês");
+  if (r.status === 404) throw new Error("o Apify não encontrou o robô do TikTok");
+  const texto = await r.text();
+  let lista = null;
+  try {
+    lista = JSON.parse(texto);
+  } catch {}
+  if (!r.ok || !Array.isArray(lista)) {
+    let detalhe = "";
+    try {
+      detalhe = (JSON.parse(texto).error || {}).message || "";
+    } catch {}
+    throw new Error(`o Apify respondeu HTTP ${r.status}${detalhe ? ": " + String(detalhe).slice(0, 100) : ""}`);
+  }
+  return lista.filter((v) => v && v.id && !v.error);
+}
+
 /**
  * @param {{tags?:string[]|string, perfis?:string[]|string, dias?:number, minViews?:number, max?:number}} p
  * @param {{fetchFn?:Function, agora?:number, pausa?:number}} deps
@@ -176,6 +240,25 @@ export async function buscarTendencias(p = {}, deps = {}) {
 
   const estados = [];
   const todos = new Map();
+  const token = String(p.apifyToken || "").trim();
+  if (token) {
+    // Com token do Apify usa só ele (uma execução para todas as hashtags e perfis): é a via estável.
+    try {
+      const lista = await buscarNoApify(token, tags, perfis, fetchFn);
+      let aceites = 0;
+      for (const v of lista) {
+        const item = normalizar(deApify(v), "apify", agora);
+        if (item && !todos.has(item.id)) {
+          todos.set(item.id, item);
+          aceites++;
+        }
+      }
+      estados.push({ fonte: "Apify", ok: true, videos: lista.length, novos: aceites });
+    } catch (e) {
+      estados.push({ fonte: "Apify", ok: false, erro: e.message });
+    }
+    fontes.length = 0;
+  }
   for (let i = 0; i < fontes.length; i++) {
     const f = fontes[i];
     if (i > 0 && pausa) await esperar(pausa);
