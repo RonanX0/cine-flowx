@@ -2594,6 +2594,8 @@
     fechar: fechar,
     /** Chamado pela sincronização do app (patch 31-links-cofre). */
     mesclarLinks: mesclarLinks,
+    /** Leva links para o fluxo normal: «aqui» (este aparelho) ou «nuvem» (o servidor trata). Usado pelo painel 🔥 Tendências. */
+    levarLinks: enviarPara,
     /** Só para os testes (tools/test-lote-massa.mjs). */
     _interno: {
       ambiente: ambiente,

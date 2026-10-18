@@ -107,6 +107,16 @@ com `video_metadata`. O mesmo vídeo é reutilizado entre a identificação e o 
 upload). Se o upload falhar (CORS, rede, ficheiro gigante), o fluxo cai automaticamente para
 os frames + áudio como antes; os caminhos Groq/OpenRouter usam até 3 quadros + a transcrição do áudio (Whisper da Groq).
 
+### 🔥 Tendências (cortes em alta no TikTok)
+
+Aba **🔥 Tendências**: busca por hashtags e perfis de cortes (padrão: `#cenasdefilme`, `#filmes`,
+`#movieclips`), ordena os vídeos por **«hype»** (visualizações por hora + engajamento), mostra o
+**nome do filme** (tirado da legenda e confirmado no TMDB — o título tem de bater por inteiro) e
+tem **📥 Levar pro CineClip** (entra no Upload em massa) e **☁️ Nuvem** (o servidor processa e
+agenda). Os que já levaste ficam escondidos. Os dados vêm de `/api/public/tendencias`
+(`server/tendencias.mjs`), que usa o tikwm.com — um serviço **não oficial**: pode limitar
+(1 pedido/segundo) ou mudar, e o painel mostra qual fonte falhou. Só funciona no site publicado.
+
 ### 🔗 Importar do TikTok ou do Kwai
 
 No painel do upload em massa há uma caixa para **colar links** do TikTok ou do Kwai (um por
