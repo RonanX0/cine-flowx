@@ -286,7 +286,7 @@ console.log("\nB. O app real (bundle) com a aba «⚡ Rápido»");
 
 const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
 check("index.html carrega agendamento-rapido.js", html.includes('<script src="agendamento-rapido.js"></script>'));
-check("…depois do lote-massa.js e antes da nuvem", /lote-massa\.js"><\/script>\s*<script src="agendamento-rapido\.js"><\/script>\s*<script src="nuvem-duravel\.js">/.test(html));
+check("…depois do lote-massa.js e antes da nuvem", /lote-massa\.js"><\/script>\s*<script src="agendamento-rapido\.js"><\/script>\s*<script src="tendencias\.js"><\/script>\s*<script src="nuvem-duravel\.js">/.test(html));
 const moduleSource = /<script type="module">([\s\S]*?)<\/script>/.exec(html)[1].replace(/import\.meta\.url/g, '"file:///index.html"');
 const cineCloudSource = fs.readFileSync(path.join(root, "nuvem-duravel.js"), "utf8");
 const CONTA = { id: "acc_default", name: "@conta.teste", mode: "graph", igUserId: "1", fbPageId: "", metaAccessToken: "x", webhookUrl: "", dailySlots: ["12:00"], autoPilot: false, shareToFeed: true };
