@@ -1,0 +1,2 @@
+  for(const raw of[metaTitle,fileName]){
+    const limpoArq=_vsLimparNomeArquivo(raw);

@@ -493,6 +493,19 @@
     return partes.length > 1 ? partes.pop().toLowerCase() : "";
   }
 
+  /** Metadados que não dizem nada sobre o filme: nomes de codificador, handlers, versões e IDs. */
+  function metadadoLixo(v) {
+    var t = String(v == null ? "" : v).trim();
+    if (!t || t.length < 2) return true;
+    if (/^(video|sound|audio|data|text|timecode|metadata)\s*handle(r)?$/i.test(t)) return true;
+    if (/handle(r)?\b/i.test(t) && t.split(/\s+/).length <= 3) return true;
+    if (/\b(lavf|lavc|libx26[45]|x26[45]|bytevc\d?|bvc\d*\w*|hevc|avc1?|h\.?26[45]|handbrake|ffmpeg|core media|iso media|mainconcept|capcut|inshot|kinemaster|isom|mp42|qt\s{0,2})\b/i.test(t)) return true;
+    if (/v?\d+\.\d+(\.\d+)+/.test(t)) return true; // números de versão (1.10.0.2)
+    if (/^vid:|^[0-9a-f]{16,}$|^[a-z0-9]{24,}$/i.test(t)) return true; // IDs do TikTok
+    if (/^\d+$/.test(t)) return true;
+    return false;
+  }
+
   function semExtensao(nome) {
     return String(nome || "video").replace(/\.[^.]+$/, "");
   }
@@ -690,13 +703,15 @@
       var campos = meta.fields || [];
       todosMetadados = campos.map(function (f) {
         if (!f || !f.label || !f.value) return "";
-        if (/^(Encoder|Data)$/i.test(f.label)) return "";
+        if (/^(Encoder|Data)$/i.test(f.label) || metadadoLixo(f.value)) return "";
         return f.label + ": " + f.value;
       }).filter(Boolean).join(" | ");
+      // Só o campo «Título» pode dar nome ao filme — e só se não for lixo do codificador
+      // (o TikTok grava "VideoHandle", "ByteVC1-v1.10.0.2", "bvc0ot v2.2.1.3-…").
       var campo = campos.find(function (f) {
-        return f && f.label === "Título";
+        return f && f.label === "Título" && !metadadoLixo(f.value);
       });
-      tituloMetadados = campo ? campo.value : (campos[0] ? campos[0].value : "");
+      tituloMetadados = campo ? String(campo.value).trim() : "";
     }
     if (!info) {
       if (meta && meta.width && meta.height) {
