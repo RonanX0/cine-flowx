@@ -426,6 +426,7 @@
 
     /* 2. Identificar (opcional) + 3. Legenda + capa ----------------------- */
     if (identificar) {
+     try {
       definirPasso(item, "A identificar o filme…", 0.2);
       var fim = Math.min(MAX_SEGUNDOS_ANALISE, duracao || MAX_SEGUNDOS_ANALISE);
       if (fim < 1) fim = 1;
@@ -559,6 +560,22 @@
       try {
         core.guardarHistorico({ title: filme.title, year: filme.year, caption: legenda, date: ambiente.agora() });
       } catch (e) {}
+     } catch (erroIdent) {
+      // Estes vídeos já estão editados: se a IA falhar (cota, rede, filme não achado ou pouca
+      // certeza), o vídeo NÃO fica de fora — vai para a fila com a legenda-modelo e o nome do ficheiro.
+      if (erroIdent && erroIdent.tipo === "parado") throw erroIdent;
+      titulo = tituloDoNome(ficheiro.name);
+      poster = "";
+      filme = null;
+      confianca = 0;
+      if (!item.legendaManual) legenda = "";
+      item.titulo = titulo;
+      item.ano = "";
+      item.poster = "";
+      item.confianca = 0;
+      item.aviso = ((erroIdent && erroIdent.message) || "A IA não identificou o filme.") +
+        " Foi agendado com a legenda-modelo — podes editá-la aqui ou no Agendador.";
+     }
     }
 
     if (!legenda || !String(legenda).trim()) {

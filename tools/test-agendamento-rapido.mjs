@@ -198,12 +198,15 @@ console.log("\nA3. Pouca certeza da IA");
   c.rapido.adicionarFicheiros([ficheiro(window, "duvida.mp4")]);
   await c.rapido.iniciar();
   const item = c.rapido.estado.itens[0];
-  check("fica para rever, não é agendado", item.estado === "revisar" && c.fila.length === 0, `${item.estado} fila=${c.fila.length}`);
-  check("explica a certeza e a solução", /50% de certeza/.test(item.erro) && /pouca certeza/.test(item.erro), item.erro);
-  check("o painel oferece «Agendar mesmo assim»", [...window.document.querySelectorAll("button")].some((b) => /Agendar mesmo assim/.test(b.textContent)));
+  check("não fica de fora: vai para a fila com a legenda-modelo", item.estado === "agendado" && c.fila.length === 1, `${item.estado} fila=${c.fila.length}`);
+  check("não usa o palpite duvidoso da IA (título do ficheiro, sem capa)", c.fila[0].title === "duvida" && !c.fila[0].poster, c.fila[0].title);
+  check("avisa a certeza e que usou a legenda-modelo", /50% de certeza/.test(item.aviso) && /legenda-modelo/.test(item.aviso), item.aviso);
 
   c.rapido.estado.opcoes.agendarComPoucaCerteza = true;
+  c.fila.length = 0;
   c.rapido.estado.itens[0].estado = "pendente";
+  c.rapido.estado.itens[0].reelId = undefined;
+  c.rapido.estado.itens[0].id = "outro-id";
   await c.rapido.iniciar();
   check("com a opção ligada, agenda o vídeo duvidoso", c.fila.length === 1 && c.fila[0].title === "Talvez Este", `fila=${c.fila.length}`);
   dom.window.close();
