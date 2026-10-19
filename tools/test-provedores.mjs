@@ -25,7 +25,7 @@ const OBRAS = {
   "tv-58841": { kind: "tv", id: 58841, name: "Chicago P.D.", original_name: "Chicago P.D.", first_air_date: "2014-01-08", popularity: 300, overview: "Polícia de Chicago.", cast: [{ name: "Patrick Flueger", roles: [{ character: "Adam Ruzek" }] }, { name: "Tracy Spiridakos", roles: [{ character: "Hailey Upton" }] }] },
   "tv-44006": { kind: "tv", id: 44006, name: "Chicago Fire", original_name: "Chicago Fire", first_air_date: "2012-10-10", popularity: 400, overview: "Bombeiros.", cast: [{ name: "Taylor Kinney", roles: [{ character: "Kelly Severide" }] }] },
 };
-const PESQUISA = { "chicago p d": ["tv-58841"], "chicago fire": ["tv-44006"] };
+const PESQUISA = { "chicago p d": ["tv-58841"], "chicago pd": ["tv-58841"], "chicago fire": ["tv-44006"] };
 const norm = (s) => String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim();
 const resumo = (k) => { const o = OBRAS[k]; return { id: o.id, name: o.name, original_name: o.original_name, first_air_date: o.first_air_date, popularity: o.popularity, overview: o.overview, poster_path: "/p.jpg" }; };
 function tmdb(u) {
@@ -332,6 +332,33 @@ console.log("\n🧩 Aprende com a correção do utilizador");
   check("outros vídeos não são afetados", f3 && f3.title === "Chicago Fire", f3 && f3.title);
   check("nome genérico (video.mp4) não vira regra", motor.aprender({ certo: { title: "X" }, arquivo: "video.mp4", ia: {} }) === false);
   Object.assign(PESQ, pesqOriginal);
+}
+
+console.log("\n📂 Nome do ficheiro");
+{
+  zerar();
+  motor.prov._interno.limpar();
+  motor.configurar({ groqKey: "gsk_teste" });
+  app.window.localStorage.removeItem("cineclip.motor.memoria");
+  const pesqOriginal = JSON.parse(JSON.stringify(PESQ));
+  const percOriginal = JSON.parse(JSON.stringify(PERCECAO));
+  // A IA acha que é Chicago Fire e não há atores/nomes no vídeo; o ficheiro diz Chicago P.D.
+  PESQ.candidatos = [{ titulo: "Chicago Fire", titulo_original: "Chicago Fire", ano: 2012, tipo: "tv", confianca: 90 }];
+  PERCECAO.atores = []; PERCECAO.nomes_ouvidos = []; PERCECAO.falas = ["Abaixa a arma agora!"];
+  const ia = await ident({ fileName: "Chicago PD.mp4" });
+  const f = await core.procurarTmdb("tmdb", ia);
+  check("o título no nome do ficheiro ganha da IA quando o vídeo não prova outra obra", f && f.title === "Chicago P.D." && ia.confianca >= 85, `${f && f.title} ${ia.confianca}`);
+  const pesq = S.groqChats.find((b) => /pesquisador de cinema/.test(textoDe(b)));
+  check("a pesquisa recebe o nome do ficheiro como pista forte", pesq && /Nome do ficheiro: "Chicago PD"/.test(textoDe(pesq)) && /costuma ser o NOME DA OBRA/.test(textoDe(pesq)));
+  // Mas se o elenco/personagens provam outra obra, as provas mandam.
+  Object.assign(PERCECAO, JSON.parse(JSON.stringify(percOriginal)), { atores: [{ nome: "Patrick Flueger", certeza: 80 }], nomes_ouvidos: ["Ruzek", "Upton"], falas: ["Cobre a porta dos fundos, vai!"] });
+  PESQ.candidatos = [{ titulo: "Chicago P.D.", titulo_original: "Chicago P.D.", ano: 2014, tipo: "tv", confianca: 90 }];
+  zerar();
+  const ia2 = await ident({ fileName: "Chicago Fire.mp4" });
+  const f2 = await core.procurarTmdb("tmdb", ia2);
+  check("com personagens e ator provando outra obra, o nome errado do ficheiro perde", f2 && f2.title === "Chicago P.D.", f2 && f2.title);
+  Object.assign(PESQ, pesqOriginal);
+  Object.assign(PERCECAO, percOriginal);
 }
 
 console.log("\n✍️ Legendas: a Groq escreve, o Gemini é reserva");

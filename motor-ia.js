@@ -266,7 +266,8 @@
       "Você é um pesquisador de cinema e TV. Descubra de que FILME ou SÉRIE é este corte, usando " + (resultados ? "os RESULTADOS DE BUSCA abaixo (e o que você sabe)" : "a Pesquisa Google") + ".\n\n" +
       "PROVAS TIRADAS DO VÍDEO:\n" + (linhas.join("\n") || "- (quase nenhuma prova)") + "\n" +
       textoResultados(resultados) +
-      (ext.length ? "\nPISTAS DE FORA (podem ajudar ou enganar — o nome do ficheiro às vezes é só do perfil ou do app):\n" + ext.join("\n") + "\n" : "") +
+      (ext.length ? "\nPISTAS DE FORA:\n" + ext.join("\n") + "\n" +
+        (pistas.arquivo ? "O nome do ficheiro costuma ser o NOME DA OBRA escrito pelo utilizador: se for um título de filme/série que existe e as provas não o contradizem, ele deve ser o 1º candidato. Só o descarte se as provas (falas, personagens, atores) apontarem claramente para outra obra.\n" : "") : "") +
       "\nCOMO PESQUISAR:\n" +
       "1. Pesquise as falas entre aspas (no idioma original; se for dublado, traduza para inglês) junto com \"movie\", \"series\" ou \"quote\".\n" +
       "2. Pesquise os nomes ditos/escritos juntos (ex.: \"Ruzek\" \"Upton\"). Dois nomes de personagens juntos identificam uma série quase sempre.\n" +
@@ -398,7 +399,9 @@
     visto.provas.palpites.forEach(function (p) {
       candidatos.push({ titulo: p.titulo, titulo_original: p.titulo_original, ano: p.ano, tipo: p.tipo, confianca: 45, provas: p.motivo ? [p.motivo] : [], conflitos: [], origem: "palpite" });
     });
-    if (pn && pn.titulo) candidatos.push(candidatoDoArquivo(pn, 40));
+    // Um título legível no nome do ficheiro é uma pista forte: se bater certinho com uma obra do TMDB,
+    // ganha — a não ser que o elenco/personagens provem outra obra (ver pontos()).
+    if (pn && pn.titulo) candidatos.push(candidatoDoArquivo(pn, 75));
     // O que o utilizador já corrigiu para este mesmo vídeo vale mais do que qualquer palpite da IA.
     var lembrados = lembrar(op.fileName, visto.provas.falas);
     if (lembrados.length) {
@@ -421,7 +424,7 @@
   }
 
   function candidatoDoArquivo(pn, conf) {
-    return { titulo: pn.titulo, titulo_original: pn.titulo, ano: pn.ano || 0, tipo: pn.tipo === "tv" ? "tv" : "", temporada_episodio: pn.temporada_episodio || "", confianca: conf, provas: ["nome do ficheiro"], conflitos: [], origem: "arquivo" };
+    return { titulo: pn.titulo, titulo_original: pn.titulo, ano: pn.ano || 0, tipo: pn.tipo === "tv" ? "tv" : "", temporada_episodio: pn.temporada_episodio || "", confianca: conf, provas: ["nome do ficheiro"], conflitos: [], origem: "arquivo", doNome: true };
   }
 
   function unicos(cands) {
@@ -552,10 +555,11 @@
       if (ja) {
         ja.cands.push(cand);
         ja.exato = ja.exato || exato;
+        if (exato && cand.doNome) ja.nomeExato = true;
         ja.idx = Math.min(ja.idx, idx);
         return;
       }
-      itens.set(k, { item: item, cands: [cand], idx: idx, exato: exato });
+      itens.set(k, { item: item, cands: [cand], idx: idx, exato: exato, nomeExato: !!(exato && cand.doNome) });
     }
     await Promise.all(
       cands.map(async function (c, idx) {
@@ -571,7 +575,8 @@
           var res = await h.buscarTmdb(chave, q).catch(function () { return []; });
           (res || []).slice(0, 8).forEach(function (r) {
             var nt = norm(r.title), no = norm(r.original);
-            var exato = nt === nq || no === nq;
+            var sq = function (x) { return String(x || "").replace(/\s+/g, ""); };
+            var exato = nt === nq || no === nq || (nq.length >= 4 && (sq(nt) === sq(nq) || sq(no) === sq(nq)));
             var parcial = !exato && nq.length >= 4 && [nt, no].some(function (t) {
               return t && (t.indexOf(nq) === 0 || nq.indexOf(t) === 0) && Math.min(t.length, nq.length) / Math.max(t.length, nq.length) >= 0.5;
             });
@@ -588,6 +593,8 @@
       var melhor = it.cands.reduce(function (m, c) { return (c.confianca || 0) > (m.confianca || 0) ? c : m; }, it.cands[0]);
       var t = (melhor.confianca || 40) * 0.5 - it.idx * 5 + (it.cands.length - 1) * 10;
       if (melhor.origem === "arquivo" && !temProvas) t += 25;
+      // O título do nome do ficheiro bateu exatamente com esta obra: pesa como uma prova forte.
+      if (it.nomeExato) t += 60;
       if (it.cands.some(function (c) { return c.origem === "memoria"; })) t += 140;
       t += it.exato ? 30 : 8;
       var a = melhor.ano, y = Number(it.item.year) || 0;
@@ -639,6 +646,7 @@
     var doArquivo = vencedor.cands.some(function (c) { return c.origem === "arquivo"; });
     if (vencedor.cands.some(function (c) { return c.origem === "memoria"; })) conf = Math.max(conf, 90);
     if (doArquivo && vencedor.exato && !temProvas) conf = Math.max(conf, 85);
+    if (vencedor.nomeExato && (provasOk > 0 || !temProvas || !vencedor.creditos)) conf = Math.max(conf, 88);
     if (doArquivo && vencedor.exato && vencedor.cands.length > 1) conf = Math.max(conf, 90);
     conf = Math.round(Math.max(0, Math.min(99, conf)));
 
