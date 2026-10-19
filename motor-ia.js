@@ -186,6 +186,16 @@
     return saida;
   }
 
+  /** Porque é que o Gemini não respondeu — vai no selo do resultado para não trocar de provedor em silêncio. */
+  function motivoGemini(gem, e) {
+    if (!gem) return "sem chave Gemini";
+    var st = e && e.status, m = String((e && e.message) || "");
+    if (st === 429 || /\b429\b|quota|cota|RESOURCE_EXHAUSTED|limite de pedidos/i.test(m)) return "Gemini sem cota";
+    if (st === 401 || st === 403 || /\b40[13]\b|API key|chave.*(recusada|inválida)|PERMISSION_DENIED/i.test(m)) return "chave Gemini recusada";
+    if (st === 503 || st === 500 || st === 502) return "Gemini fora do ar";
+    return "Gemini falhou";
+  }
+
   async function perceber(h, o) {
     var op = o.opcoes || {};
     var gem = txt(op.geminiKey, 200);
@@ -228,7 +238,7 @@
       if (r2) {
         var provas = normalizarProvas(r2);
         if (fala && !provas.falas.length) provas.falas = [fala.slice(0, 300)];
-        return { provas: provas, provedor: Prov.ultimo || "groq" };
+        return { provas: provas, provedor: Prov.ultimo || "groq", motivo: motivoGemini(gem, erro) };
       }
     }
     if (erro) throw erro;
@@ -455,6 +465,7 @@
       emocao: p.emocao || void 0,
       ganchos: [],
       provedor: visto.provedor,
+      provedor_motivo: visto.motivo || void 0,
       acordo_provedores: false,
       alternativas: candidatos.slice(1, 6).map(function (c) {
         return { titulo: c.titulo, titulo_original: c.titulo_original || void 0, ano: c.ano || void 0, tipo: c.tipo || void 0 };

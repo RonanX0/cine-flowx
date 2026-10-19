@@ -1,1 +1,1 @@
-o.provedor==="groq"?"Groq (visão + áudio + busca)":o.provedor==="openrouter"?"OpenRouter (modelo grátis)":"IA de visão"
+o.provedor==="groq"?"Groq (visão + áudio + busca)"+(o.provedor_motivo?" · "+o.provedor_motivo:""):o.provedor==="openrouter"?"OpenRouter (modelo grátis)"+(o.provedor_motivo?" · "+o.provedor_motivo:""):"IA de visão"
