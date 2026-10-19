@@ -786,6 +786,7 @@
       ia = cacheHit.ia;
       filme = cacheHit.filme;
     } else {
+     try {
       var optsIdent = {
         useFileNameHint: s.useFileNameHint !== false,
         fileName: ficheiro.name,
@@ -864,16 +865,27 @@
         );
       }
       if (hashVideo && filme.id) cacheIdentGuardar(hashVideo, { ia: ia, filme: filme });
+      var confIdent = Number(ia.confianca) || 0;
+      if (confIdent < CONFIANCA_MINIMA && !permitirPoucaCerteza) {
+        throw erroComTipo(
+          'A IA acha que é "' + filme.title + (filme.year ? " (" + filme.year + ")" : "") + '", mas só com ' +
+            confIdent + "% de certeza",
+          "revisar"
+        );
+      }
+     } catch (erroIdent) {
+      // A IA falhou (cota, rede, TMDB) ou ficou em dúvida: o vídeo NÃO fica de fora do lote.
+      // Segue como «Sem identificação»: título do nome do ficheiro, sem capa e sem palpite errado.
+      if (erroIdent && erroIdent.tipo === "parado") throw erroIdent;
+      var nomeSemId = dicaLink || tituloMetadados || baseLimpo || "";
+      ia = { titulo: nomeSemId || "Cena de filme", confianca: 0, cena: (ia && ia.cena) || "", ganchos: [], modo_identificacao: "sem_id" };
+      filme = { id: 0, kind: "movie", title: nomeSemId || "Cena de filme", original: nomeSemId || "", year: "", poster: "", overview: "", genres: [], _semNome: !nomeSemId };
+      item.aviso = String((erroIdent && erroIdent.message) || "A IA não identificou o filme").replace(/[.\s]+$/, "") +
+        " — seguiu sem identificação (título do nome do ficheiro). Podes corrigir no Agendador.";
+     }
     }
     var confianca = Number(ia.confianca) || 0;
     item.resultado = { titulo: filme.title, ano: filme.year, confianca: confianca };
-    if (modoIdent !== "sem_id" && confianca < CONFIANCA_MINIMA && !permitirPoucaCerteza) {
-      throw erroComTipo(
-        'A IA acha que é "' + filme.title + (filme.year ? " (" + filme.year + ")" : "") + '", mas só com ' +
-          confianca + "% de certeza. Confere no Estúdio ou liga “Agendar mesmo com pouca certeza”.",
-        "revisar"
-      );
-    }
 
     /* 3. Gancho ------------------------------------------------------------ */
     definirPasso(item, modoGancho === "sem_gancho" ? "Modo sem gancho…" : "A criar o gancho…", 0.2);
@@ -942,7 +954,7 @@
       if (!gancho && rascunhoIA) gancho = rascunhoIA;
       if (!gancho) {
         var cenaLimpa = String(cena || "").trim().replace(/[.!?]+$/, "");
-        var titLimpo = String((filme && filme.title) || "").trim();
+        var titLimpo = filme && !filme._semNome ? String(filme.title || "").trim() : "";
         var poolVirais = [
           titLimpo ? ("O detalhe oculto nesta cena de " + titLimpo + " mudou tudo 😳") : "O detalhe que quase ninguém notou nesta cena muda tudo 😳",
           titLimpo ? ("O segredo por trás deste momento em " + titLimpo + " é assustador 💀") : "O silêncio antes da revelação entregou o segredo inteiro 💀",
@@ -974,12 +986,21 @@
 
     /* 5. Legenda ------------------------------------------------------------- */
     definirPasso(item, "A escrever a legenda…", 0.88);
-    var legenda = await core.gerarLegenda(s.groqKey, filme, s.lang, {
-      cena: cena,
-      hookText: gancho,
-      geminiKey: s.geminiKey,
-    });
-    if (!legenda || !String(legenda).trim()) throw erroComTipo("A IA devolveu uma legenda vazia.", "legenda");
+    var legenda = "";
+    try {
+      legenda = await core.gerarLegenda(s.groqKey, filme, s.lang, {
+        cena: cena,
+        hookText: gancho,
+        geminiKey: s.geminiKey,
+      });
+    } catch (e) {
+      item.aviso = (item.aviso ? item.aviso + " " : "") + "A IA não escreveu a legenda (" + String((e && e.message) || e).replace(/[.\s]+$/, "") + ") — foi usada uma legenda simples.";
+    }
+    if (!legenda || !String(legenda).trim()) {
+      // Sem legenda da IA o Reel vai na mesma, com uma legenda simples que se edita no Agendador.
+      var titLeg = filme && !filme._semNome ? filme.title + (filme.year ? " (" + filme.year + ")" : "") : "";
+      legenda = (gancho ? gancho + "\n\n" : "") + (titLeg ? "🎬 " + titLeg + "\n\n" : "") + "#Filmes #Cinema #Reels #CenasDeFilme";
+    }
     try {
       core.guardarHistorico({ title: filme.title, year: filme.year, caption: legenda, date: ambiente.agora() });
     } catch (e) {}
@@ -2167,6 +2188,7 @@
             (r.gancho ? " · “" + r.gancho + "”" : ""),
         })
       );
+      if (it.aviso) partes.push(el("div", { className: "cl-det revisar", text: "⚠️ " + it.aviso }));
     } else if (it.estado === "erro" || it.estado === "revisar") {
       partes.push(el("div", { className: "cl-det " + it.estado, text: it.erro }));
     }
