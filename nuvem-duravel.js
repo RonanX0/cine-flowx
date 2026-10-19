@@ -149,7 +149,9 @@
       driveSingleMaxBytes: Number(s.driveSingleMaxMb || 8) * 1024 * 1024,
       maxMb: Number(s.r2MaxMb || 0) || 95,
       presign: s.r2Presign !== false,
-      mirrorLegacy: s.cloudMirrorLegacy !== false,
+      // Cópia extra do cofre em hosts públicos (bytebin/kappa): só se o utilizador pedir.
+      // Com a nuvem durável a funcionar, eram 2 uploads a terceiros por cada gravação.
+      mirrorLegacy: s.cloudMirrorLegacy === true,
       provider: String(s.cloudProvider || "auto").trim().toLowerCase(),
       timeoutMs: Number(s.cloudTimeoutMs || 0) || 300000,
       stallMs: Number(s.cloudStallMs || 0) || STALL_MS
@@ -1298,7 +1300,7 @@
     var target = providers.filter(function (p) {
       return p !== "legacy";
     })[0];
-    if (!target || !cfg.mirrorLegacy) return false;
+    if (!target) return false;
     try {
       if (target === "r2") await r2PutVault(cfg, vaultHash, cipher);
       else await drivePutVault(cfg, vaultHash, cipher);
