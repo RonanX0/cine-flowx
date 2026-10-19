@@ -1039,6 +1039,7 @@
       var chaveItem = item && item.id ? ("lote_" + sessaoLoteId + "_" + item.id) : "";
       var duplicado = fila.find(function (r) {
         if (!r || r.accountId !== conta.id || r.status === "error") return false;
+        if (r.status === "published") return false;
         if (chaveItem && r._loteKey === chaveItem) return true;
         if (item.caixaId && r.caixaId === item.caixaId && (r.caixaTentativa || 0) === (item.tentativa || 0) && r.status === "scheduled") return true;
         return false;
@@ -1111,7 +1112,9 @@
 
   var sincronizacao = Promise.resolve();
   var travaAgendar = Promise.resolve();
-  var sessaoLoteId = 1;
+  // Único por carregamento da página: com "1" fixo, a chave "lote_1_1" de hoje batia com a de
+  // um lote antigo já publicado e o vídeo novo NÃO entrava na fila (aparecia «Agendado» com a data velha).
+  var sessaoLoteId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
   var reelsAgendadosSessao = [];
   var reelsAgendadosFallback = [];
 
@@ -1243,7 +1246,7 @@
     estado.conta = app.account;
     estado.aCorrer = true;
     estado.pararPedido = false;
-    sessaoLoteId++;
+    sessaoLoteId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
     reelsAgendadosSessao = [];
     reelsAgendadosFallback = [];
     avisar("");

@@ -278,6 +278,21 @@ console.log("\nA2d. Metadados do TikTok (VideoHandle, ByteVC1-v1.10.0.2) não vi
   dom.window.close();
 }
 
+console.log("\nA2e. Reels de lotes antigos (mesma chave lote_1_1) não bloqueiam os novos");
+{
+  const dom = novoDom();
+  const c = cenario(dom.window);
+  c.fila.push({ id: "velho1", accountId: "acc_cena", status: "published", scheduledAt: "2026-10-16T18:30", _loteKey: "lote_1_1", title: "Antigo" });
+  c.fila.push({ id: "velho2", accountId: "acc_cena", status: "scheduled", scheduledAt: "2026-10-20T09:30", _loteKey: "lote_1_2", title: "Outro" });
+  c.fila.push({ id: "velho3", accountId: "acc_cena", status: "scheduled", scheduledAt: "2026-10-20T10:15", _loteKey: "lote_2_1", title: "Outro 2" });
+  c.lote.adicionarFicheiros([ficheiro(dom.window, "longo.mp4"), ficheiro(dom.window, "curto.mp4")]);
+  await c.lote.iniciar();
+  const novos = c.fila.filter((r) => !/^velho/.test(r.id));
+  check("os 2 vídeos novos entram na fila", novos.length === 2, `novos=${novos.length} estados=${c.lote.estado.itens.map((i) => i.estado + "@" + (i.resultado && i.resultado.horario)).join(",")}`);
+  check("nenhum item aponta para um Reel antigo", c.lote.estado.itens.every((i) => i.resultado && i.resultado.reelId && !/^velho/.test(i.resultado.reelId)));
+  dom.window.close();
+}
+
 console.log("\nA3. Opção «Agendar mesmo com pouca certeza»");
 {
   const dom = novoDom();

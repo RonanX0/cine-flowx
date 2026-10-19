@@ -60,6 +60,8 @@
   };
 
   var proximoId = 1;
+  // Único por carregamento: "rapido_1" de hoje não pode bater com o "rapido_1" de ontem (já publicado).
+  var SESSAO_RAPIDO = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
   /* ------------------------------------------------------------- opções */
 
@@ -602,7 +604,7 @@
       );
       if (!Array.isArray(fila)) fila = [];
 
-      var chaveItem = "rapido_" + item.id;
+      var chaveItem = "rapido_" + SESSAO_RAPIDO + "_" + item.id;
       var duplicado = fila.find(function (r) {
         if (!r || r.accountId !== conta.id) return false;
         return r._rapidoKey === chaveItem;

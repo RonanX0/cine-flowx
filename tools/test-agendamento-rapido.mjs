@@ -174,6 +174,20 @@ console.log("A1. Dois vídeos já editados: legenda + capa, sem edição");
   dom.window.close();
 }
 
+console.log("\nA1b. Um Reel antigo com a chave rapido_1 não bloqueia o vídeo novo");
+{
+  const dom = await novoDom();
+  const { window } = dom;
+  const c = cenario(window);
+  c.fila.push({ id: "velho", accountId: c.app.account.id, status: "published", scheduledAt: "2026-10-16T18:30", _rapidoKey: "rapido_1", title: "Antigo" });
+  c.fila.push({ id: "velho2", accountId: c.app.account.id, status: "scheduled", scheduledAt: "2026-10-20T09:30", _rapidoKey: "rapido_2", title: "Antigo 2" });
+  c.rapido.adicionarFicheiros([ficheiro(window, "filme-a.mp4"), ficheiro(window, "filme-b.mp4")]);
+  await c.rapido.iniciar();
+  const novos = c.fila.filter((r) => !/^velho/.test(r.id));
+  check("os 2 vídeos novos entram na fila", novos.length === 2, `novos=${novos.length}`);
+  dom.window.close();
+}
+
 console.log("\nA2. Com a IA desligada: só legenda, sem capa");
 {
   const dom = await novoDom();
