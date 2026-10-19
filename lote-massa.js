@@ -738,9 +738,11 @@
     if (estado.pararPedido) throw erroComTipo("Lote parado.", "parado");
     definirPasso(item, modoIdent === "sem_id" ? "A preparar corte direto…" : "A identificar o filme…", 0.1);
     var temGemini = !!String(s.geminiKey || "").trim();
+    // O áudio também serve à Groq (Whisper transcreve as falas) — não só ao Gemini.
+    var querAudio = temGemini || !!String(s.groqKey || "").trim();
     var capturaParalela = await Promise.all([
       core.quadros(ficheiro, 0, fim, corte),
-      temGemini ? Promise.resolve().then(function () { return core.audio(ficheiro, 0, fim); }).catch(function () { return null; }) : Promise.resolve(null),
+      querAudio ? Promise.resolve().then(function () { return core.audio(ficheiro, 0, fim); }).catch(function () { return null; }) : Promise.resolve(null),
       temGemini && typeof core.videoParaIA === "function"
         ? Promise.resolve().then(function () { return core.videoParaIA(ficheiro, 0, fim); }).catch(function () { return null; })
         : Promise.resolve(null),

@@ -433,7 +433,8 @@
       var quadros = await core.quadros(ficheiro, 0, fim, corte);
       var temGemini = !!String(s.geminiKey || "").trim();
       var audio = null;
-      if (temGemini && typeof core.audio === "function") {
+      // O áudio também serve à Groq (Whisper transcreve as falas) — não só ao Gemini.
+      if ((temGemini || String(s.groqKey || "").trim()) && typeof core.audio === "function") {
         try {
           audio = await core.audio(ficheiro, 0, fim);
         } catch (e) {
