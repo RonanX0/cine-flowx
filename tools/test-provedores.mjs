@@ -78,6 +78,7 @@ const fetchFalso = async (url, opts = {}) => {
     if (/:generateContent$/.test(u.pathname)) {
       S.geminiUrls.push(u.pathname);
       if (S.gemini === "falha") return json({ error: { message: "boom" } }, 500);
+      if (S.gemini === "cota") return json({ error: { message: "Resource has been exhausted (e.g. check quota).", status: "RESOURCE_EXHAUSTED" } }, 429);
       const corpo = JSON.parse(String(opts.body));
       if (/gemini-2\.5-pro/.test(u.pathname) && S.proFalha) return json({ error: { message: "quota" } }, 429);
       const texto = corpo.contents[0].parts.map((p) => p.text || "").join("\n");
@@ -249,6 +250,33 @@ console.log("\n↪️ Gemini falha → Groq assume");
   const ia = await ident({ geminiKey: "gem" });
   const filme = await core.procurarTmdb("tmdb", ia);
   check("com o Gemini fora do ar, a Groq identifica", filme && filme.title === "Chicago P.D." && S.geminiUrls.length > 0 && S.groqChats.length > 0, `${filme && filme.title}`);
+  check("o resultado diz porque trocou de provedor", /Gemini/.test(ia.provedor_motivo || ""), ia.provedor_motivo);
+}
+{
+  zerar({ gemini: "cota" });
+  motor.prov._interno.limpar();
+  motor.configurar({ groqKey: "gsk_teste" });
+  const ia = await ident({ geminiKey: "gem" });
+  check("cota do Gemini esgotada → motivo «Gemini sem cota»", ia.provedor === "groq" && ia.provedor_motivo === "Gemini sem cota", `${ia.provedor} / ${ia.provedor_motivo}`);
+}
+{
+  zerar();
+  motor.prov._interno.limpar();
+  motor.configurar({ groqKey: "gsk_teste" });
+  const ia = await ident({});
+  check("sem chave Gemini → motivo «sem chave Gemini»", ia.provedor_motivo === "sem chave Gemini", ia.provedor_motivo);
+  const ia2 = await ident({ geminiKey: "gem" });
+  check("com o Gemini a responder não há motivo de troca", ia2.provedor === "gemini" && !ia2.provedor_motivo, `${ia2.provedor} ${ia2.provedor_motivo}`);
+}
+{
+  zerar();
+  motor.configurar({ geminiBuscaForte: false });
+  await ident({ geminiKey: "gem" });
+  check("com «Gemini Pro» desmarcado a busca não usa o 2.5 Pro", S.geminiUrls.length > 0 && !S.geminiUrls.some((u) => /gemini-2\.5-pro/.test(u)), S.geminiUrls.join(" "));
+  zerar();
+  motor.configurar({ geminiBuscaForte: true });
+  await ident({ geminiKey: "gem" });
+  check("com «Gemini Pro» marcado a busca usa o 2.5 Pro", S.geminiUrls.some((u) => /gemini-2\.5-pro/.test(u)), S.geminiUrls.join(" "));
 }
 
 console.log("\n🔑 Sem nenhuma chave de IA");
