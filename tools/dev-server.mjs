@@ -123,8 +123,8 @@ const server = http.createServer(async (req, res) => {
     "Content-Length": String(stat.size),
     "Cache-Control": "no-cache",
     "Access-Control-Allow-Origin": "*",
-    // Igual ao vercel.json: página isolada → FFmpeg com vários núcleos.
-    ...(ext === ".html" ? { "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder-Policy": "credentialless" } : {}),
+    // Só com DEV_ISOLADO=1: página isolada (COOP/COEP) para testar o FFmpeg multi-núcleo.
+    ...(ext === ".html" && process.env.DEV_ISOLADO === "1" ? { "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder-Policy": "credentialless" } : {}),
   });
   if (req.method === "HEAD") return res.end();
   fs.createReadStream(filePath).pipe(res);
