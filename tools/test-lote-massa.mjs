@@ -263,6 +263,21 @@ console.log("\nA2c. A IA falha (cota/rede) na identificação e na legenda → o
   dom.window.close();
 }
 
+console.log("\nA2d. Metadados do TikTok (VideoHandle, ByteVC1-v1.10.0.2) não viram título");
+{
+  const dom = novoDom();
+  const c = cenario(dom.window);
+  let dicaRecebida = null;
+  c.core.lerMetadados = async () => ({ duration: 30, fields: [{ label: "Handler", value: "VideoHandle" }, { label: "Título", value: "ByteVC1-v1.10.0.2" }, { label: "Comentário", value: "bvc0ot v2.2.1.3-20250220" }] });
+  c.core.identificar = async (k, q, l, info) => { dicaRecebida = info; throw new Error("sem cota"); };
+  c.lote.adicionarFicheiros([ficheiro(dom.window, "O_troll_da_montanha_.mp4")]);
+  await c.lote.iniciar();
+  check("o título vem do nome do ficheiro", c.fila[0] && c.fila[0].title === "O troll da montanha", c.fila[0] && c.fila[0].title);
+  check("o lixo do codificador não vai para a IA", dicaRecebida && !dicaRecebida.metaTitle && !/VideoHandle|ByteVC|bvc0ot/.test(dicaRecebida.userHint || ""), JSON.stringify(dicaRecebida && [dicaRecebida.metaTitle, dicaRecebida.userHint]));
+  check("o gancho de reserva não cita lixo", c.fila[0] && !/ByteVC|bvc0ot|VideoHandle/.test(c.fila[0].hookText + c.fila[0].caption), c.fila[0] && c.fila[0].hookText);
+  dom.window.close();
+}
+
 console.log("\nA3. Opção «Agendar mesmo com pouca certeza»");
 {
   const dom = novoDom();

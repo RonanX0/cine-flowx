@@ -1,0 +1,4 @@
+  for(const raw of[metaTitle,fileName]){
+    /* metadados do codificador (VideoHandle, ByteVC1-v1.10.0.2, bvc0ot v2.2.1.3…) não são título */
+    if(raw===metaTitle&&/handle(r)?\b|\b(lavf|lavc|bytevc\d?|bvc\d*\w*|x26[45]|handbrake|ffmpeg|capcut|isom)\b|v?\d+\.\d+(\.\d+)+|^vid:/i.test(String(raw||"")))continue;
+    const limpoArq=_vsLimparNomeArquivo(raw);
