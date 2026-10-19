@@ -82,6 +82,7 @@ const fetchFalso = async (url, opts = {}) => {
       const corpo = JSON.parse(String(opts.body));
       if (/gemini-2\.5-pro/.test(u.pathname) && S.proFalha) return json({ error: { message: "quota" } }, 429);
       const texto = corpo.contents[0].parts.map((p) => p.text || "").join("\n");
+      if (/Gera uma legenda para redes sociais/.test(texto)) return json({ candidates: [{ content: { parts: [{ text: "LEGENDA-GEMINI" }] } }] });
       return json({ candidates: [{ content: { parts: [{ text: JSON.stringify(resposta(texto)) }] } }] });
     }
     return json({ models: [] });
@@ -99,6 +100,7 @@ const fetchFalso = async (url, opts = {}) => {
       if (S.groq429.has(body.model)) return json({ error: { message: "rate" } }, 429);
       const nImgs = Array.isArray(body.messages[0].content) ? body.messages[0].content.filter((p) => p.type === "image_url").length : 0;
       if (nImgs > S.groqMaxImgs) return json({ error: { message: "Request too large for model `qwen/qwen3.8-27b` on input tokens per minute (ITPM): Limit 6000" } }, 413);
+      if (/Gera uma legenda para redes sociais/.test(textoDe(body))) return json({ choices: [{ message: { content: "LEGENDA-GROQ" } }] });
       return chat(resposta(textoDe(body)));
     }
   }
@@ -330,6 +332,26 @@ console.log("\n🧩 Aprende com a correção do utilizador");
   check("outros vídeos não são afetados", f3 && f3.title === "Chicago Fire", f3 && f3.title);
   check("nome genérico (video.mp4) não vira regra", motor.aprender({ certo: { title: "X" }, arquivo: "video.mp4", ia: {} }) === false);
   Object.assign(PESQ, pesqOriginal);
+}
+
+console.log("\n✍️ Legendas: a Groq escreve, o Gemini é reserva");
+{
+  const filme = { title: "Chicago P.D.", original: "Chicago P.D.", year: "2014", kind: "tv", genres: ["Crime"], overview: "Policiais de Chicago." };
+  zerar();
+  motor.prov._interno.limpar();
+  motor.configurar({ groqKey: "gsk_teste" });
+  const l1 = await core.gerarLegenda("gsk_teste", filme, "pt-BR", { cena: "interrogatório", geminiKey: "gem" });
+  check("com Groq e Gemini, quem escreve a legenda é a Groq", /LEGENDA-GROQ/.test(l1) && S.geminiUrls.length === 0, l1);
+  zerar({ groq429: new Set(["openai/gpt-oss-120b", "llama-3.3-70b-versatile", "qwen/qwen3.8-27b", "openai/gpt-oss-20b", "llama-3.1-8b-instant"]) });
+  motor.prov._interno.limpar();
+  motor.configurar({ groqKey: "gsk_teste" });
+  const l2 = await core.gerarLegenda("gsk_teste", filme, "pt-BR", { cena: "interrogatório", geminiKey: "gem" });
+  check("se a Groq falhar (limite), o Gemini escreve a legenda", /LEGENDA-GEMINI/.test(l2), l2);
+  zerar();
+  motor.prov._interno.limpar();
+  motor.configurar({});
+  const l3 = await core.gerarLegenda("", filme, "pt-BR", { cena: "x", geminiKey: "gem" });
+  check("sem chave Groq/OpenRouter, o Gemini escreve", /LEGENDA-GEMINI/.test(l3), l3);
 }
 
 app.fechar();

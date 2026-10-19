@@ -1,0 +1,1 @@
+let h="";if(window.CineClipMotor&&window.CineClipMotor.prov.temAlgumaIA({}))try{h=await ug(x,g)}catch(_){if(!v)throw _}if(!h&&v)h=await ju(v,[{text:g}],!1,!1);return h||(h=await ug(x,g)),rS(h,f,o)}
