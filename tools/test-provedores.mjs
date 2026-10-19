@@ -48,7 +48,7 @@ let S;
 function zerar(extra = {}) {
   S = {
     gemini: "ok", geminiUrls: [], groqChats: [], orChats: [], whisper: [], serper: [], ddg: 0, proxy: 0,
-    groq429: new Set(), serperDireto: true, orModelos: true, ...extra,
+    groq429: new Set(), groqMaxImgs: 99, serperDireto: true, orModelos: true, ...extra,
   };
 }
 function resposta(texto) {
@@ -96,6 +96,8 @@ const fetchFalso = async (url, opts = {}) => {
       const body = JSON.parse(String(opts.body));
       S.groqChats.push(body);
       if (S.groq429.has(body.model)) return json({ error: { message: "rate" } }, 429);
+      const nImgs = Array.isArray(body.messages[0].content) ? body.messages[0].content.filter((p) => p.type === "image_url").length : 0;
+      if (nImgs > S.groqMaxImgs) return json({ error: { message: "Request too large for model `qwen/qwen3.8-27b` on input tokens per minute (ITPM): Limit 6000" } }, 413);
       return chat(resposta(textoDe(body)));
     }
   }
@@ -179,6 +181,18 @@ console.log("\n⚡ Groq + Serper (sem Gemini)");
   check("a Groq lê os resultados da busca", pesq && /RESULTADOS DA BUSCA NA WEB[\s\S]*Intelligence Unit/.test(textoDe(pesq)));
   check("nenhuma chamada ao Gemini", S.geminiUrls.length === 0);
   check("o selo mostra o provedor", ia.provedor === "groq", ia.provedor);
+}
+
+console.log("\n📉 Groq 413 (limite de tokens por minuto) → menos quadros");
+{
+  zerar({ groqMaxImgs: 1 });
+  motor.configurar({ groqKey: "gsk_teste", serperKey: "serper-1" });
+  const ia = await ident({ audioClip: AUDIO });
+  const filme = await core.procurarTmdb("tmdb", ia);
+  const visoes = S.groqChats.filter((b) => Array.isArray(b.messages[0].content));
+  const ns = visoes.map((b) => b.messages[0].content.filter((p) => p.type === "image_url").length);
+  check("depois do 413 repete a visão com menos quadros (3 → 2 → 1)", ns.slice(0, 3).join() === "3,2,1", ns.join());
+  check("e a identificação conclui na Groq", filme && filme.title === "Chicago P.D." && ia.provedor === "groq", `${filme && filme.title} ${ia.provedor}`);
 }
 
 console.log("\n🔁 Serper cai no proxy do site (CORS)");

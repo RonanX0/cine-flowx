@@ -180,6 +180,7 @@
   function espalhar(q, n) {
     q = (q || []).filter(Boolean);
     if (q.length <= n) return q;
+    if (n <= 1) return [q[Math.floor(q.length / 2)]];
     var saida = [];
     for (var i = 0; i < n; i++) saida.push(q[Math.round((i * (q.length - 1)) / (n - 1))]);
     return saida;
@@ -1071,11 +1072,62 @@
     var m = await groqModelos(chave);
     return chatOpenAI(GROQ, "Groq", chave, m.texto, [{ role: "user", content: prompt }], jsonModo);
   }
+  /** Encolhe um quadro (data URL) para `lado` px — menos tokens de imagem. Sem canvas, devolve o original. */
+  function reduzirQuadro(url, lado) {
+    return new Promise(function (resolve) {
+      var fim = false;
+      function acabar(v) { if (!fim) { fim = true; resolve(v); } }
+      try {
+        if (typeof document === "undefined" || typeof Image === "undefined" || !/^data:image\//.test(String(url))) return acabar(url);
+        var img = new Image();
+        img.onload = function () {
+          try {
+            var r = Math.min(1, lado / Math.max(img.width || 1, img.height || 1));
+            if (r >= 1) return acabar(url);
+            var c = document.createElement("canvas");
+            c.width = Math.max(1, Math.round(img.width * r));
+            c.height = Math.max(1, Math.round(img.height * r));
+            c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+            acabar(c.toDataURL("image/jpeg", 0.7));
+          } catch (e) { acabar(url); }
+        };
+        img.onerror = function () { acabar(url); };
+        img.src = url;
+        setTimeout(function () { acabar(url); }, 2000);
+      } catch (e) { acabar(url); }
+    });
+  }
+
+  /**
+   * Visão com as imagens cada vez mais leves: o limite grátis de tokens por minuto (413) ou um
+   * pedido grande demais (400) não deve deitar a identificação abaixo — tenta com menos quadros e menores.
+   */
+  var NIVEIS_VISAO = [{ n: 3, lado: 640 }, { n: 2, lado: 448 }, { n: 1, lado: 320 }];
+  async function visaoEscalonada(enviar, quadros, maxQuadros) {
+    var ultimo = null;
+    for (var i = 0; i < NIVEIS_VISAO.length; i++) {
+      var nivel = NIVEIS_VISAO[i];
+      var qs = espalhar(quadros, Math.min(nivel.n, maxQuadros));
+      var leves = await Promise.all(qs.map(function (q) { return reduzirQuadro(q, nivel.lado); }));
+      try {
+        return await enviar(leves);
+      } catch (e) {
+        ultimo = e;
+        if (e.status === 401 || e.status === 403) throw e;
+        if (e.status !== 413 && e.status !== 400 && e.status !== 429) throw e;
+      }
+    }
+    throw ultimo;
+  }
+
   async function groqVisao(chave, prompt, quadros, jsonModo) {
     var m = await groqModelos(chave);
     if (!m.visao.length) throw erroHttp("A tua conta Groq não lista nenhum modelo com visão.", 404);
-    // Os modelos de visão da Groq aceitam poucas imagens por pedido (3 no Qwen).
-    return chatOpenAI(GROQ, "Groq", chave, m.visao, msgComImagens(prompt, quadros, 3), jsonModo);
+    // Os modelos de visão da Groq aceitam poucas imagens por pedido (3 no Qwen) e têm limite de tokens por minuto.
+    return visaoEscalonada(function (imgs) {
+      bloqueados = {};
+      return chatOpenAI(GROQ, "Groq", chave, m.visao, msgComImagens(prompt, imgs, 3), jsonModo);
+    }, quadros, 3);
   }
 
   var EXT_AUDIO = { "audio/wav": "wav", "audio/x-wav": "wav", "audio/mpeg": "mp3", "audio/mp3": "mp3", "audio/mp4": "m4a", "audio/x-m4a": "m4a", "audio/aac": "m4a", "audio/webm": "webm", "audio/ogg": "ogg", "audio/flac": "flac" };
@@ -1173,7 +1225,9 @@
   }
   async function orVisao(chave, prompt, quadros, jsonModo) {
     var m = await orModelos();
-    return chatOpenAI(OPENROUTER, "OpenRouter", chave, m.visao, msgComImagens(prompt, quadros, 4), jsonModo, orHeaders());
+    return visaoEscalonada(function (imgs) {
+      return chatOpenAI(OPENROUTER, "OpenRouter", chave, m.visao, msgComImagens(prompt, imgs, 4), jsonModo, orHeaders());
+    }, quadros, 4);
   }
 
   /* ---------------- Busca: Serper e DuckDuckGo ---------------- */
