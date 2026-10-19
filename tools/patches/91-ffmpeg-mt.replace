@@ -1,0 +1,1 @@
+_ccMT=(()=>{try{return!!self.crossOriginIsolated&&typeof SharedArrayBuffer!="undefined"&&(navigator.hardwareConcurrency||1)>=4&&!/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent||"")&&localStorage.getItem("cineclip.ffmpegMT")!=="0"}catch(e){return!1}})(),Xm=_ccMT?"https://unpkg.com/@ffmpeg/core-mt@0.12.10/dist/esm":"https://unpkg.com/@ffmpeg/core@0.12.10/dist/esm"

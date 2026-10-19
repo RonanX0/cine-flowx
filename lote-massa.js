@@ -738,9 +738,11 @@
     if (estado.pararPedido) throw erroComTipo("Lote parado.", "parado");
     definirPasso(item, modoIdent === "sem_id" ? "A preparar corte direto…" : "A identificar o filme…", 0.1);
     var temGemini = !!String(s.geminiKey || "").trim();
+    // O áudio também serve à Groq (Whisper transcreve as falas) — não só ao Gemini.
+    var querAudio = temGemini || !!String(s.groqKey || "").trim();
     var capturaParalela = await Promise.all([
       core.quadros(ficheiro, 0, fim, corte),
-      temGemini ? Promise.resolve().then(function () { return core.audio(ficheiro, 0, fim); }).catch(function () { return null; }) : Promise.resolve(null),
+      querAudio ? Promise.resolve().then(function () { return core.audio(ficheiro, 0, fim); }).catch(function () { return null; }) : Promise.resolve(null),
       temGemini && typeof core.videoParaIA === "function"
         ? Promise.resolve().then(function () { return core.videoParaIA(ficheiro, 0, fim); }).catch(function () { return null; })
         : Promise.resolve(null),
@@ -1985,6 +1987,8 @@
   /** Mostra/esconde o botão flutuante conforme o login e a opção. */
   function atualizarBotaoColar() {
     var mostrar = estado.opcoes.botaoColar && appLogado() && !estado.aberto;
+    // Espaço no fim da página para o botão flutuante não tapar os últimos botões.
+    try { document.body.classList.toggle("cl-fab-on", !!mostrar); } catch (e) {}
     if (!mostrar) {
       if (botaoColar) botaoColar.remove();
       botaoColar = null;
@@ -2071,6 +2075,7 @@
     ".cl-select{margin-left:6px;border-radius:8px;border:1px solid var(--border,rgba(255,255,255,.15));background:var(--background,#141418);color:inherit;padding:4px 8px;font:inherit}",
     ".cl-fab{position:fixed;right:16px;bottom:16px;z-index:9988;display:inline-flex;align-items:center;gap:8px;height:56px;padding:0 20px 0 16px;border-radius:28px;border:0;background:var(--primary,#e5484d);color:#fff;font:600 15px/1 inherit;font-family:inherit;box-shadow:0 10px 28px rgba(0,0,0,.45);cursor:pointer}",
     ".cl-fab:active{transform:scale(.96)}",
+    "body.cl-fab-on{padding-bottom:80px}",
     ".cl-fab-icone{font-size:20px}",
     ".cl-copiado{position:fixed;left:12px;right:12px;bottom:84px;z-index:9989;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;padding:12px 14px;border-radius:14px;background:var(--card,#1c1c22);color:var(--foreground,#f4f4f6);border:1px solid var(--primary,#e5484d);box-shadow:0 12px 32px rgba(0,0,0,.5);font-size:14px;font-family:inherit;max-width:560px;margin:0 auto}",
     "@media (min-width:768px){.cl-fab{height:48px;font-size:14px}.cl-fab-texto{display:inline}}",

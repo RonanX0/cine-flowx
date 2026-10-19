@@ -1309,20 +1309,29 @@
     return !!(c.groq || c.openrouter);
   }
 
+  /** Quando todos os provedores falham, mostra o motivo de cada um (não só o do último). */
+  function juntarErros(erros) {
+    if (!erros.length) return null;
+    if (erros.length === 1) return erros[0];
+    var e = new Error(erros.map(function (x) { return String((x && x.message) || x).replace(/\.$/, ""); }).join(" · ") + ".");
+    e.status = erros[erros.length - 1].status;
+    return e;
+  }
+
   /** Texto: Groq → OpenRouter. */
   async function textoAlternativo(o, prompt, jsonModo) {
-    var c = chaves(o), erro = null;
-    if (c.groq) { try { var t1 = await groqTexto(c.groq, prompt, jsonModo); Prov.ultimo = "groq"; return t1; } catch (e) { erro = e; } }
-    if (c.openrouter) { try { var t2 = await orTexto(c.openrouter, prompt, jsonModo); Prov.ultimo = "openrouter"; return t2; } catch (e) { erro = e; } }
-    throw erro || erroHttp("Adiciona uma chave Gemini, Groq ou OpenRouter nas configurações.", 401);
+    var c = chaves(o), erros = [];
+    if (c.groq) { try { var t1 = await groqTexto(c.groq, prompt, jsonModo); Prov.ultimo = "groq"; return t1; } catch (e) { erros.push(e); } }
+    if (c.openrouter) { try { var t2 = await orTexto(c.openrouter, prompt, jsonModo); Prov.ultimo = "openrouter"; return t2; } catch (e) { erros.push(e); } }
+    throw juntarErros(erros) || erroHttp("Adiciona uma chave Gemini, Groq ou OpenRouter nas configurações.", 401);
   }
   /** Visão: Groq → OpenRouter. */
   async function visaoAlternativa(o, prompt, quadros, jsonModo) {
-    var c = chaves(o), erro = null;
+    var c = chaves(o), erros = [];
     if (!quadros || !quadros.length) return textoAlternativo(o, prompt, jsonModo);
-    if (c.groq) { try { var v1 = await groqVisao(c.groq, prompt, quadros, jsonModo); Prov.ultimo = "groq"; return v1; } catch (e) { erro = e; } }
-    if (c.openrouter) { try { var v2 = await orVisao(c.openrouter, prompt, quadros, jsonModo); Prov.ultimo = "openrouter"; return v2; } catch (e) { erro = e; } }
-    throw erro || erroHttp("Adiciona uma chave Gemini, Groq ou OpenRouter nas configurações.", 401);
+    if (c.groq) { try { var v1 = await groqVisao(c.groq, prompt, quadros, jsonModo); Prov.ultimo = "groq"; return v1; } catch (e) { erros.push(e); } }
+    if (c.openrouter) { try { var v2 = await orVisao(c.openrouter, prompt, quadros, jsonModo); Prov.ultimo = "openrouter"; return v2; } catch (e) { erros.push(e); } }
+    throw juntarErros(erros) || erroHttp("Adiciona uma chave Gemini, Groq ou OpenRouter nas configurações.", 401);
   }
 
   async function testarChave(qual, chave) {

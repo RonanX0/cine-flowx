@@ -9,13 +9,20 @@
 # servidor "mudou?" antes de reutilizar. Quando não mudou a resposta é um 304 vazio, por
 # isso o custo é praticamente nulo e um deploy novo aparece sempre à primeira.
 #
+# COOP/COEP (credentialless) isolam a página: com isso o FFmpeg usa vários núcleos do
+# processador (SharedArrayBuffer) e o corte fica bem mais rápido. Sem eles, cai no modo 1 núcleo.
+#
 # A Vercel não lê este ficheiro: a mesma política está em vercel.json.
 
 /*.html
   Cache-Control: public, max-age=0, must-revalidate
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: credentialless
 
 /
   Cache-Control: public, max-age=0, must-revalidate
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: credentialless
 
 # Carregado antes do bundle; o build serve-o como nuvem-duravel.js?v=<hash>, mas o
 # must-revalidate garante a atualização mesmo que algum proxy descarte a query.

@@ -1,0 +1,1 @@
+wasmURL:await Ym(`${Xm}/ffmpeg-core.wasm`,"application/wasm"),...(_ccMT?{workerURL:await Ym(`${Xm}/ffmpeg-core.worker.js`,"text/javascript")}:{})}))()
