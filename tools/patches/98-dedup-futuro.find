@@ -1,0 +1,1 @@
+const score=x=>(x.status==="published"?1e6:0)+(x.remoteVideoUrl?1e4:0)+(x.videoBlob?1e3:0)+((x.updatedAt||x.createdAt||0)/1e9);

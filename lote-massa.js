@@ -1039,9 +1039,14 @@
       var chaveItem = item && item.id ? ("lote_" + sessaoLoteId + "_" + item.id) : "";
       var duplicado = fila.find(function (r) {
         if (!r || r.accountId !== conta.id || r.status === "error") return false;
-        if (r.status === "published") return false;
+        // Só conta como «já agendado» um Reel ainda por publicar e com horário no futuro.
+        // Antes, um Reel velho (16/10, apagado ou parado) fazia o vídeo novo mostrar «Agendado»
+        // com a data antiga sem entrar na fila.
+        if (r.status !== "scheduled") return false;
+        var quando = r.scheduledAt ? new Date(r.scheduledAt).getTime() : NaN;
+        if (!Number.isFinite(quando) || quando < ambiente.agora() - 5 * 60000) return false;
         if (chaveItem && r._loteKey === chaveItem) return true;
-        if (item.caixaId && r.caixaId === item.caixaId && (r.caixaTentativa || 0) === (item.tentativa || 0) && r.status === "scheduled") return true;
+        if (item.caixaId && r.caixaId === item.caixaId && (r.caixaTentativa || 0) === (item.tentativa || 0)) return true;
         return false;
       });
       if (duplicado) {
@@ -1052,8 +1057,11 @@
       var horario = _proximoHorarioSeguro(core, fila, conta.dailySlots || [], conta.id);
       var base = semExtensao(ficheiro.name);
       var agora = ambiente.agora();
+      // Id sempre novo: com o id fixo do link do celular, um Reel apagado antes deixava a
+      // «lápide» no cofre e o Reel novo com o MESMO id era apagado na sincronização seguinte.
+      // (Duplicados entre PC e celular continuam a juntar-se pelo caixaId na sincronização.)
       var idDeterministico = item.caixaId
-        ? ("reel_" + conta.id + "_" + item.caixaId + (item.tentativa ? "_t" + item.tentativa : ""))
+        ? ("reel_" + conta.id + "_" + item.caixaId + (item.tentativa ? "_t" + item.tentativa : "") + "_" + agora.toString(36))
         : ("reel_" + agora + "_" + (item.id || 0) + "_" + Math.random().toString(36).slice(2, 6));
       var legendaLimpa = typeof core.limparLegenda === "function"
         ? core.limparLegenda(String(legenda))
