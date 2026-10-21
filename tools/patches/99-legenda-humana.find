@@ -1,0 +1,49 @@
+u=a==="pt-PT"?"Escreve em Português de Portugal (ortografia e vocabulário europeus: 'ecrã', 'tu', 'estás a sentir', 'transformou-se').":"Escreva em Português do Brasil (ortografia e vocabulário brasileiros), mas mantendo a 2ª pessoa 'tu' com conjugação natural brasileira quando possível.",f=`QUER ASSISTIR A ${c?"ESTA SÉRIE":"ESTE FILME"}? LINK NA BIO! 🎬`,p=i!=null&&i.cena||i!=null&&i.hookText?`
+CONTEÚDO ESPECÍFICO DO VÍDEO/CENA ENVIADA:
+- O que acontece na cena do vídeo: ${i.cena||"Cena tensa e decisiva do clipe"}
+- Gancho principal do vídeo: ${i.hookText||""}
+IMPORTANTE: O Parágrafo 1 DEVE começar com um GANCHO (hook) irresistível diretamente ligado ao que acontece nesta cena do vídeo, prendendo quem acabou de ver o clipe, e o Parágrafo 2 deve destacar em **negrito** exatamente o momento de tensão desta cena!`:"",g=`${u}
+
+Gera uma legenda para redes sociais sobre ${c?"a série":"o filme"} "${o.title}" (título original: "${o.original}", ${o.year}).
+Géneros: ${o.genres.join(", ")||"desconhecido"}.
+Sinopse oficial (não reveles nada além disto): ${o.overview||"(sem sinopse)"}${p}
+
+FORMATO EXATO (texto puro, uma linha em branco entre blocos, sem títulos de secção):
+
+${f}
+
+🎬 ${o.title} (${o.original})
+
+{Parágrafo 1}
+
+{Parágrafo 2}
+
+{Parágrafo 3}
+
+#Hashtag1 #Hashtag2 #Hashtag3 #Hashtag4
+
+REGRAS:
+- Primeira linha literalmente: "${f}"
+- Linha do título exatamente: "🎬 ${o.title} (${o.original})"
+- Parágrafo 1 (80–110 palavras): começa com um GANCHO forte diretamente conectado ao conteúdo da cena do vídeo; tom de trailer épico; premissa, clima e conflitos emocionais SEM dar spoilers do final; NUNCA citar nomes de personagens nem de atores.
+- Parágrafo 2 (80–110 palavras): começa com frase de transição (ex.: "O grande trunfo da produção reside na forma magnética com que retrata..."), aponta o momento-chave da cena do vídeo em **negrito** dentro da frase com descrição intensa de tensão emocional, seguida de uma sequência de gerúndios entre travessões (ex.: "— sentindo o pânico da traição, o desespero perante a perda irreparável e a angústia sufocante de enfrentar o seu destino trágico —").
+- Parágrafo 3 (40–60 palavras): fecho no estilo "É uma obra fascinante e indispensável para quem aprecia dramas profundos, histórias de superação e narrativas emocionantes que marcam para sempre."
+- Estilo: 2ª pessoa do singular ("tu"), adjetivação intensa e sensorial, vocabulário de drama psicológico (implacável, sufocante, devastador, visceral, cru, inquebrável, magnético), frases longas encadeadas, ZERO spoilers, ZERO diálogos citados, nenhum emoji além dos dois 🎬 já definidos.
+- Total: 200–280 palavras.
+- Hashtags: EXATAMENTE 4 no máximo, na última linha, separadas por espaço: 1 do título/franquia (sem espaços) + ${c?"#Series":"#Filme"} + 2 de género/tema. NUNCA mais de 4.
+
+EXEMPLO DE CALIBRAGEM (tom e tamanho):
+
+QUER ASSISTIR A ESTE FILME? LINK NA BIO! 🎬
+
+🎬 Smallville (Smallville)
+
+Acompanhar a pressão implacável, o peso sufocante de uma amizade destruída pela obsessão e o choque devastador de ver o homem que consideravas um irmão transformar-se no teu pior inimigo nos corredores de uma cidade marcada por segredos é como mergulhar num drama fantástico e psicológico intensamente visceral, cru e implacável. Com uma narrativa focada nas cicatrizes invisíveis da deslealdade, nos dilemas morais extremos e no impacto sufocante de esconder a própria identidade perante quem está disposto a tudo para descobrir a verdade, a história explora os confins da paranoia e a luta desesperada para proteger quem se ama.
+
+O grande trunfo da produção reside na forma magnética com que retrata a vulnerabilidade extrema e o colapso emocional nos momentos mais sombrios. O momento tenso e devastador em que a fachada desmorona porque **o melhor amigo descobriu o seu maior segredo e a amizade transform-se num jogo mortal de mentiras** — sentindo o pânico da traição, o desespero perante a perda irreparável e a angústia sufocante de enfrentar a personificação do seu destino trágico —, culmina num ponto de viragem emocionante que testa a coragem e a resiliência humana até ao limite absoluto.
+
+Ao longo da trama, testemunhamos a força de laços inquebráveis, reviravoltas devastadoras e o poder transformador da aceitação perante o inevitável. É uma obra fascinante e indispensável para quem aprecia dramas profundos, histórias de superação e narrativas emocionantes que marcam para sempre.
+
+#Smallville #Series #Drama #Suspense
+
+Responde APENAS com a legenda final.`
