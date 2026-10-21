@@ -1,0 +1,54 @@
+u=a==="pt-PT"?"Escreve em português de Portugal, a tratar quem lê por «tu», como um português fala no dia a dia.":"Escreva em português do Brasil, tratando quem lê por «você», do jeito que um brasileiro fala no dia a dia.",f=`QUER ASSISTIR A ${c?"ESTA SÉRIE":"ESTE FILME"}? LINK NA BIO! 🎬`,p=i!=null&&i.cena||i!=null&&i.hookText?`
+O CORTE QUE A PESSOA ACABOU DE VER:
+- O que acontece: ${i.cena||"(não informado)"}
+- Frase no topo do vídeo: ${i.hookText||"(nenhuma)"}
+Comece a legenda puxando por ESSA cena: quem lê acabou de assistir e quer saber mais.`:"",g=`${u}
+
+Gera uma legenda para redes sociais sobre ${c?"a série":"o filme"} "${o.title}" (título original: "${o.original}", ${o.year}).
+Gêneros: ${o.genres.join(", ")||"desconhecido"}.
+Sinopse oficial (é a base do que pode contar; não invente nada além disto): ${o.overview||"(sem sinopse)"}${p}
+
+QUEM ESCREVE: alguém que ama ${c?"séries":"filmes"} e indica para os seguidores como indicaria a um amigo — com opinião, empolgação de verdade e jeito de conversa. NÃO é trailer, NÃO é crítica de jornal, NÃO pode soar a texto de IA.
+
+FORMATO (texto puro, uma linha em branco entre blocos, sem títulos de secção):
+
+${f}
+
+🎬 ${o.title} (${o.original})
+
+{Parágrafo 1}
+
+{Parágrafo 2}
+
+{Parágrafo 3 (opcional)}
+
+#Hashtag1 #Hashtag2 #Hashtag3 #Hashtag4
+
+COMO ESCREVER:
+- Primeira linha literalmente: "${f}"
+- Linha do título exatamente: "🎬 ${o.title} (${o.original})"
+- Parágrafo 1 (2 a 4 frases): abre pela cena do vídeo ou por uma reação sincera (ex.: "Repara na cara dele quando…", "Essa cena me pegou desprevenido"). Depois conta a premissa em poucas palavras, sem spoiler do final.
+- Parágrafo 2 (2 a 4 frases): porque vale a pena ver — o clima, o que prende, para quem é. Pode pôr UM trecho curto em **negrito** (o momento mais forte da cena).
+- Parágrafo 3 (opcional, 1 ou 2 frases): uma pergunta para os seguidores comentarem, ligada à cena (ex.: "Você teria feito o mesmo?").
+- Frases curtas e médias, misturadas. Palavras simples, do dia a dia. Pode usar expressões coloquiais com naturalidade.
+- Total: 80 a 150 palavras.
+- Nada de nomes de atores. Nomes de personagens só se forem mesmo necessários.
+- PROIBIDO: listas de adjetivos ("intenso, visceral, devastador"), "jornada", "montanha-russa de emoções", "prepare-se", "não perca", "obra-prima", "narrativa", "trama envolvente", "mergulhar", "imperdível", sequências de travessões, frases de efeito vazias, tom de trailer.
+- Emojis: só os dois 🎬 já definidos e, no máximo, mais 1 se combinar.
+- Hashtags: EXATAMENTE 4, na última linha, separadas por espaço: 1 do título (sem espaços) + ${c?"#Series":"#Filme"} + 2 de gênero/tema.
+
+EXEMPLO DE TOM (é de OUTRA obra — não copie as frases):
+
+QUER ASSISTIR A ESTA SÉRIE? LINK NA BIO! 🎬
+
+🎬 Smallville (Smallville)
+
+Repara na cara dele quando percebe que o melhor amigo descobriu tudo. Smallville é isso: um garoto do interior escondendo quem é de verdade, enquanto a pessoa em quem ele mais confia chega cada vez mais perto do segredo.
+
+O que prende é que ninguém ali é vilão de graça. Você entende os dois lados, e **ver a amizade virar rivalidade** dói mais do que qualquer briga.
+
+Você teria contado o segredo pro seu melhor amigo?
+
+#Smallville #Series #Drama #Fantasia
+
+Responde APENAS com a legenda final.`

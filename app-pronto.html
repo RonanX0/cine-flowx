@@ -963,17 +963,19 @@ async function nS(r,o){
 `).join(`
 `).split(/\n\s*\n/).map(p=>p.trim()).filter(Boolean),c=i.filter(p=>!/^QUER ASSISTIR/i.test(p)&&!p.startsWith("🎬")&&!/^#/.test(p));let u=((i.slice().reverse().find(p=>/^#/.test(p))??"").match(/#[\p{L}\p{N}_]+/gu)??[]).slice(0,4);u.length||(u=["#"+a.original.replace(/[^\p{L}\p{N}]/gu,""),a.kind==="tv"?"#Series":"#Filme"]);const f=c.map(p=>p.replace(/🎬/g,"").replace(/\n/g," "));return[o,`🎬 ${a.title} (${a.original})`,...f,u.join(" ")].join(`
 
-`)}async function oS(r,o,a,i){var w;const c=o.kind==="tv",u=a==="pt-PT"?"Escreve em Português de Portugal (ortografia e vocabulário europeus: 'ecrã', 'tu', 'estás a sentir', 'transformou-se').":"Escreva em Português do Brasil (ortografia e vocabulário brasileiros), mas mantendo a 2ª pessoa 'tu' com conjugação natural brasileira quando possível.",f=`QUER ASSISTIR A ${c?"ESTA SÉRIE":"ESTE FILME"}? LINK NA BIO! 🎬`,p=i!=null&&i.cena||i!=null&&i.hookText?`
-CONTEÚDO ESPECÍFICO DO VÍDEO/CENA ENVIADA:
-- O que acontece na cena do vídeo: ${i.cena||"Cena tensa e decisiva do clipe"}
-- Gancho principal do vídeo: ${i.hookText||""}
-IMPORTANTE: O Parágrafo 1 DEVE começar com um GANCHO (hook) irresistível diretamente ligado ao que acontece nesta cena do vídeo, prendendo quem acabou de ver o clipe, e o Parágrafo 2 deve destacar em **negrito** exatamente o momento de tensão desta cena!`:"",g=`${u}
+`)}async function oS(r,o,a,i){var w;const c=o.kind==="tv",u=a==="pt-PT"?"Escreve em português de Portugal, a tratar quem lê por «tu», como um português fala no dia a dia.":"Escreva em português do Brasil, tratando quem lê por «você», do jeito que um brasileiro fala no dia a dia.",f=`QUER ASSISTIR A ${c?"ESTA SÉRIE":"ESTE FILME"}? LINK NA BIO! 🎬`,p=i!=null&&i.cena||i!=null&&i.hookText?`
+O CORTE QUE A PESSOA ACABOU DE VER:
+- O que acontece: ${i.cena||"(não informado)"}
+- Frase no topo do vídeo: ${i.hookText||"(nenhuma)"}
+Comece a legenda puxando por ESSA cena: quem lê acabou de assistir e quer saber mais.`:"",g=`${u}
 
 Gera uma legenda para redes sociais sobre ${c?"a série":"o filme"} "${o.title}" (título original: "${o.original}", ${o.year}).
-Géneros: ${o.genres.join(", ")||"desconhecido"}.
-Sinopse oficial (não reveles nada além disto): ${o.overview||"(sem sinopse)"}${p}
+Gêneros: ${o.genres.join(", ")||"desconhecido"}.
+Sinopse oficial (é a base do que pode contar; não invente nada além disto): ${o.overview||"(sem sinopse)"}${p}
 
-FORMATO EXATO (texto puro, uma linha em branco entre blocos, sem títulos de secção):
+QUEM ESCREVE: alguém que ama ${c?"séries":"filmes"} e indica para os seguidores como indicaria a um amigo — com opinião, empolgação de verdade e jeito de conversa. NÃO é trailer, NÃO é crítica de jornal, NÃO pode soar a texto de IA.
+
+FORMATO (texto puro, uma linha em branco entre blocos, sem títulos de secção):
 
 ${f}
 
@@ -983,33 +985,36 @@ ${f}
 
 {Parágrafo 2}
 
-{Parágrafo 3}
+{Parágrafo 3 (opcional)}
 
 #Hashtag1 #Hashtag2 #Hashtag3 #Hashtag4
 
-REGRAS:
+COMO ESCREVER:
 - Primeira linha literalmente: "${f}"
 - Linha do título exatamente: "🎬 ${o.title} (${o.original})"
-- Parágrafo 1 (80–110 palavras): começa com um GANCHO forte diretamente conectado ao conteúdo da cena do vídeo; tom de trailer épico; premissa, clima e conflitos emocionais SEM dar spoilers do final; NUNCA citar nomes de personagens nem de atores.
-- Parágrafo 2 (80–110 palavras): começa com frase de transição (ex.: "O grande trunfo da produção reside na forma magnética com que retrata..."), aponta o momento-chave da cena do vídeo em **negrito** dentro da frase com descrição intensa de tensão emocional, seguida de uma sequência de gerúndios entre travessões (ex.: "— sentindo o pânico da traição, o desespero perante a perda irreparável e a angústia sufocante de enfrentar o seu destino trágico —").
-- Parágrafo 3 (40–60 palavras): fecho no estilo "É uma obra fascinante e indispensável para quem aprecia dramas profundos, histórias de superação e narrativas emocionantes que marcam para sempre."
-- Estilo: 2ª pessoa do singular ("tu"), adjetivação intensa e sensorial, vocabulário de drama psicológico (implacável, sufocante, devastador, visceral, cru, inquebrável, magnético), frases longas encadeadas, ZERO spoilers, ZERO diálogos citados, nenhum emoji além dos dois 🎬 já definidos.
-- Total: 200–280 palavras.
-- Hashtags: EXATAMENTE 4 no máximo, na última linha, separadas por espaço: 1 do título/franquia (sem espaços) + ${c?"#Series":"#Filme"} + 2 de género/tema. NUNCA mais de 4.
+- Parágrafo 1 (2 a 4 frases): abre pela cena do vídeo ou por uma reação sincera (ex.: "Repara na cara dele quando…", "Essa cena me pegou desprevenido"). Depois conta a premissa em poucas palavras, sem spoiler do final.
+- Parágrafo 2 (2 a 4 frases): porque vale a pena ver — o clima, o que prende, para quem é. Pode pôr UM trecho curto em **negrito** (o momento mais forte da cena).
+- Parágrafo 3 (opcional, 1 ou 2 frases): uma pergunta para os seguidores comentarem, ligada à cena (ex.: "Você teria feito o mesmo?").
+- Frases curtas e médias, misturadas. Palavras simples, do dia a dia. Pode usar expressões coloquiais com naturalidade.
+- Total: 80 a 150 palavras.
+- Nada de nomes de atores. Nomes de personagens só se forem mesmo necessários.
+- PROIBIDO: listas de adjetivos ("intenso, visceral, devastador"), "jornada", "montanha-russa de emoções", "prepare-se", "não perca", "obra-prima", "narrativa", "trama envolvente", "mergulhar", "imperdível", sequências de travessões, frases de efeito vazias, tom de trailer.
+- Emojis: só os dois 🎬 já definidos e, no máximo, mais 1 se combinar.
+- Hashtags: EXATAMENTE 4, na última linha, separadas por espaço: 1 do título (sem espaços) + ${c?"#Series":"#Filme"} + 2 de gênero/tema.
 
-EXEMPLO DE CALIBRAGEM (tom e tamanho):
+EXEMPLO DE TOM (é de OUTRA obra — não copie as frases):
 
-QUER ASSISTIR A ESTE FILME? LINK NA BIO! 🎬
+QUER ASSISTIR A ESTA SÉRIE? LINK NA BIO! 🎬
 
 🎬 Smallville (Smallville)
 
-Acompanhar a pressão implacável, o peso sufocante de uma amizade destruída pela obsessão e o choque devastador de ver o homem que consideravas um irmão transformar-se no teu pior inimigo nos corredores de uma cidade marcada por segredos é como mergulhar num drama fantástico e psicológico intensamente visceral, cru e implacável. Com uma narrativa focada nas cicatrizes invisíveis da deslealdade, nos dilemas morais extremos e no impacto sufocante de esconder a própria identidade perante quem está disposto a tudo para descobrir a verdade, a história explora os confins da paranoia e a luta desesperada para proteger quem se ama.
+Repara na cara dele quando percebe que o melhor amigo descobriu tudo. Smallville é isso: um garoto do interior escondendo quem é de verdade, enquanto a pessoa em quem ele mais confia chega cada vez mais perto do segredo.
 
-O grande trunfo da produção reside na forma magnética com que retrata a vulnerabilidade extrema e o colapso emocional nos momentos mais sombrios. O momento tenso e devastador em que a fachada desmorona porque **o melhor amigo descobriu o seu maior segredo e a amizade transform-se num jogo mortal de mentiras** — sentindo o pânico da traição, o desespero perante a perda irreparável e a angústia sufocante de enfrentar a personificação do seu destino trágico —, culmina num ponto de viragem emocionante que testa a coragem e a resiliência humana até ao limite absoluto.
+O que prende é que ninguém ali é vilão de graça. Você entende os dois lados, e **ver a amizade virar rivalidade** dói mais do que qualquer briga.
 
-Ao longo da trama, testemunhamos a força de laços inquebráveis, reviravoltas devastadoras e o poder transformador da aceitação perante o inevitável. É uma obra fascinante e indispensável para quem aprecia dramas profundos, histórias de superação e narrativas emocionantes que marcam para sempre.
+Você teria contado o segredo pro seu melhor amigo?
 
-#Smallville #Series #Drama #Suspense
+#Smallville #Series #Drama #Fantasia
 
 Responde APENAS com a legenda final.`,v=((w=i==null?void 0:i.geminiKey)==null?void 0:w.trim())||"",x=(r==null?void 0:r.trim())||"";let h="";if(window.CineClipMotor&&window.CineClipMotor.prov.temAlgumaIA({}))try{h=await ug(x,g)}catch(_){if(!v)throw _}if(!h&&v)h=await ju(v,[{text:g}],!1,!1);return h||(h=await ug(x,g)),rS(h,f,o)}function _c({id:r,label:o,badge:a,help:i,helpUrl:c,placeholder:u,value:f,onChange:p,test:g}){const[v,x]=b.useState({state:"idle"});return d.jsxs("div",{className:"space-y-1.5",children:[d.jsxs("div",{className:"flex flex-wrap items-center gap-2",children:[d.jsx(er,{htmlFor:r,children:o}),a&&d.jsxs(fn,{className:"bg-brand text-[10px] text-primary-foreground",children:[d.jsx(Kr,{className:"mr-1 h-2.5 w-2.5"}),a]})]}),d.jsxs("div",{className:"flex gap-2",children:[d.jsx(dn,{id:r,type:"password",value:f,onChange:h=>{p(h.target.value),x({state:"idle"})},placeholder:u||"Cola aqui a tua chave"}),d.jsx(Ae,{variant:"secondary",onClick:async()=>{x({state:"testing"});try{await g(f.trim()),x({state:"ok",msg:"Chave válida."})}catch(h){x({state:"err",msg:(h==null?void 0:h.message)||"Erro ao validar chave."})}},disabled:!f.trim()||v.state==="testing",children:v.state==="testing"?d.jsx(rr,{className:"h-4 w-4 animate-spin"}):"Testar chave"})]}),d.jsxs("a",{href:c,target:"_blank",rel:"noreferrer",className:"inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground",children:[i," ",d.jsx(sp,{className:"h-3 w-3"})]}),v.state==="ok"&&d.jsxs("p",{className:"flex items-center gap-1 text-xs text-success",children:[d.jsx(ap,{className:"h-3.5 w-3.5"}),v.msg]}),v.state==="err"&&d.jsxs("p",{className:"flex items-center gap-1 text-xs text-destructive",children:[d.jsx(v0,{className:"h-3.5 w-3.5"}),v.msg]})]})}function aS({open:r,onOpenChange:o,settings:a,onSave:i}){const[c,u]=b.useState(a),[ccT,ccS]=b.useState("");return b.useEffect(()=>{r&&u(a)},[r,a]),d.jsx(Hb,{open:r,onOpenChange:f=>{f&&u(a),o(f)},children:d.jsxs(og,{className:"max-w-lg",children:[d.jsxs(Gb,{children:[d.jsx(ag,{children:"Configurações"}),d.jsx(sg,{children:"Usa o Google Gemini (recomendado: analisa imagem + áudio + Pesquisa Google) ou o Groq / OpenRouter (grátis), junto com o TMDB."})]}),d.jsxs("div",{className:"space-y-4",children:[d.jsx("div",{className:"rounded-lg border border-primary/35 bg-primary/5 p-3",children:d.jsx(_c,{id:"gemini",label:"Chave da API Google Gemini",badge:"Recomendada · Vídeo + Áudio + Google",help:"Gerar chave grátis em aistudio.google.com/apikey",helpUrl:"https://aistudio.google.com/apikey",placeholder:"AIzaSy...",value:c.geminiKey||"",onChange:f=>u({...c,geminiKey:f}),test:Jb})}),d.jsxs("div",{className:"space-y-3 rounded-lg border border-border p-3",children:[d.jsx("p",{className:"text-xs text-muted-foreground",children:"Reserva grátis se o Gemini falhar ou acabar a cota. Ordem: Gemini → Groq (+ busca) → OpenRouter."}),d.jsx(_c,{id:"groq",label:"Chave da API Groq (visão + áudio)",badge:"Grátis",help:"Obter em console.groq.com/keys",helpUrl:"https://console.groq.com/keys",placeholder:"gsk_...",value:c.groqKey||"",onChange:f=>u({...c,groqKey:f}),test:Qb}),d.jsx(_c,{id:"openrouter",label:"Chave da API OpenRouter (modelos :free)",help:"Obter em openrouter.ai/keys — limite de ~50 usos por dia nos modelos grátis",helpUrl:"https://openrouter.ai/keys",placeholder:"sk-or-...",value:c.openrouterKey||"",onChange:f=>u({...c,openrouterKey:f}),test:_ccTesteOR}),d.jsx(_c,{id:"serper",label:"Chave da API Serper (busca no Google, opcional)",help:"Obter em serper.dev — sem ela a busca usa o DuckDuckGo",helpUrl:"https://serper.dev",placeholder:"cola aqui a chave do Serper",value:c.serperKey||"",onChange:f=>u({...c,serperKey:f}),test:_ccTesteSerper}),d.jsxs("label",{className:"flex items-start gap-2 text-sm",children:[d.jsx("input",{type:"checkbox",id:"geminiBuscaForte",className:"mt-1",checked:c.geminiBuscaForte!==false,onChange:f=>u({...c,geminiBuscaForte:f.target.checked})}),d.jsx("span",{children:"Usar o Gemini 2.5 Pro na busca do título (mais certeiro, mas gasta mais cota grátis). Desmarque para usar só o Flash."})]})]}),d.jsxs("div",{className:"space-y-1.5",children:[d.jsx(er,{htmlFor:"ganchosBons",children:"Ganchos que você gosta (um por linha) — a IA imita o estilo"}),d.jsx("textarea",{id:"ganchosBons",rows:4,className:"flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm",placeholder:"Ex.: O policial achou o corpo e descobriu que o assassino era ele 😳",value:c.ganchosBons||"",onChange:f=>u({...c,ganchosBons:f.target.value})})]}),d.jsxs("div",{className:"space-y-1.5",children:[d.jsx(er,{htmlFor:"ganchosRuins",children:"Ganchos que você NÃO gosta (um por linha) — a IA evita"}),d.jsx("textarea",{id:"ganchosRuins",rows:4,className:"flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm",placeholder:"Ex.: Você precisa ver essa cena!",value:c.ganchosRuins||"",onChange:f=>u({...c,ganchosRuins:f.target.value})})]}),d.jsx(_c,{id:"tmdb",label:"Chave da API TMDB",help:"themoviedb.org → Configurações → API",helpUrl:"https://www.themoviedb.org/settings/api",value:c.tmdbKey,onChange:f=>u({...c,tmdbKey:f}),test:tS}),d.jsxs("div",{className:"space-y-2",children:[d.jsx(er,{htmlFor:"ovl",children:"Texto por cima do vídeo"}),d.jsx(dn,{id:"ovl",value:c.overlayText,onChange:f=>u({...c,overlayText:f.target.value})})]}),
 d.jsxs("div",{className:"space-y-2",children:[d.jsx(er,{htmlFor:"pcom",children:"💬 Primeiro comentário em cada Reel"}),d.jsx(Qp,{id:"pcom",rows:2,value:c.primeiroComentario==null?"🎬 {filme}\nLINK NA B10":c.primeiroComentario,onChange:f=>u({...c,primeiroComentario:f.target.value}),placeholder:"🎬 {filme}\nLINK NA B10"}),d.jsx("p",{className:"text-[11px] text-muted-foreground",children:"Publicado logo depois do Reel (pelo app e pelo Robô 24h). {filme} vira o nome do filme e {ano} o ano; se o filme não foi identificado, essa linha sai. Deixe vazio para não comentar. O token da Meta precisa da permissão instagram_manage_comments."})]}),
