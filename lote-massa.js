@@ -813,7 +813,7 @@
         identMode: modoIdent,
         hookMode: modoGancho,
       };
-      ia = await core.identificar(s.groqKey, quadros, s.lang, optsIdent);
+      ia = await core.identificar(s.groqKey, quadros, "pt-BR", optsIdent);
       if (!ia || (!ia.titulo && !(ia.atores && ia.atores.length) && !ia.imdb_id)) {
         if (permitirPoucaCerteza) {
           var fallbackTit = dicaLink || tituloMetadados || baseLimpo || "Cena de Filme";
@@ -828,7 +828,7 @@
       if (!filme && ia && ia.provedor === "dica" && modoIdent === "dica") {
         definirPasso(item, "Nome não encontrado — a analisar o vídeo…", 0.12);
         try {
-          var iaCompleta = await core.identificar(s.groqKey, quadros, s.lang, Object.assign({}, optsIdent, { identMode: "auto" }));
+          var iaCompleta = await core.identificar(s.groqKey, quadros, "pt-BR", Object.assign({}, optsIdent, { identMode: "auto" }));
           if (iaCompleta && (iaCompleta.titulo || iaCompleta.imdb_id || (iaCompleta.atores && iaCompleta.atores.length))) {
             ia = iaCompleta;
             filme = await core.procurarTmdb(s.tmdbKey, ia);
@@ -892,7 +892,9 @@
       // A IA falhou (cota, rede, TMDB) ou ficou em dúvida: o vídeo NÃO fica de fora do lote.
       // Segue como «Sem identificação»: título do nome do ficheiro, sem capa e sem palpite errado.
       if (erroIdent && erroIdent.tipo === "parado") throw erroIdent;
-      var nomeSemId = dicaLink || tituloMetadados || baseLimpo || "";
+      // A dica do link é o autor/legenda do post — não serve de título.
+      // Vídeos baixados de link têm nome «tiktok_<autor>_<id>»: o autor também não é título.
+      var nomeSemId = tituloMetadados || (item.origem || item.caixaId ? "" : baseLimpo) || "";
       ia = { titulo: nomeSemId || "Cena de filme", confianca: 0, cena: (ia && ia.cena) || "", ganchos: [], modo_identificacao: "sem_id" };
       filme = { id: 0, kind: "movie", title: nomeSemId || "Cena de filme", original: nomeSemId || "", year: "", poster: "", overview: "", genres: [], _semNome: !nomeSemId };
       item.aviso = String((erroIdent && erroIdent.message) || "A IA não identificou o filme").replace(/[.\s]+$/, "") +
@@ -959,7 +961,7 @@
           };
           // Com o roteiro da cena já visto na identificação, o gancho não precisa de rever o vídeo.
           var jaViuCena = String(cena || "").length >= 60;
-          var g = await core.gerarGancho(s.groqKey, jaViuCena ? [] : quadros, s.lang, filme && filme.id ? filme : filme.title, s.geminiKey, jaViuCena ? null : audio, jaViuCena ? null : videoIA, contextoGancho);
+          var g = await core.gerarGancho(s.groqKey, jaViuCena ? [] : quadros, "pt-BR", filme && filme.id ? filme : filme.title, s.geminiKey, jaViuCena ? null : audio, jaViuCena ? null : videoIA, contextoGancho);
           gancho = ((g && g.ganchos) || [])
             .map(limparGancho)
             .find(eGanchoValido);
@@ -1003,7 +1005,7 @@
     definirPasso(item, "A escrever a legenda…", 0.88);
     var legenda = "";
     try {
-      legenda = await core.gerarLegenda(s.groqKey, filme, s.lang, {
+      legenda = await core.gerarLegenda(s.groqKey, filme, "pt-BR", {
         cena: cena,
         hookText: gancho,
         geminiKey: s.geminiKey,

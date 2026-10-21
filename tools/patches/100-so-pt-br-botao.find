@@ -1,0 +1,1 @@
+children:["pt-PT","pt-BR"].map(F=>d.jsx("button",{type:"button",onClick:()=>V(prev=>({...prev,lang:F})

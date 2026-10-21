@@ -1,0 +1,1 @@
+function Eg(){try{return{...ki,...JSON.parse(localStorage.getItem(Sg)||"{}")}}catch{return ki}}

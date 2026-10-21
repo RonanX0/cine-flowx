@@ -290,7 +290,7 @@ if (novo) {
 }
 check("link marcado como feito, com o Reel", links.lk_ok.estado === "feito" && novo && links.lk_ok.reelId === novo.id);
 check("o link para o PC fica intacto", links.lk_pc.estado === "pendente");
-check("pouca certeza → «revisar», sem Reel", links.lk_duvida.estado === "revisar" && /40%/.test(links.lk_duvida.erro || ""), links.lk_duvida.erro);
+check("pouca certeza → agenda na mesma, sem o palpite duvidoso", links.lk_duvida.estado === "feito" && cofre.queue.some((r) => r.id === links.lk_duvida.reelId && r.title !== "Talvez Este"), JSON.stringify(links.lk_duvida));
 check("vídeo apagado → «erro» com o motivo", links.lk_apagado.estado === "erro" && /não existe/.test(links.lk_apagado.erro || ""), links.lk_apagado.erro);
 check("o Reel existente continua lá", cofre.queue.some((r) => r.id === "reel_existente"));
 check("sinal de vida para o app («☁️ Servidor ligado»)", !!nuvem.claims[`cc_${cfg.VAULT_HASH}_servidor_nuvem`] && nuvem.claims[`cc_${cfg.VAULT_HASH}_servidor_nuvem`].owner === "servidor:teste");
@@ -299,7 +299,7 @@ check("a IA foi chamada (Groq)", pedidosIA.length >= 2);
 /* ------------------------------------------------------------------ 4 */
 console.log("\n4. O vídeo que vai para o Instagram");
 const chaves = Object.keys(nuvem.videos);
-check("um vídeo enviado (os links com erro não geram vídeo)", chaves.length === 1, String(chaves.length));
+check("dois vídeos enviados (o duvidoso também; os links com erro não geram vídeo)", chaves.length === 2, String(chaves.length));
 if (chaves.length) {
   const final = path.join(tmp, "final.mp4");
   fs.writeFileSync(final, nuvem.videos[chaves[0]]);
@@ -342,7 +342,9 @@ console.log("\n6. «Agendar mesmo assim» depois de rever");
   await trabalhador.ciclo();
   const depois = await decifrar(nuvem.cofre, cfg.ENCRYPTION_KEY_B64);
   const ligado = depois.linksCelular.find((x) => x.id === "lk_duvida");
-  check("o servidor agenda o vídeo de pouca certeza quando o utilizador manda", ligado.estado === "feito" && depois.queue.some((r) => r.id === ligado.reelId && r.title === "Talvez Este"), JSON.stringify(ligado) + " :: " + JSON.stringify(depois.queue.map((r) => [r.id, r.title])));
+  // O duvidoso já foi agendado no 1.º ciclo (sem o palpite): reabrir não duplica nem perde o Reel.
+  check("reabrir o link duvidoso mantém um Reel na fila", ligado.estado === "feito" && depois.queue.some((r) => r.id === ligado.reelId), JSON.stringify(ligado) + " :: " + JSON.stringify(depois.queue.map((r) => [r.id, r.title])));
+  check("e o título não é o autor do post", !depois.queue.some((r) => r.title === "autor"), JSON.stringify(depois.queue.map((r) => r.title)));
 }
 
 /* ------------------------------------------------------------------ 7 */

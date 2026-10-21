@@ -115,7 +115,7 @@ export function criarTrabalhador({ cfg, app, pastaDados, registo: guardaRegisto,
       return { largura: s.largura, altura: s.altura, duracao: s.duracao };
     };
     lote.estado.opcoes.agendarComPoucaCerteza = !!cfg.AGENDAR_POUCA_CERTEZA || !!(entrada && entrada.forcar);
-    const item = { id: "nuvem_" + ((entrada && entrada.id) || Date.now()), ficheiro, nome: ficheiro.name, bytes: ficheiro.size, estado: "a_processar", passo: "", progresso: 0, erro: "", resultado: null };
+    const item = { id: "nuvem_" + ((entrada && entrada.id) || Date.now()), origem: (entrada && entrada.url) || undefined, ficheiro, nome: ficheiro.name, bytes: ficheiro.size, estado: "a_processar", passo: "", progresso: 0, erro: "", resultado: null };
     const reel = await lote.processarItem(item, conta);
     return { reel: reel || reels[0], resultado: item.resultado };
   }
