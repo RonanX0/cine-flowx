@@ -123,7 +123,7 @@ A busca de tendências não usa Apify nem exige token. Perfis são lidos a parti
 
 Perfis incorporados trazem uma seleção de até dez vídeos recentes. Podem faltar duração, curtidas, comentários e compartilhamentos: não são inventados e a interface mostra dados indisponíveis. Quando não há data explícita, ela é estimada a partir do identificador do vídeo e sinalizada na interface. O filtro de duração só se aplica a valores conhecidos; views e idade continuam sendo filtrados. O TikTok pode restringir páginas públicas: isso aparece como erro por fonte, sem exigir assinatura de outro serviço.
 
-`/api/public/tendencias` também é roteado para `netlify/functions/tendencias.mjs` na Netlify. A importação de arquivos continua usando o endpoint da Vercel/local.
+`/api/public/tendencias` também é roteado para `netlify/functions/tendencias.mjs` na Netlify e para `functions/api/public/tendencias.js` no Cloudflare Pages. A importação de arquivos continua usando o endpoint da Vercel/local.
 
 Os dados vêm de `/api/public/tendencias` (`server/tendencias.mjs`) e os vídeos de `/api/public/importar` (`server/importar-video.mjs`), ativos na Vercel e também nos servidores locais (`npm run dev` e `npm run nuvem`).
 

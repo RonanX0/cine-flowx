@@ -9,6 +9,7 @@ import fs from "node:fs";
 import { analisarNarrado, buscarTendencias, candidatosDeTitulo, listaDe, pontuar, termosDeBusca } from "../server/tendencias.mjs";
 import handler from "../api/public/tendencias.js";
 import { extrairVideosPublicos } from "../server/tiktok-publico.mjs";
+import { onRequest as pagesHandler } from "../functions/api/public/tendencias.js";
 import { handler as netlifyHandler } from "../netlify/functions/tendencias.mjs";
 
 let pass = 0, fail = 0;
@@ -110,6 +111,10 @@ console.log("\n🌐 Endpoint");
   check("Netlify devolve JSON de tendências sem token", nr.statusCode === 200 && JSON.parse(nr.body).estados.length === 1);
   const opts = await netlifyHandler({ httpMethod: "OPTIONS", headers: { host: "exemplo.netlify.app", origin: "https://exemplo.netlify.app" } });
   check("preflight permite GET na mesma origem", opts.statusCode === 204 && opts.headers["Access-Control-Allow-Methods"] === "GET,OPTIONS");
+  const cr = await pagesHandler({ request: new Request("https://cine-flowx.pages.dev/api/public/tendencias?tags=filmes&min=0&dias=90") }, { fetchFn: fetchFalso, pausa: 0, semCache: true });
+  check("Cloudflare Pages devolve JSON sem token", cr.status === 200 && (await cr.json()).estados.length === 1);
+  const co = await pagesHandler({ request: new Request("https://cine-flowx.pages.dev/api/public/tendencias", { method: "OPTIONS", headers: { origin: "https://cine-flowx.pages.dev" } }) });
+  check("Cloudflare Pages responde preflight sem corpo", co.status === 204 && (await co.text()) === "");
   r = await pedir({ url: "/api/public/tendencias" });
   check("sem tags nem perfis → 400", r.statusCode === 400);
   r = await pedir({ method: "POST", url: "/api/public/tendencias?tags=a1" });
