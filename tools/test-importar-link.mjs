@@ -275,6 +275,53 @@ function respostaFalsa() {
 
   const vj = JSON.parse(fs.readFileSync(path.join(root, "vercel.json"), "utf8"));
   check("vercel.json dá tempo à função (maxDuration)", (vj.functions && vj.functions["api/public/importar.js"] && vj.functions["api/public/importar.js"].maxDuration) >= 60);
+
+  // Modo Alta Qualidade (?hd=1): quando a página web limita a 540p, busca Full HD 1080p sem marca d'água no tikwm
+  const itemSo540 = {
+    id: "7400000000000000099",
+    desc: "Filme narrado completo",
+    author: { uniqueId: "narradorhd", nickname: "Narrador HD" },
+    video: {
+      duration: 120,
+      codecType: "h264",
+      bitrateInfo: [
+        { CodecType: "h264", GearName: "normal_540_0", Bitrate: 700000, PlayAddr: { UrlKey: "v09044g40000_sem_altura", Width: 576, Height: 1024, DataSize: 4000000, UrlList: ["https://v16.tiktokcdn.com/web_540.mp4"] } },
+      ],
+    },
+  };
+  const simHd = simulador({
+    "https://www.tiktok.com/": () => resposta(200, paginaTikTok(itemSo540), { "content-type": "text/html" }),
+    "https://www.tikwm.com/api/": () => resposta(200, JSON.stringify({
+      code: 0,
+      data: {
+        id: "7400000000000000099",
+        title: "Filme narrado completo",
+        duration: 120,
+        hdplay: "https://v19.tiktokcdn-us.com/master_1080p.mp4",
+        hd_size: 22000000,
+        play: "https://v16.tiktokcdn.com/play_720p_h264.mp4",
+        size: 11000000,
+        wmplay: "https://v16.tiktokcdn.com/wm.mp4",
+        author: { unique_id: "narradorhd" },
+      },
+    }), { "content-type": "application/json" }),
+    "https://v19.tiktokcdn-us.com/master_1080p.mp4": () => resposta(200, new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112, 1, 2]), { "content-type": "video/mp4", "content-length": "10" }),
+  });
+
+  const infoHd = await resolverVideo("https://www.tiktok.com/@narradorhd/video/7400000000000000099", { fetchFn: simHd.fetchFn, altaQualidade: true });
+  check("modo altaQualidade (?hd=1) promove Full HD 1080p acima do 540p da web", infoHd.candidatos[0].url === "https://v19.tiktokcdn-us.com/master_1080p.mp4" && infoHd.candidatos[0].qualidade === "1080p");
+
+  const infoH264Hd = await resolverVideo("https://www.tiktok.com/@narradorhd/video/7400000000000000099", { fetchFn: simHd.fetchFn, altaQualidade: true, preferirCodec: "h264" });
+  check("modo altaQualidade + codec=h264 prioriza H.264 720p sem marca d'água antes do master", infoH264Hd.candidatos[0].url === "https://v16.tiktokcdn.com/play_720p_h264.mp4" && infoH264Hd.candidatos[0].codec === "h264");
+
+  const resHd = respostaFalsa();
+  await handler({
+    method: "GET",
+    url: "/api/public/importar?url=" + encodeURIComponent("https://www.tiktok.com/@narradorhd/video/7400000000000000099") + "&hd=1&download=1",
+    headers: { host: "cine-flowx.vercel.app", origin: "https://cine-flowx.vercel.app" },
+  }, resHd, { fetchFn: simHd.fetchFn });
+  await resHd.fim;
+  check("endpoint ?hd=1&download=1 devolve X-Cineclip-Qualidade=1080p e Content-Disposition", resHd.statusCode === 200 && resHd.cab["x-cineclip-qualidade"] === "1080p" && /attachment/.test(resHd.cab["content-disposition"] || ""));
 }
 
 /* ------------------------------------------------------------------ 7 */
