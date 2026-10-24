@@ -5,7 +5,7 @@ import { buscarTendencias } from "../../server/tendencias.mjs";
  * GET /api/public/tendencias?modo=narrados&tags=filmesnarrados&termos=filme%20narrado&perfis=conta1&dias=14&min=20000
  * Devolve os cortes mais «hypados» ou os «Achados de Filmes Narrados» do TikTok
  * (ver server/tendencias.mjs).
- * Com o cabeçalho X-Apify-Token usa o Apify (estável, pago por uso); sem ele, o tikwm.
+ * Usa páginas públicas do TikTok e o TikWM gratuito, sem token ou serviço pago.
  * CORS: o próprio site, localhost e ALLOWED_ORIGINS (como o proxy de busca).
  */
 const cache = new Map(); // instâncias quentes da Vercel guardam o resultado 10 min
@@ -20,6 +20,7 @@ export default async function handler(req, res, deps = {}) {
     res.statusCode = iaForbiddenOrigin.status;
     return res.end(iaForbiddenOrigin.body);
   }
+  cors["Access-Control-Allow-Methods"] = "GET,OPTIONS";
   Object.entries(cors).forEach(([n, v]) => res.setHeader(n, v));
   const responder = (status, corpo) => {
     res.statusCode = status;
@@ -42,7 +43,6 @@ export default async function handler(req, res, deps = {}) {
     return responder(400, { error: "Indica pelo menos uma hashtag (tags), termo de busca (termos) ou perfil (perfis)." });
   }
 
-  const apifyToken = String(headers["x-apify-token"] || "").trim();
   const chave = JSON.stringify([
     q.modo || "cortes",
     q.tags,
@@ -54,7 +54,7 @@ export default async function handler(req, res, deps = {}) {
     q.maxDur,
     q.narrados,
     q.max,
-    apifyToken ? "apify" : "tikwm",
+    "publico-v3",
   ]);
   const guardado = cache.get(chave);
   if (guardado && Date.now() - guardado.t < VALIDADE_MS && !q.fresco && !deps.semCache) {
@@ -74,11 +74,13 @@ export default async function handler(req, res, deps = {}) {
         maxDuracao: q.maxDur,
         apenasNarrados: q.narrados === undefined ? undefined : q.narrados !== "0" && q.narrados !== "false",
         max: q.max,
-        apifyToken,
       },
       { fetchFn: deps.fetchFn, pausa: deps.pausa }
     );
-    if (dados.itens.length) cache.set(chave, { t: Date.now(), dados });
+    if (dados.itens.length) {
+      if (cache.size >= 100) cache.delete(cache.keys().next().value);
+      cache.set(chave, { t: Date.now(), dados });
+    }
     return responder(200, dados);
   } catch {
     return responder(500, { error: "Falha inesperada ao buscar as tendências." });
