@@ -286,6 +286,7 @@ function modeloPrimeiroComentario(vault) {
 
 function textoPrimeiroComentario(modelo, item) {
   modelo = modelo == null ? COMENTARIO_PADRAO : String(modelo);
+  if (item && item.firstComment) return String(item.firstComment).trim().slice(0, 2200);
   if (!modelo.trim()) return "";
   const identificado = !!(item && (item.year || item.poster || item.originalTitle));
   const filme = identificado ? String(item.title || "").trim() : "";

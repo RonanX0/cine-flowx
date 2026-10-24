@@ -6,7 +6,7 @@
  *
  *   1. lê o vídeo e usa só os primeiros 90 segundos;
  *   2. identifica o filme/série com a IA (Gemini/Groq/OpenRouter) + TMDB;
- *   3. cria um gancho (texto do topo) com a IA a partir da cena;
+ *   3. escolhe um gancho da lista (ou usa IA nos estilos opcionais);
  *   4. limpa os metadados e formata em 9:16 com o gancho (FFmpeg);
  *   5. gera a legenda com a IA;
  *   6. coloca o Reel na fila do Agendador no próximo horário livre da conta ativa.
@@ -183,7 +183,7 @@
     var cache = _lerCacheIdent();
     var e = cache[hash];
     if (!e) return null;
-    if (!e.t || (Date.now() - e.t) > CACHE_IDENT_TTL) {
+    if (!e.t || (Date.now() - e.t) > CACHE_IDENT_TTL || !(e.v && e.v.ia && Number(e.v.ia.confianca) >= CONFIANCA_MINIMA)) {
       delete cache[hash];
       _salvarCacheIdent(cache);
       return null;
@@ -191,7 +191,7 @@
     return e.v || null;
   }
   function cacheIdentGuardar(hash, valor) {
-    if (!hash || !valor) return;
+    if (!hash || !valor || !valor.ia || Number(valor.ia.confianca) < CONFIANCA_MINIMA || !Number.isFinite(Number(valor.ia.confianca))) return;
     var cache = _lerCacheIdent();
     cache[hash] = { t: Date.now(), v: valor };
     var keys = Object.keys(cache);
@@ -210,7 +210,7 @@
   var EXTENSOES = ["mp4", "mov", "mkv", "webm", "avi"];
   var CONFIANCA_MINIMA = 65;
   var CHAVE_OPCOES = "cineclip.lote.opcoes";
-  var MODOS_GANCHO_VALIDOS = ["auto", "suspense", "polemica", "pergunta", "curiosidade", "fala", "sem_gancho"];
+  var MODOS_GANCHO_VALIDOS = ["auto", "lista", "suspense", "polemica", "pergunta", "curiosidade", "fala", "sem_gancho"];
   var MODOS_IDENT_VALIDOS = ["auto", "dialogo", "dica", "sem_id"];
 
   /* ---------------------------------------------------------------- estado */
@@ -239,13 +239,14 @@
         simultaneos: (sim >= 1 && sim <= MAX_SIMULTANEOS) ? Math.round(sim) : MAX_SIMULTANEOS,
         modoGancho: MODOS_GANCHO_VALIDOS.indexOf(o.modoGancho) !== -1 ? o.modoGancho : "auto",
         modoIdentificacao: MODOS_IDENT_VALIDOS.indexOf(o.modoIdentificacao) !== -1 ? o.modoIdentificacao : "auto",
+        modoDireto: !!o.modoDireto,
         aoPartilhar: o.aoPartilhar === "aqui" || o.aoPartilhar === "pc" || o.aoPartilhar === "nuvem" ? o.aoPartilhar : "perguntar",
         processarLinksDoCelular: typeof o.processarLinksDoCelular === "boolean" ? o.processarLinksDoCelular : !eCelular(),
         botaoColar: o.botaoColar !== false,
         avisarLinkCopiado: o.avisarLinkCopiado !== false,
       };
     } catch (e) {
-      return { agendarComPoucaCerteza: false, simultaneos: MAX_SIMULTANEOS, modoGancho: "auto", modoIdentificacao: "auto", aoPartilhar: "perguntar", processarLinksDoCelular: !eCelular(), botaoColar: true, avisarLinkCopiado: true };
+      return { agendarComPoucaCerteza: false, simultaneos: MAX_SIMULTANEOS, modoGancho: "auto", modoIdentificacao: "auto", modoDireto: false, aoPartilhar: "perguntar", processarLinksDoCelular: !eCelular(), botaoColar: true, avisarLinkCopiado: true };
     }
   }
 
@@ -628,7 +629,7 @@
     var app = ambiente.app();
     if (!core || !app) return "O app ainda está a carregar. Tenta de novo dentro de alguns segundos.";
     var s = app.settings || {};
-    var modoIdent = (estado.opcoes && estado.opcoes.modoIdentificacao) || s.identMode || "auto";
+    var modoIdent = (estado.opcoes && estado.opcoes.modoDireto) ? "sem_id" : ((estado.opcoes && estado.opcoes.modoIdentificacao) || s.identMode || "auto");
     var temIA = !!String(s.groqKey || "").trim() || !!String(s.openrouterKey || "").trim() || !!String(s.geminiKey || "").trim();
     if (!temIA && modoIdent !== "sem_id") return "Adiciona a tua chave Google Gemini, Groq ou OpenRouter nas configurações — a IA identifica o filme e cria o gancho e a legenda.";
     if (!String(s.tmdbKey || "").trim() && modoIdent !== "sem_id") return "Adiciona a tua chave TMDB nas configurações — é ela que confirma o filme e traz o pôster e a sinopse.";
@@ -666,6 +667,11 @@
     };
   }
 
+  /** 1.º comentário fixo do modo direto («LINK DO FILME NA MINHA B10»). */
+  function textoComentarioDireto() {
+    return (window.CineClipMotor && window.CineClipMotor.comentarioDireto) || "LINK DO FILME NA MINHA B10";
+  }
+
   /**
    * Leva um vídeo do ficheiro original até à fila do Agendador.
    * Lança um erro (com `tipo`) quando não pode continuar.
@@ -680,8 +686,13 @@
     var s = app.settings || {};
     // Chaves de Groq/OpenRouter/Serper e exemplos de ganchos: o motor lê-as daqui (no servidor não há localStorage do app).
     try { if (window.CineClipMotor && window.CineClipMotor.configurar) window.CineClipMotor.configurar(s); } catch (e) {}
-    var modoIdent = (ctx && ctx.modoIdentificacao) || (estado.opcoes && estado.opcoes.modoIdentificacao) || s.identMode || "auto";
-    var modoGancho = (ctx && ctx.modoGancho) || (estado.opcoes && estado.opcoes.modoGancho) || s.hookMode || "auto";
+    // 🚀 Modo direto: sem identificar o filme — gancho da lista e legenda variada das
+    // listas prontas e 1.º comentário fixo. Ignora os modos escolhidos no painel.
+    var eDireto = (ctx && typeof ctx.modoDireto === "boolean")
+      ? ctx.modoDireto
+      : !!(estado.opcoes && estado.opcoes.modoDireto);
+    var modoIdent = eDireto ? "sem_id" : ((ctx && ctx.modoIdentificacao) || (estado.opcoes && estado.opcoes.modoIdentificacao) || s.identMode || "auto");
+    var modoGancho = eDireto ? "auto" : ((ctx && ctx.modoGancho) || (estado.opcoes && estado.opcoes.modoGancho) || s.hookMode || "auto");
     var ficheiro = item.ficheiro;
 
     /* 1. Ler o vídeo (metadados + dimensões em paralelo) ------------------- */
@@ -755,11 +766,11 @@
     definirPasso(item, modoIdent === "sem_id" ? "A preparar corte direto…" : "A identificar o filme…", 0.1);
     var temGemini = !!String(s.geminiKey || "").trim();
     // O áudio também serve à Groq (Whisper transcreve as falas) — não só ao Gemini.
-    var querAudio = temGemini || !!String(s.groqKey || "").trim();
+    var querAudio = modoIdent !== "sem_id" && (temGemini || !!String(s.groqKey || "").trim());
     var capturaParalela = await Promise.all([
       core.quadros(ficheiro, 0, fim, corte),
       querAudio ? Promise.resolve().then(function () { return core.audio(ficheiro, 0, fim); }).catch(function () { return null; }) : Promise.resolve(null),
-      temGemini && typeof core.videoParaIA === "function"
+      modoIdent !== "sem_id" && temGemini && typeof core.videoParaIA === "function"
         ? Promise.resolve().then(function () { return core.videoParaIA(ficheiro, 0, fim); }).catch(function () { return null; })
         : Promise.resolve(null),
     ]);
@@ -798,7 +809,7 @@
       var nomeLimpo = dicaLink || tituloMetadados || baseLimpo || "Cena de Filme / Série";
       ia = { titulo: nomeLimpo, confianca: 100, cena: dicaLink || "", ganchos: [], modo_identificacao: "sem_id" };
       filme = { id: 0, kind: "movie", title: nomeLimpo, original: nomeLimpo, year: "", poster: "", overview: "", genres: [] };
-    } else if (cacheHit && cacheHit.ia && cacheHit.filme) {
+    } else if (cacheHit && cacheHit.ia && cacheHit.filme && (Number(cacheHit.ia.confianca) >= CONFIANCA_MINIMA || permitirPoucaCerteza)) {
       ia = cacheHit.ia;
       filme = cacheHit.filme;
     } else {
@@ -880,7 +891,7 @@
           "identificacao"
         );
       }
-      if (hashVideo && filme.id) cacheIdentGuardar(hashVideo, { ia: ia, filme: filme });
+      if (hashVideo && filme.id && Number(ia.confianca) >= CONFIANCA_MINIMA) cacheIdentGuardar(hashVideo, { ia: ia, filme: filme });
       var confIdent = Number(ia.confianca) || 0;
       if (confIdent < CONFIANCA_MINIMA && !permitirPoucaCerteza) {
         throw erroComTipo(
@@ -904,7 +915,7 @@
     item.resultado = { titulo: filme.title, ano: filme.year, confianca: confianca };
 
     /* 3. Gancho ------------------------------------------------------------ */
-    definirPasso(item, modoGancho === "sem_gancho" ? "Modo sem gancho…" : "A criar o gancho…", 0.2);
+    definirPasso(item, modoGancho === "sem_gancho" ? "Modo sem gancho…" : "A escolher o gancho…", 0.2);
     var cena = ia.cena || "";
     /* A IA às vezes devolve "Gancho 1: texto" em vez de só o texto — limpa. */
     var limparGancho =
@@ -917,6 +928,13 @@
     reelsAgendadosSessao.forEach(function (r) {
       if (r && r.hookText) ganchosJaUsados.push(String(r.hookText).trim());
     });
+    // Inclui a fila persistida: cada chamada serverless inicia uma sessão nova.
+    try {
+      var filaGanchos = typeof core.lerFila === "function" ? await core.lerFila() : [];
+      (Array.isArray(filaGanchos) ? filaGanchos : []).forEach(function (r) {
+        if (r && r.accountId === conta.id && r.hookText) ganchosJaUsados.push(String(r.hookText).trim());
+      });
+    } catch (_) {}
     function chaveGanchoLote(txt) {
       return String(txt || "").toLowerCase().replace(/[^a-z0-9\u00C0-\u017F]+/gi, "");
     }
@@ -935,7 +953,10 @@
       return true;
     }
     var gancho = "";
-    if (modoGancho !== "sem_gancho") {
+    if (modoGancho === "auto" || modoGancho === "lista") {
+      if (!window.CineClipMotor) throw new Error("A lista de ganchos não carregou. Atualize a página.");
+      gancho = window.CineClipMotor.ganchosDaLista({ evitar: ganchosJaUsados }).ganchos[0];
+    } else if (modoGancho !== "sem_gancho") {
       // O gancho feito DEPOIS de saber o filme (sinopse + cena + fala) sai bem melhor do
       // que o rascunho da identificação; esse rascunho fica só de reserva.
       var rascunhoIA = "";
@@ -1001,9 +1022,20 @@
     if (!blob || !blob.size) throw erroComTipo("O FFmpeg não devolveu o vídeo processado.", "processamento");
 
     /* 5. Legenda ------------------------------------------------------------- */
-    definirPasso(item, "A escrever a legenda…", 0.88);
+    definirPasso(item, eDireto ? "A variar a legenda com IA…" : "A escrever a legenda…", 0.88);
     var legenda = "";
-    try {
+    if (eDireto) {
+      // A IA varia a legenda; a lista pronta serve de reserva,
+      // com o gancho sorteado no lugar de {gancho}. Não precisa do nome do filme.
+      if (!window.CineClipMotor) throw new Error("A lista de legendas não carregou. Atualize a página.");
+      var opLegenda = { gancho: gancho, evitar: (filaGanchos || []).map(function (r) { return r.caption || ""; }) };
+      var variacao = typeof core.gerarLegendaDireta === "function"
+        ? await core.gerarLegendaDireta(opLegenda)
+        : window.CineClipMotor.legendasDaLista(opLegenda);
+      legenda = variacao.legenda;
+      if (variacao.modo !== "ia") item.aviso = (item.aviso ? item.aviso + " " : "") + "Legenda da lista usada como reserva (IA indisponível ou sem chave).";
+    }
+    if (!legenda) try {
       legenda = await core.gerarLegenda(s.groqKey, filme, s.lang, {
         cena: cena,
         hookText: gancho,
@@ -1080,6 +1112,7 @@
         poster: filme.poster,
         hookText: gancho,
         caption: legendaLimpa,
+        firstComment: eDireto ? textoComentarioDireto() : undefined,
         videoBlob: blob,
         videoFileName: base + "_cineclip.mp4",
         videoSize: blob.size || 0,
@@ -2426,7 +2459,9 @@
       el("p", {
         className: "cl-sub",
         text:
-          "Para cada vídeo o app usa até 90 segundos, identifica o filme, cria o gancho e a legenda com IA e agenda o Reel no próximo horário livre" +
+          (estado.opcoes.modoDireto
+            ? "🚀 Modo direto ligado: sem identificar o filme — gancho da lista e legenda variada pela IA (lista como reserva), o 1.º comentário é «LINK DO FILME NA MINHA B10» e o Reel agenda no próximo horário livre"
+            : "Para cada vídeo o app usa até 90 segundos, identifica o filme, escolhe o gancho da lista e cria a legenda e agenda o Reel no próximo horário livre") +
           (conta && conta.name ? " de " + conta.name : "") + ". Processa até " + (estado.opcoes.simultaneos || MAX_SIMULTANEOS) + " vídeos ao mesmo tempo. Podes fechar este painel e ver o Agendador enquanto isso.",
       }),
     ];
@@ -2481,7 +2516,7 @@
       ]),
     ]));
 
-    var seletorIdent = el("select", { className: "cl-select", "aria-label": "Modo de identificação" }, [
+    var seletorIdent = el("select", { className: "cl-select", "aria-label": "Modo de identificação", disabled: estado.opcoes.modoDireto || null, title: estado.opcoes.modoDireto ? "Desligado pelo 🚀 Modo direto" : null }, [
       el("option", { value: "auto", text: "🎯 IA Completa (Vídeo + Áudio + Google)" }),
       el("option", { value: "dialogo", text: "💬 Busca por Falas / Legendas (OCR + Áudio)" }),
       el("option", { value: "dica", text: "⚡ Rápido por Nome / Dica" }),
@@ -2498,8 +2533,8 @@
       seletorIdent,
     ]));
 
-    var seletorGancho = el("select", { className: "cl-select", "aria-label": "Modo do gancho viral" }, [
-      el("option", { value: "auto", text: "✨ Automático (Melhor da Cena)" }),
+    var seletorGancho = el("select", { className: "cl-select", "aria-label": "Modo do gancho viral", disabled: estado.opcoes.modoDireto || null, title: estado.opcoes.modoDireto ? "Desligado pelo 🚀 Modo direto" : null }, [
+      el("option", { value: "auto", text: "📋 Lista de ganchos (sem IA)" }),
       el("option", { value: "suspense", text: "😰 Suspense / Tensão" }),
       el("option", { value: "polemica", text: "🔥 Polêmica / Dilema" }),
       el("option", { value: "pergunta", text: "❓ Pergunta Direta" }),
@@ -2507,7 +2542,7 @@
       el("option", { value: "fala", text: "💬 Fala da Cena" }),
       el("option", { value: "sem_gancho", text: "🚫 Sem Gancho (Vídeo Limpo)" }),
     ]);
-    seletorGancho.value = String(estado.opcoes.modoGancho || "auto");
+    seletorGancho.value = String(estado.opcoes.modoGancho === "lista" ? "auto" : estado.opcoes.modoGancho || "auto");
     seletorGancho.addEventListener("change", function () {
       estado.opcoes.modoGancho = MODOS_GANCHO_VALIDOS.indexOf(seletorGancho.value) !== -1 ? seletorGancho.value : "auto";
       gravarOpcoes();
@@ -2541,6 +2576,17 @@
     corpo.push(el("label", { className: "cl-opcao" }, [
       caixa,
       el("span", { text: "Agendar mesmo quando a IA tem pouca certeza do filme (abaixo de " + CONFIANCA_MINIMA + "%). Desligado, esses vídeos ficam para rever." }),
+    ]));
+
+    var caixaDireto = el("input", { type: "checkbox", checked: estado.opcoes.modoDireto || null });
+    caixaDireto.addEventListener("change", function () {
+      estado.opcoes.modoDireto = caixaDireto.checked;
+      gravarOpcoes();
+      desenhar();
+    });
+    corpo.push(el("label", { className: "cl-opcao" }, [
+      caixaDireto,
+      el("span", { text: "🚀 Modo direto: gancho da lista e legenda variada pela IA; sem chave ou em caso de falha, usa a lista das Configurações e o 1.º comentário é «LINK DO FILME NA MINHA B10». Ignora os dois modos acima." }),
     ]));
 
     corpo.push(desenharSecaoCelular());

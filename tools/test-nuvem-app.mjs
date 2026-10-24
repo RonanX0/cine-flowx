@@ -10,7 +10,8 @@ import fs from "node:fs";
 import path from "node:path";
 
 const root = path.resolve(import.meta.dirname, "..");
-const LOTE = fs.readFileSync(path.join(root, "lote-massa.js"), "utf8");
+// Carrega a dependência real da lista, tal como o HTML de produção.
+const LOTE = fs.readFileSync(path.join(root, "motor-ia.js"), "utf8") + "\n" + fs.readFileSync(path.join(root, "lote-massa.js"), "utf8");
 
 let JSDOM, ResourceLoader;
 try {

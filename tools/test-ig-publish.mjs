@@ -685,6 +685,15 @@ console.log("\n17. Primeiro comentário em cada Reel (🎬 filme + LINK NA B10)"
   check("vazio = não comenta", t("", { title: "Interestelar", year: 2014 }) === "" && t("   ", { title: "X", year: 1 }) === "");
   check("{ano} sem ano some com os parênteses", t("🎬 {filme} ({ano})", { title: "Matrix", poster: "p.jpg" }) === "🎬 Matrix");
   check("{ano} com ano", t("🎬 {filme} ({ano})\nLINK NA B10", { title: "Matrix", year: "1999" }) === "🎬 Matrix (1999)\nLINK NA B10");
+  check("modo direto: o firstComment do Reel manda no modelo", t(undefined, { title: "video_9", firstComment: "LINK DO FILME NA MINHA B10" }) === "LINK DO FILME NA MINHA B10");
+  check("modo direto: firstComment do Reel vence mesmo com o modelo desligado", t("", { title: "video_9", firstComment: "LINK DO FILME NA MINHA B10" }) === "LINK DO FILME NA MINHA B10");
+}
+{
+  // Reel agendado no 🚀 Modo direto (sem filme identificado): só o LINK da B10.
+  const amb = criarAmbiente();
+  const out = await publicar(amb, item({ title: "Cena de Filme", firstComment: "LINK DO FILME NA MINHA B10" }));
+  const com = amb.chamadas.find((c) => c.url.includes("/comments"));
+  check("modo direto: publica e comenta só «LINK DO FILME NA MINHA B10»", out.ok && !!com && new URLSearchParams(com.corpo).get("message") === "LINK DO FILME NA MINHA B10", com ? JSON.stringify(new URLSearchParams(com.corpo).get("message")) : "sem comentário");
 }
 {
   // Publica pelo app (envio direto) → comenta no Reel publicado com o texto padrão.

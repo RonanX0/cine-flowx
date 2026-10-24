@@ -71,6 +71,7 @@
     var omissao = {
       identificar: true,
       modoIdentificacao: "auto",
+      modoDireto: false,
       usarCapa: true,
       agendarComPoucaCerteza: false,
       simultaneos: 3,
@@ -83,6 +84,7 @@
       return {
         identificar: typeof o.identificar === "boolean" ? o.identificar : omissao.identificar,
         modoIdentificacao: MODOS_IDENT_VALIDOS.indexOf(o.modoIdentificacao) !== -1 ? o.modoIdentificacao : omissao.modoIdentificacao,
+        modoDireto: !!o.modoDireto,
         usarCapa: typeof o.usarCapa === "boolean" ? o.usarCapa : omissao.usarCapa,
         agendarComPoucaCerteza: !!o.agendarComPoucaCerteza,
         simultaneos: sim >= 1 && sim <= MAX_SIMULTANEOS ? Math.round(sim) : omissao.simultaneos,
@@ -349,7 +351,7 @@
     var s = app.settings || {};
     if (!app.account || !app.account.id) return "Escolhe uma conta do Instagram no topo do app.";
     var modoIdent = (estado.opcoes && estado.opcoes.modoIdentificacao) || s.identMode || "auto";
-    if (!estado.opcoes.identificar || modoIdent === "sem_id") return null;
+    if (estado.opcoes.modoDireto || !estado.opcoes.identificar || modoIdent === "sem_id") return null;
     var temIA = !!String(s.groqKey || "").trim() || !!String(s.openrouterKey || "").trim() || !!String(s.geminiKey || "").trim();
     if (!temIA && modoIdent !== "dica") return "Desliga «Identificar o filme com IA» ou adiciona a chave Gemini/Groq/OpenRouter nas configurações.";
     if (!String(s.tmdbKey || "").trim()) return "Desliga «Identificar o filme com IA» ou adiciona a chave TMDB nas configurações — é ela que traz a capa.";
@@ -364,6 +366,11 @@
 
   /* ------------------------------------------------- processar um vídeo */
 
+  /** 1.º comentário fixo do modo direto («LINK DO FILME NA MINHA B10»). */
+  function textoComentarioDireto() {
+    return (window.CineClipMotor && window.CineClipMotor.comentarioDireto) || "LINK DO FILME NA MINHA B10";
+  }
+
   /**
    * Leva um vídeo já editado até à fila do Agendador — SEM passar pelo FFmpeg.
    * Lança um erro (com `tipo`) quando não pode continuar.
@@ -376,8 +383,13 @@
       ? ctx.agendarComPoucaCerteza
       : !!estado.opcoes.agendarComPoucaCerteza;
     var s = (app && app.settings) || {};
+    // Listas prontas (ganchos/legendas): o motor lê as Configurações daqui.
+    try { if (window.CineClipMotor && window.CineClipMotor.configurar) window.CineClipMotor.configurar(s); } catch (e) {}
+    // 🚀 Modo direto: sem identificar o filme e sem IA — legenda da lista pronta
+    // e 1.º comentário fixo («LINK DO FILME NA MINHA B10»).
+    var eDireto = ctx && typeof ctx.modoDireto === "boolean" ? ctx.modoDireto : !!estado.opcoes.modoDireto;
     var modoIdent = (ctx && ctx.modoIdentificacao) || (estado.opcoes && estado.opcoes.modoIdentificacao) || s.identMode || "auto";
-    var identificar = (ctx && typeof ctx.identificar === "boolean" ? ctx.identificar : !!estado.opcoes.identificar) && modoIdent !== "sem_id";
+    var identificar = !eDireto && (ctx && typeof ctx.identificar === "boolean" ? ctx.identificar : !!estado.opcoes.identificar) && modoIdent !== "sem_id";
     var usarCapa = ctx && typeof ctx.usarCapa === "boolean" ? ctx.usarCapa : !!estado.opcoes.usarCapa;
     var ficheiro = item.ficheiro;
 
@@ -581,11 +593,23 @@
     }
 
     if (!legenda || !String(legenda).trim()) {
-      legenda = aplicarModelo(estado.opcoes.modelo, {
-        titulo: titulo,
-        ano: item.ano || "",
-        nome: semExtensao(ficheiro.name),
-      });
+      if (eDireto) {
+        // Sem IA e sem nome do filme: gancho + legenda das listas prontas
+        // (Configurações). A legenda manual, se existir, continua a mandar.
+        if (!window.CineClipMotor) throw new Error("A lista de legendas não carregou. Atualize a página.");
+        var ganchoLeg = window.CineClipMotor.ganchosDaLista({}).ganchos[0];
+        var variacao = typeof core.gerarLegendaDireta === "function"
+          ? await core.gerarLegendaDireta({ gancho: ganchoLeg })
+          : window.CineClipMotor.legendasDaLista({ gancho: ganchoLeg });
+        legenda = variacao.legenda;
+        if (variacao.modo !== "ia") item.aviso = (item.aviso ? item.aviso + " " : "") + "Legenda da lista usada como reserva (IA indisponível ou sem chave).";
+      } else {
+        legenda = aplicarModelo(estado.opcoes.modelo, {
+          titulo: titulo,
+          ano: item.ano || "",
+          nome: semExtensao(ficheiro.name),
+        });
+      }
     }
     if (item.legendaManual && String(item.legenda).trim()) legenda = item.legenda;
     item.legenda = legenda;
@@ -634,6 +658,7 @@
         poster: poster || undefined,
         hookText: "",
         caption: legendaLimpa,
+        firstComment: eDireto ? textoComentarioDireto() : undefined,
         videoBlob: ficheiro,
         videoFileName: ficheiro.name || "video.mp4",
         videoSize: ficheiro.size || 0,
@@ -1025,6 +1050,7 @@
     return el("div", { className: "cr-opcoes" }, [
       el("div", { className: "cr-opcoes-titulo", text: "Opções" }),
       opcaoSimples("identificar", "🔎 Identificar o filme com a IA — escreve a legenda e traz a capa (pôster) do TMDB"),
+      opcaoSimples("modoDireto", "🚀 Modo direto: legenda variada pela IA, lista pronta como reserva + 1.º comentário «LINK DO FILME NA MINHA B10» (ignora o identificador)"),
       el("label", { className: "cr-opcao" }, [
         el("span", { text: "Modo do identificador: " }),
         selectIdent,

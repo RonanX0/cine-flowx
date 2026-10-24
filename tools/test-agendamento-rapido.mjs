@@ -204,6 +204,26 @@ console.log("\nA2. Com a IA desligada: só legenda, sem capa");
   dom.window.close();
 }
 
+console.log("\nA2b. 🚀 Modo direto: sem IA, legenda da lista pronta e 1.º comentário fixo");
+{
+  const dom = await novoDom();
+  const { window } = dom;
+  // Parte A corre sem o motor; o modo direto precisa dele (como no navegador).
+  window.eval(fs.readFileSync(path.join(root, "motor-ia.js"), "utf8"));
+  const c = cenario(window, { settings: { groqKey: "", tmdbKey: "", legendasBoas: "Legenda pronta: {gancho} #TagRapido" } });
+  // Mesmo com «identificar» ligado, o direto manda e dispensa as chaves.
+  c.rapido.estado.opcoes.identificar = true;
+  c.rapido.estado.opcoes.modoDireto = true;
+  c.rapido.adicionarFicheiros([ficheiro(window, "cena-epica.mp4")]);
+  await c.rapido.iniciar();
+  check("direto: agenda sem chaves de IA", c.fila.length === 1, `fila=${c.fila.length}`);
+  check("direto: não identifica nem chama a IA de legenda", c.chamadas.identificar === 0 && c.chamadas.gerarLegenda === 0 && c.chamadas.quadros === 0);
+  check("direto: a legenda sai da lista pronta (não do modelo do painel)", /Legenda pronta: .+ #TagRapido/.test(c.fila[0].caption) && !c.fila[0].caption.includes("{gancho}"), c.fila[0].caption);
+  check("direto: o Reel leva o 1.º comentário «LINK DO FILME NA MINHA B10»", c.fila[0].firstComment === "LINK DO FILME NA MINHA B10", JSON.stringify(c.fila[0].firstComment));
+  check("direto: o painel tem a opção 🚀 Modo direto", /Modo direto/.test(window.document.querySelector(".cr-painel").textContent));
+  dom.window.close();
+}
+
 console.log("\nA3. Pouca certeza da IA");
 {
   const dom = await novoDom();

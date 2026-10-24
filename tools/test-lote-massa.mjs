@@ -69,6 +69,7 @@ function novoDom() {
   });
   dom.window.URL.createObjectURL = () => "blob:stub";
   dom.window.URL.revokeObjectURL = () => {};
+  dom.window.eval(fs.readFileSync(path.join(root, "motor-ia.js"), "utf8"));
   dom.window.eval(LOTE);
   return dom;
 }
@@ -150,6 +151,8 @@ function cenario(window, opcoes = {}) {
     abrirNoEstudio: () => {},
   };
   const lote = window.CineLote._interno;
+  // These fixtures exercise the optional AI styles. List defaults are covered below.
+  lote.estado.opcoes.modoGancho = "suspense";
   lote.ambiente.core = () => core;
   lote.ambiente.app = () => app;
   lote.ambiente.lerVideo = async (f) => (f.name === "hevc.mp4"
@@ -159,6 +162,49 @@ function cenario(window, opcoes = {}) {
 }
 
 console.log("\n📦 Upload em massa — lote-massa.js\n");
+console.log("Lista padrão + sem identificação: nenhuma análise de mídia ou IA de gancho");
+{
+  const dom = novoDom();
+  const c = cenario(dom.window, { settings: { geminiKey: "gem", ganchosBons: "Primeiro gancho 👀\nSegundo gancho 🎬" } });
+  c.lote.estado.opcoes.modoIdentificacao = "sem_id";
+  c.lote.estado.opcoes.modoGancho = "auto";
+  let audio = 0;
+  c.core.audio = async () => { audio++; throw new Error("não deve extrair áudio"); };
+  c.lote.adicionarFicheiros([ficheiro(dom.window, "longo.mp4"), ficheiro(dom.window, "curto.mp4")]);
+  await c.lote.iniciar();
+  check("usa os ganchos personalizados sem repetir no lote paralelo", c.fila.length === 2 && new Set(c.fila.map(r => r.hookText)).size === 2 && c.fila.every(r => ["Primeiro gancho 👀", "Segundo gancho 🎬"].includes(r.hookText)));
+  check("sem identificação não prepara áudio nem upload de vídeo para IA", audio === 0 && !c.chamadas.videoParaIA && c.chamadas.identificar === 0);
+  check("lista não chama a IA de ganchos", c.chamadas.gerarGancho === 0);
+  dom.window.close();
+}
+
+console.log("🚀 Modo direto: sem identificação e sem IA — legenda da lista e 1.º comentário fixo");
+{
+  const dom = novoDom();
+  const { window } = dom;
+  const c = cenario(window, { settings: { legendasBoas: "GANCHO: {gancho}\n\n#TesteA\n---\nOutra legenda {gancho} #TesteB" } });
+  // Mesmo com os modos de IA selecionados no painel, o direto ignora-os.
+  c.lote.estado.opcoes.modoDireto = true;
+  c.lote.estado.opcoes.modoIdentificacao = "auto";
+  c.lote.estado.opcoes.modoGancho = "suspense";
+  let chamLegenda = 0;
+  c.core.gerarLegenda = async () => { chamLegenda++; return "LEGENDA DA IA"; };
+  let audio = 0;
+  c.core.audio = async () => { audio++; throw new Error("não deve extrair áudio"); };
+  window.CineLote.abrir();
+  check("o painel tem a opção 🚀 Modo direto", /Modo direto/.test(window.document.querySelector(".cl-painel").textContent));
+  c.lote.adicionarFicheiros([ficheiro(window, "longo.mp4"), ficheiro(window, "curto.mp4")]);
+  await c.lote.iniciar();
+  check("direto: os 2 Reels entram na fila", c.fila.length === 2, `fila=${c.fila.length}`);
+  check("direto: não identifica o filme nem chama a IA (gancho/legenda)", c.chamadas.identificar === 0 && c.chamadas.gerarGancho === 0 && chamLegenda === 0, `identificar=${c.chamadas.identificar} legenda=${chamLegenda}`);
+  check("direto: não prepara áudio nem vídeo para IA", audio === 0 && !c.chamadas.videoParaIA);
+  check("direto: a legenda sai da lista pronta com o gancho no lugar de {gancho}", c.fila.every((r) => r.caption.includes(r.hookText) && /#Teste[AB]/.test(r.caption) && !r.caption.includes("{gancho}")), c.fila.map((r) => r.caption).join(" // "));
+  check("direto: as 2 legendas-modelo rodam sem repetir no lote", new Set(c.fila.map((r) => r.caption.includes("#TesteA"))).size === 2);
+  check("direto: o gancho também vem da lista pronta (sem IA)", c.fila.every((r) => window.CineClipMotor.ganchosPadrao.includes(r.hookText)), c.fila.map((r) => r.hookText).join(" | "));
+  check("direto: o Reel leva o 1.º comentário «LINK DO FILME NA MINHA B10»", c.fila.every((r) => r.firstComment === "LINK DO FILME NA MINHA B10"), JSON.stringify(c.fila.map((r) => r.firstComment)));
+  dom.window.close();
+}
+
 console.log("A1. Um lote com vídeos bons, um H.265, um com pouca certeza e um inválido");
 {
   const dom = novoDom();
@@ -423,6 +469,7 @@ window.localStorage.setItem("cineclip.ig.accounts", JSON.stringify([CONTA]));
 window.localStorage.setItem("cineclip.ig.active", CONTA.id);
 
 window.eval(cineCloudSource);
+window.eval(fs.readFileSync(path.join(root, "motor-ia.js"), "utf8"));
 window.eval(LOTE);
 window.eval(moduleSource);
 
