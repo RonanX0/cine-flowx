@@ -69,6 +69,7 @@ function novoDom() {
   });
   dom.window.URL.createObjectURL = () => "blob:stub";
   dom.window.URL.revokeObjectURL = () => {};
+  dom.window.eval(fs.readFileSync(path.join(root, "motor-ia.js"), "utf8"));
   dom.window.eval(LOTE);
   return dom;
 }
@@ -150,6 +151,8 @@ function cenario(window, opcoes = {}) {
     abrirNoEstudio: () => {},
   };
   const lote = window.CineLote._interno;
+  // These fixtures exercise the optional AI styles. List defaults are covered below.
+  lote.estado.opcoes.modoGancho = "suspense";
   lote.ambiente.core = () => core;
   lote.ambiente.app = () => app;
   lote.ambiente.lerVideo = async (f) => (f.name === "hevc.mp4"
@@ -159,6 +162,22 @@ function cenario(window, opcoes = {}) {
 }
 
 console.log("\n📦 Upload em massa — lote-massa.js\n");
+console.log("Lista padrão + sem identificação: nenhuma análise de mídia ou IA de gancho");
+{
+  const dom = novoDom();
+  const c = cenario(dom.window, { settings: { geminiKey: "gem", ganchosBons: "Primeiro gancho 👀\nSegundo gancho 🎬" } });
+  c.lote.estado.opcoes.modoIdentificacao = "sem_id";
+  c.lote.estado.opcoes.modoGancho = "auto";
+  let audio = 0;
+  c.core.audio = async () => { audio++; throw new Error("não deve extrair áudio"); };
+  c.lote.adicionarFicheiros([ficheiro(dom.window, "longo.mp4"), ficheiro(dom.window, "curto.mp4")]);
+  await c.lote.iniciar();
+  check("usa os ganchos personalizados sem repetir no lote paralelo", c.fila.length === 2 && new Set(c.fila.map(r => r.hookText)).size === 2 && c.fila.every(r => ["Primeiro gancho 👀", "Segundo gancho 🎬"].includes(r.hookText)));
+  check("sem identificação não prepara áudio nem upload de vídeo para IA", audio === 0 && !c.chamadas.videoParaIA && c.chamadas.identificar === 0);
+  check("lista não chama a IA de ganchos", c.chamadas.gerarGancho === 0);
+  dom.window.close();
+}
+
 console.log("A1. Um lote com vídeos bons, um H.265, um com pouca certeza e um inválido");
 {
   const dom = novoDom();
@@ -423,6 +442,7 @@ window.localStorage.setItem("cineclip.ig.accounts", JSON.stringify([CONTA]));
 window.localStorage.setItem("cineclip.ig.active", CONTA.id);
 
 window.eval(cineCloudSource);
+window.eval(fs.readFileSync(path.join(root, "motor-ia.js"), "utf8"));
 window.eval(LOTE);
 window.eval(moduleSource);
 

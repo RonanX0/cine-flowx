@@ -297,7 +297,7 @@ console.log("\n🎣 Ganchos aprendem com os exemplos do utilizador");
   motor.configurar({ groqKey: "gsk_teste", ganchosBons: "1. O policial achou o corpo e viu quem era 😳\n- Ela abriu o armário e congelou na hora 😱", ganchosRuins: "Você precisa ver essa cena!\nQue cena incrível" });
   const filme = { id: 58841, kind: "tv", title: "Chicago P.D.", year: "2014", overview: "Polícia.", genres: ["Crime"] };
   const roteiro = PERCECAO.roteiro;
-  const g = await core.gerarGancho("", [], "pt-BR", filme, "", null, null, { cena: roteiro, momento: "A detetive acha a arma", hookMode: "auto" });
+  const g = await core.gerarGancho("", [], "pt-BR", filme, "", null, null, { cena: roteiro, momento: "A detetive acha a arma", hookMode: "suspense" });
   const esc = S.groqChats.find((b) => /Escreva 10 ganchos/.test(textoDe(b)));
   check("os ganchos aprovados vão no pedido, sem numeração", esc && /APROVOU[\s\S]*- O policial achou o corpo e viu quem era 😳/.test(textoDe(esc)) && !/- 1\. O policial/.test(textoDe(esc)));
   check("os reprovados vão como «nunca escreva assim»", esc && /REPROVOU[\s\S]*Você precisa ver essa cena!/.test(textoDe(esc)));

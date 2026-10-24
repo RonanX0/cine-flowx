@@ -370,7 +370,7 @@ respostaGemini = JSON.stringify({
 });
 let r1;
 try {
-  r1 = await core.gerarGancho("", [QUADRO], "pt-BR", "cena-suja.mp4", "chave-gemini-falsa", null);
+  r1 = await core.gerarGancho("", [QUADRO], "pt-BR", "cena-suja.mp4", "chave-gemini-falsa", null, null, { hookMode: "suspense" });
   const ok = Array.isArray(r1.ganchos) && r1.ganchos.length === 3 &&
     r1.ganchos[0] === "ele matou a mulher 😳" &&
     r1.ganchos[1] === "A reação dela é impagável 🔥" &&
@@ -385,7 +385,7 @@ try {
 respostaGemini = "Aqui estão os ganchos:\n1. Gancho 1: ele matou a mulher 😳\n2) A reação dela é impagável 🔥\n3 - Ninguém viu isso chegar 😱";
 let r2;
 try {
-  r2 = await core.gerarGancho("", [QUADRO], "pt-BR", "cena-fallback.mp4", "chave-gemini-falsa", null);
+  r2 = await core.gerarGancho("", [QUADRO], "pt-BR", "cena-fallback.mp4", "chave-gemini-falsa", null, null, { hookMode: "suspense" });
   const ok = Array.isArray(r2.ganchos) && r2.ganchos.length === 3 &&
     r2.ganchos[0] === "ele matou a mulher 😳" &&
     r2.ganchos[1] === "A reação dela é impagável 🔥" &&
@@ -449,7 +449,7 @@ try {
 
 let gv = null;
 try {
-  gv = await core.gerarGancho("", [QUADRO], "pt-BR", "Filme Com Vídeo", "chave-gemini-falsa", null, videoFake);
+  gv = await core.gerarGancho("", [QUADRO], "pt-BR", "Filme Com Vídeo", "chave-gemini-falsa", null, videoFake, { hookMode: "suspense" });
   check("gerarGancho com vídeo devolve a cena", !!gv && /movimento/.test(gv.cena || ""), JSON.stringify(gv && gv.cena));
   check("o mesmo vídeo reutiliza o upload (cache)", uploads === 1, "uploads=" + uploads);
   check("o gancho também usa file_data", !!corpoGenerate && corpoGenerate.includes('"file_data"') && corpoGenerate.includes("files/vid01"));

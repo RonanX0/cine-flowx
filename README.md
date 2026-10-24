@@ -2,6 +2,26 @@
 
 Aplicação web **100% no navegador** que limpa metadados de vídeos, corta até 2:30, formata em **9:16** com texto de *hook* no topo, identifica o filme/série via **Gemini (ou Groq / OpenRouter grátis) + TMDB** (ou com o Gemini a *assistir ao vídeo*) e gera uma legenda pronta para publicar.
 
+## Ganchos prontos (modo padrão)
+
+Em **Configurações → Lista de ganchos**, escreva uma frase por linha. O modo
+**📋 Lista de ganchos** usa essas frases diretamente, sem assistir ao vídeo e sem
+chave de IA. Deixe o campo vazio para usar as 24 frases prontas. O campo de ganchos
+bloqueados exclui frases da seleção. Prefira frases curtas para caberem no topo.
+
+O Estúdio permite escolher outra sugestão ou editar o texto. No upload em massa,
+a seleção alterna entre as frases; o histórico local evita repetição até percorrer
+a lista. No servidor, a fila ajuda a evitar os ganchos já agendados. Essa rotação
+não é um bloqueio distribuído entre dispositivos independentes.
+
+Os estilos Suspense, Polêmica, Pergunta, Curiosidade e Fala continuam como opções
+com IA. **Sem gancho** mantém o vídeo sem frase no topo.
+
+A identificação do filme é independente: para dispensá-la, selecione
+**Sem Identificação / Direto** no lote. Nesse modo não há extração de áudio nem
+preparação de vídeo para IA; quadros ainda são usados para detectar duplicados.
+Identificações abaixo de 65% não ficam no cache nem são reutilizadas dele.
+
 ## Estrutura do Projeto
 
 - `index.html` — aplicação React já compilada (interface, processamento com FFmpeg e identificação do filme)
@@ -86,7 +106,7 @@ estilo de uma variável errada e o fundo/cor escolhidos nunca chegavam ao vídeo
 
 No Estúdio, o botão **📦 Upload em massa** (ou escolher/arrastar vários vídeos de uma vez)
 abre um painel onde cada vídeo passa sozinho pelo fluxo todo: usa **até 90 s** do início,
-identifica o filme com a IA + TMDB, cria o **gancho** e a **legenda** com IA, processa em 9:16
+identifica o filme com a IA + TMDB, escolhe o **gancho da lista** e cria a **legenda** com IA, processa em 9:16
 e agenda o Reel no **próximo horário livre** da conta ativa. Os vídeos são tratados um de cada
 vez; o painel pode ser fechado (fica um atalho no canto) e o botão **Parar** interrompe o lote.
 

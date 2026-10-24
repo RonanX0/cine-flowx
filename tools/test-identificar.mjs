@@ -163,7 +163,7 @@ console.log("\n🎣 Ganchos: ver → escrever 10 → julgar");
   pedidosIA.length = 0;
   const roteiro = "Dois policiais invadem um apartamento à procura de um suspeito. A detetive encontra uma arma escondida no armário e o parceiro percebe que o suspeito fugiu pela janela.";
   const filme = { id: 58841, kind: "tv", title: "Chicago P.D.", year: "2014", overview: "A unidade de Inteligência.", genres: ["Drama", "Crime"] };
-  const g = await core.gerarGancho("", [], "pt-BR", filme, "gem", null, null, { cena: roteiro, momento: "A detetive acha a arma", personagens: ["Ruzek", "Upton"], hookMode: "auto" });
+  const g = await core.gerarGancho("", [], "pt-BR", filme, "gem", null, null, { cena: roteiro, momento: "A detetive acha a arma", personagens: ["Ruzek", "Upton"], hookMode: "suspense" });
   const todos = g.ganchos.join(" | ");
   check("nada de rótulos nem descrições («Momento:», «A cena mostra»)", !/Momento|A cena mostra/i.test(todos), todos);
   check("o «Gancho 1:» é limpo e o texto aproveitado", g.ganchos.includes("A detetive achou a arma onde ninguém olhou 😳"), todos);
@@ -180,14 +180,14 @@ console.log("\n🎣 Ganchos: ver → escrever 10 → julgar");
   respostas.escrever = { ganchos: ["O garoto achou a carta que o avô escondeu 😨", "Ninguém devia ter lido aquela carta no sótão 👀"] };
   respostas.julgar = { notas: [{ i: 0, fiel: 9, curiosidade: 6, clareza: 9 }, { i: 1, fiel: 9, curiosidade: 9, clareza: 8 }] };
   pedidosIA.length = 0;
-  const g = await core.gerarGancho("", QUADROS, "pt-BR", "video_123.mp4", "gem", null, null, { hookMode: "auto" });
+  const g = await core.gerarGancho("", QUADROS, "pt-BR", "video_123.mp4", "gem", null, null, { hookMode: "suspense" });
   check("sem roteiro: a IA assiste primeiro e depois escreve", pedidosIA.findIndex((p) => /descreva SÓ/.test(p.texto)) === 0 && /sótão/.test(g.cena), JSON.stringify(g));
   check("ordem pelo julgamento", g.ganchos[0] === "Ninguém devia ter lido aquela carta no sótão 👀", g.ganchos[0]);
 }
 {
   respostas.escrever = "Aqui estão:\n1. Ele trancou a porta e escondeu a chave 😨\n**Emoção:** medo\n2. Ela ouviu tudo atrás da parede 👀";
   respostas.julgar = "não é json";
-  const g = await core.gerarGancho("", [], "pt-BR", "Filme", "gem", null, null, { cena: "Um homem tranca a porta e esconde a chave enquanto a mulher escuta tudo atrás da parede.", hookMode: "auto" });
+  const g = await core.gerarGancho("", [], "pt-BR", "Filme", "gem", null, null, { cena: "Um homem tranca a porta e esconde a chave enquanto a mulher escuta tudo atrás da parede.", hookMode: "suspense" });
   check("resposta sem JSON: aproveita as linhas boas e descarta rótulos", g.ganchos.length === 2 && g.ganchos[0] === "Ele trancou a porta e escondeu a chave 😨" && !/Emoção/.test(g.ganchos.join("|")), JSON.stringify(g.ganchos));
 }
 {

@@ -801,11 +801,64 @@
     throw new (h.Erro || Error)("Adiciona a tua chave Google Gemini, Groq ou OpenRouter nas configurações para gerar o gancho.");
   }
 
+  // Lista local: a reserva acontece antes de qualquer await, inclusive em lotes paralelos.
+  var GANCHOS_PRONTOS = [
+    "Só mais uma cena antes de dormir 👀",
+    "Esse corte merece sua atenção 🎬",
+    "Quem mais ficou preso nessa cena? 👀",
+    "Dá o play e me conta o que achou 🎬",
+    "Uma cena para quem ama cinema 🍿",
+    "Qual seria a sua reação? 🤔",
+    "Esse é o seu tipo de filme? 🍿",
+    "Eu precisava compartilhar essa cena 🎬",
+    "Pausa no feed para um pouco de cinema 🍿",
+    "Você assistiria até o fim? 👀",
+    "Vale um lugar na sua lista? 🎬",
+    "Quem você chamaria para assistir? 🍿",
+    "Uma cena, muitas opiniões 🤔",
+    "O que você faria nessa situação? 👀",
+    "Já viu essa cena antes? 🎬",
+    "Deixa sua opinião depois do play 💬",
+    "Cinema combina com uma boa conversa 🍿",
+    "Esse corte entrou no meu feed e ficou 👀",
+    "Mais um motivo para falar de cinema 🎬",
+    "Hoje o convite é dar o play 🍿",
+    "Sua próxima pausa começa aqui 🎬",
+    "Assiste e me diz: valeu o play? 👀",
+    "Marca quem gosta de uma boa cena 🍿",
+    "Uma pausa para os fãs de cinema 🎬"
+  ];
+  var historicoGanchos = [];
+  function usaLista(modo) { return !modo || modo === "auto" || modo === "lista"; }
+  function ganchosDaLista(extra) {
+    extra = extra || {};
+    var s = settingsAtuais();
+    var personalizados = String(s.ganchosBons || "").split(/\r?\n/).map(function (v) { return v.trim(); }).filter(Boolean);
+    var pool = Array.from(new Set(personalizados.length ? personalizados : GANCHOS_PRONTOS));
+    var bloqueados = new Set(String(s.ganchosRuins || "").split(/\r?\n/).map(norm).filter(Boolean));
+    pool = pool.filter(function (v) { return !bloqueados.has(norm(v)); });
+    if (!pool.length) throw new Error("Todos os ganchos foram bloqueados. Edite a lista nas Configurações.");
+    try { var salvo = JSON.parse(raiz.localStorage.getItem("cineclip.ganchos.usados") || "[]"); if (Array.isArray(salvo)) historicoGanchos = salvo; } catch (_) {}
+    var evitar = Array.isArray(extra.evitar) ? extra.evitar.map(norm) : [];
+    var usados = historicoGanchos.map(norm);
+    // Mais antigo primeiro quando toda a lista já foi usada.
+    pool.sort(function (a, b) {
+      var ea = evitar.includes(norm(a)), eb = evitar.includes(norm(b));
+      if (ea !== eb) return ea ? 1 : -1;
+      return usados.lastIndexOf(norm(a)) - usados.lastIndexOf(norm(b));
+    });
+    var escolhido = pool[0];
+    historicoGanchos = historicoGanchos.filter(function (v) { return norm(v) !== norm(escolhido); }).concat(escolhido).slice(-500);
+    try { raiz.localStorage.setItem("cineclip.ganchos.usados", JSON.stringify(historicoGanchos)); } catch (_) {}
+    return { cena: "", ganchos: pool.slice(0, 5), modo: "lista" };
+  }
+
   async function ganchos(h, o) {
     o = o || {};
     var ex = o.extra && typeof o.extra === "object" ? o.extra : {};
     var modo = norm(ex.hookMode || ex.modo || o.modo || "auto").replace(/ /g, "_") || "auto";
     if (modo === "sem_gancho") return { cena: "", ganchos: [], modo: modo };
+    if (usaLista(modo)) return ganchosDaLista(ex);
     var gem = txt(o.geminiKey, 200);
     var alt = Prov.temAlgumaIA(o);
     var quadros = Array.isArray(o.frames) ? o.frames : [];
@@ -944,7 +997,7 @@
     [raiz.__CineClipApp && raiz.__CineClipApp.settings, cfgManual].forEach(function (fonte) {
       if (!fonte || typeof fonte !== "object") return;
       Object.keys(fonte).forEach(function (k) {
-        if (fonte[k] != null && String(fonte[k]).trim() !== "") s[k] = fonte[k];
+        if (fonte[k] != null && (k === "ganchosBons" || k === "ganchosRuins" || String(fonte[k]).trim() !== "")) s[k] = fonte[k];
       });
     });
     return s;
@@ -1432,6 +1485,9 @@
     identificar: identificar,
     escolher: escolher,
     ganchos: ganchos,
+    usaLista: usaLista,
+    ganchosDaLista: ganchosDaLista,
+    ganchosPadrao: GANCHOS_PRONTOS.slice(),
     aprender: aprender,
     configurar: function (s) { Prov.configurar(s); },
     prov: Prov,
