@@ -138,25 +138,23 @@ console.log("\n⚠️ Erros");
   check("sem hashtag nem perfil não busca e avisa", /pelo menos uma hashtag/.test(c.texto()));
 }
 
-console.log("\n🧰 Token do Apify");
+console.log("\n🌍 Busca sem token");
 {
-  const c = criar();
+  const c = criar({ tmdbKey: "" });
   c.w.document.getElementById("cc-tendencias-monte").className = "";
   await dormir(900);
-  check("sem token não manda o cabeçalho", !c.chamadas.cabecalhos || !c.chamadas.cabecalhos["X-Apify-Token"]);
-  const campo = [...c.w.document.querySelectorAll(".ct-campo input")].find((i) => i.type === "password");
-  check("há um campo de senha para o token", !!campo);
-  campo.value = "apify_api_abc"; campo.dispatchEvent(new c.w.Event("input"));
-  [...c.w.document.querySelectorAll("button")].find((b) => /Buscar tendências/.test(b.textContent)).click();
-  await dormir(200);
-  check("com token manda X-Apify-Token", c.chamadas.cabecalhos && c.chamadas.cabecalhos["X-Apify-Token"] === "apify_api_abc", JSON.stringify(c.chamadas.cabecalhos));
-  check("o token fica guardado só neste aparelho", /apify_api_abc/.test(c.w.localStorage.getItem("cineclip.tendencias.opcoes") || ""));
+  check("não pede token nem envia credenciais", !c.w.document.querySelector('input[type="password"]') && !c.chamadas.cabecalhos);
+  check("explica os perfis sugeridos e limites dos dados públicos", /@teusflix/.test(c.texto()) && /até 10 vídeos/.test(c.texto()));
+  c.w.CineTendencias._interno.aplicar({ itens: [{ ...ITENS[0], duracao: null, curtidas: null, compartilhamentos: null, dataEstimada: true }], estados: [] });
+  check("duração e métricas desconhecidas aparecem como indisponíveis", /duração não informada/.test(c.cartoes()[0].textContent) && /❤ —/.test(c.cartoes()[0].textContent) && /data estimada/.test(c.cartoes()[0].textContent));
+  c.w.close();
 }
 {
-  const c = criar({ resposta: () => ({ status: 200, corpo: { geradoEm: Date.now(), estados: [{ fonte: "#a", ok: false, erro: "bloqueado pelo anti-robô (HTTP 403)" }], itens: [] } }) });
+  const c = criar({ resposta: () => ({ status: 200, corpo: { estados: [{ fonte: "#a", ok: false, erro: "bloqueado pelo anti-robô (HTTP 403)" }], itens: [] } }) });
   c.w.document.getElementById("cc-tendencias-monte").className = "";
   await dormir(900);
-  check("bloqueado e sem token → sugere o Apify", /token do Apify/.test(c.texto()) && /bloqueado pelo anti-robô/.test(c.texto()));
+  check("bloqueio sugere perfis sem exigir serviço pago", /indique perfis públicos/.test(c.texto()) && !/Apify/.test(c.texto()));
+  c.w.close();
 }
 
 console.log("\n🎙️ Achados de Filmes Narrados + Baixar HD e ir pro Upload");
@@ -326,7 +324,7 @@ console.log("\n🔁 Troca de modo durante uma busca e qualidade desconhecida");
   check("erro antigo não encerra nem exibe erro na busca nova", c.w.CineTendencias._interno.estado.carregando && !c.w.CineTendencias._interno.estado.erro);
   pendentes[1]({ status: 200, corpo: { itens: [], estados: [{ ok: false, erro: "falha temporária" }] } });
   await dormir(20);
-  check("falha temporária de fontes não é gravada no cache", !c.w.localStorage.getItem("cineclip.tendencias.narrados.resultado.v2"));
+  check("falha temporária de fontes não é gravada no cache", !c.w.localStorage.getItem("cineclip.tendencias.narrados.resultado.v3"));
   c.w.close();
 }
 

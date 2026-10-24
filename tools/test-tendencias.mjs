@@ -5,8 +5,11 @@
  *
  *   node tools/test-tendencias.mjs
  */
+import fs from "node:fs";
 import { analisarNarrado, buscarTendencias, candidatosDeTitulo, listaDe, pontuar, termosDeBusca } from "../server/tendencias.mjs";
 import handler from "../api/public/tendencias.js";
+import { extrairVideosPublicos } from "../server/tiktok-publico.mjs";
+import { handler as netlifyHandler } from "../netlify/functions/tendencias.mjs";
 
 let pass = 0, fail = 0;
 const falhas = [];
@@ -93,27 +96,7 @@ console.log("\n🩺 Motivo real da falha");
   check("bloqueio anti-robô (HTML do Cloudflare)", /bloqueado pelo anti-robô \(HTTP 403\)/.test(await via(async () => new Response("<html>Just a moment...</html>", { status: 403 }))));
   check("resposta que não é JSON", /resposta inesperada \(HTTP 502\)/.test(await via(async () => new Response("Bad gateway", { status: 502 }))));
   check("falha de rede mostra a causa (ex.: DNS)", /rede: ENOTFOUND/.test(await via(async () => { const e = new TypeError("fetch failed"); e.cause = { code: "ENOTFOUND" }; throw e; })));
-  check("manda User-Agent de browser e Referer", await (async () => { let h; await buscarTendencias({ tags: "filmes" }, { fetchFn: async (u, o) => { h = o.headers; return new Response(JSON.stringify({ code: 0, data: { videos: [] } })); }, agora: AGORA, pausa: 0 }); return /Chrome/.test(h["User-Agent"]) && /tikwm/.test(h.Referer); })());
-}
-
-console.log("\n🧰 Apify (quando o tikwm bloqueia)");
-{
-  const chamadas = [];
-  const itemApify = (id, o = {}) => ({ id, text: "Cena de \"Gladiador\" 🎬", createTime: h(5), playCount: 1_200_000, diggCount: 90_000, commentCount: 800, shareCount: 12_000, authorMeta: { name: "cortes" + id, nickName: "Cortes" }, videoMeta: { duration: 45, coverUrl: "https://x/c.jpg" }, ...o });
-  const fetchApify = async (url, opts) => {
-    chamadas.push({ url, opts });
-    return new Response(JSON.stringify([itemApify("11"), itemApify("12", { playCount: 5 }), { error: "x" }]), { status: 200 });
-  };
-  const r = await buscarTendencias({ tags: "filmes,cenasdefilme", perfis: "conta1", apifyToken: "apify_api_x", minViews: 1000 }, { fetchFn: fetchApify, agora: AGORA, pausa: 0 });
-  check("faz UMA execução para tudo e não toca no tikwm", chamadas.length === 1 && /api\.apify\.com\/v2\/acts\/clockworks~tiktok-scraper\/run-sync-get-dataset-items\?token=apify_api_x/.test(chamadas[0].url), chamadas.map((c) => c.url).join(" "));
-  const entrada = JSON.parse(chamadas[0].opts.body);
-  check("manda hashtags e perfis, sem baixar vídeos", JSON.stringify(entrada.hashtags) === JSON.stringify(["filmes", "cenasdefilme"]) && JSON.stringify(entrada.profiles) === JSON.stringify(["conta1"]) && entrada.shouldDownloadVideos === false);
-  check("converte para o mesmo formato (link, views, capa, nome provável)", r.itens.length === 1 && r.itens[0].url === "https://www.tiktok.com/@cortes11/video/11" && r.itens[0].views === 1_200_000 && r.itens[0].capa === "https://x/c.jpg" && r.itens[0].candidatos.some((c) => c.titulo === "Gladiador"), JSON.stringify(r.itens[0]));
-  check("estado mostra o Apify como fonte", r.estados.length === 1 && r.estados[0].fonte === "Apify" && r.estados[0].ok);
-  const erro = async (status, corpo = "{}") => (await buscarTendencias({ tags: "filmes", apifyToken: "t" }, { fetchFn: async () => new Response(corpo, { status }), agora: AGORA, pausa: 0 })).estados[0].erro;
-  check("401 → token recusado", /token do Apify recusado/.test(await erro(401)));
-  check("402 → sem crédito", /sem crédito/.test(await erro(402)));
-  check("outro erro mostra o HTTP e a mensagem", /HTTP 500: boom/.test(await erro(500, JSON.stringify({ error: { message: "boom" } }))));
+  check("manda User-Agent de browser e Referer", await (async () => { let h; await buscarTendencias({ tags: "filmes" }, { fetchFn: async (u, o) => { if (String(u).includes("tikwm.com")) h = o.headers; return new Response(JSON.stringify({ code: 0, data: { videos: [] } })); }, agora: AGORA, pausa: 0 }); return /Chrome/.test(h["User-Agent"]) && /tikwm/.test(h.Referer); })());
 }
 
 console.log("\n🌐 Endpoint");
@@ -123,10 +106,10 @@ console.log("\n🌐 Endpoint");
   const pedir = async (req) => { const r = resp(); await handler({ method: "GET", headers: { host: "cine-flowx.vercel.app" }, ...req }, r, { fetchFn: fetchFalso, pausa: 0, semCache: true }); return r; };
   let r = await pedir({ url: "/api/public/tendencias?tags=filmes&min=1000&dias=60" });
   check("200 com itens", r.statusCode === 200 && JSON.parse(r.body).itens.length >= 0 && JSON.parse(r.body).estados.length === 1, r.body);
-  let tokenVisto = "";
-  const rr = resp();
-  await handler({ method: "GET", url: "/api/public/tendencias?tags=filmes", headers: { host: "cine-flowx.vercel.app", "x-apify-token": "apify_api_zzz" } }, rr, { fetchFn: async (u) => { tokenVisto = String(u); return new Response("[]", { status: 200 }); }, pausa: 0, semCache: true });
-  check("o token do Apify vai por cabeçalho (não por URL do site) e chega ao Apify", /api\.apify\.com/.test(tokenVisto) && /apify_api_zzz/.test(tokenVisto));
+  const nr = await netlifyHandler({ httpMethod: "GET", headers: { Host: "exemplo.netlify.app" }, queryStringParameters: { tags: "filmes", min: "0", dias: "90" } }, null, { fetchFn: fetchFalso, pausa: 0, semCache: true });
+  check("Netlify devolve JSON de tendências sem token", nr.statusCode === 200 && JSON.parse(nr.body).estados.length === 1);
+  const opts = await netlifyHandler({ httpMethod: "OPTIONS", headers: { host: "exemplo.netlify.app", origin: "https://exemplo.netlify.app" } });
+  check("preflight permite GET na mesma origem", opts.statusCode === 204 && opts.headers["Access-Control-Allow-Methods"] === "GET,OPTIONS");
   r = await pedir({ url: "/api/public/tendencias" });
   check("sem tags nem perfis → 400", r.statusCode === 400);
   r = await pedir({ method: "POST", url: "/api/public/tendencias?tags=a1" });
@@ -244,6 +227,38 @@ console.log("\n🎙️ Falsos positivos de narração");
   check("perfil explícito também respeita o filtro Só narrados", r.itens.length === 0);
   const semFiltro = await buscarTendencias({ modo: "narrados", perfis: "canalcenas", minViews: 0, apenasNarrados: false }, { fetchFn, agora: AGORA, pausa: 0 });
   check("desmarcar Só narrados permite revisar vídeos sem sinais", semFiltro.itens.length === 1);
+}
+
+console.log("\n🌍 Dados públicos sem token");
+{
+  const id = String((BigInt(h(5)) << 32n) + 123n);
+  const perfil = { userInfo: { uniqueId: "canalrecap", nickname: "Cinema", signature: "Resumos de filmes" }, videoList: [{ id, desc: "Filme: Gladiador #recap", playCount: 100000, width: 576, height: 1024, coverUrl: "https://example.test/capa.jpg", authorUniqueId: "canalrecap" }] };
+  const html = '<script type="application/json" id="__FRONTITY_CONNECT_STATE__">' + JSON.stringify({ source: { data: { "/embed/@canalrecap": perfil } } }) + '</script>';
+  const extraidos = extrairVideosPublicos(html);
+  check("perfil incorporado fornece vídeos reais e autor", extraidos.length === 1 && extraidos[0].author.unique_id === "canalrecap");
+  check("métricas ausentes e duração não são inventadas", extraidos[0].duration === null && extraidos[0].digg_count === null);
+  check("data sem createTime é estimada do identificador", extraidos[0]._dataEstimada && extraidos[0].create_time === h(5));
+  check("vídeo 576x1024 não ganha selo HD", !extraidos[0]._temHd);
+  check("perfil privado não é extraído", extrairVideosPublicos(html.replace('"signature":', '"privateAccount":true,"signature":')).length === 0);
+  check("scripts arbitrários e JSON inválido são ignorados", extrairVideosPublicos('<script>throw new Error("não executar")</script><script id="SIGI_STATE">{</script>').length === 0);
+  const urls = [];
+  const fetchFn = async (url) => {
+    urls.push(String(url));
+    if (String(url).includes("/embed/@")) return new Response(html);
+    if (String(url).includes("tikwm.com")) return new Response("<html>Cloudflare captcha</html>", { status: 403 });
+    return new Response('<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__">{"__DEFAULT_SCOPE__":{}}</script>');
+  };
+  const r = await buscarTendencias({ modo: "narrados", perfis: "canalrecap", minViews: 1000 }, { fetchFn, agora: AGORA, pausa: 0 });
+  check("perfil funciona diretamente sem Apify nem TikWM", r.itens.length === 1 && urls.length === 1 && r.itens[0].provedor === "tiktok-publico");
+  check("duração desconhecida fica visível sem escapar do filtro de views", r.itens[0].duracao === null && r.itens[0].curtidas === null);
+  const semViews = await buscarTendencias({ perfis: "canalrecap", minViews: 200000 }, { fetchFn, agora: AGORA, pausa: 0 });
+  check("mínimo de views é respeitado nos dados públicos", semViews.itens.length === 0);
+  urls.length = 0;
+  const fallback = await buscarTendencias({ tags: "filmes,cinema", minViews: 0 }, { fetchFn, agora: AGORA, pausa: 0 });
+  check("bloqueio do TikWM tenta perfis públicos sugeridos", fallback.itens.length === 1 && fallback.estados.some(x => x.ok && x.fonte.includes("sugerido")));
+  check("403 não é repetido em todas as fontes", urls.filter(x => x.includes("tikwm.com")).length === 1);
+  check("nenhuma chamada usa Apify", urls.every(x => !x.includes("apify")));
+  check("rota Netlify precede o catch-all", fs.readFileSync(new URL("../_redirects", import.meta.url), "utf8").indexOf("/api/public/tendencias /.netlify/functions/tendencias 200") < fs.readFileSync(new URL("../_redirects", import.meta.url), "utf8").indexOf("/* /index.html"));
 }
 
 console.log("\n─────────────────────────────────────────────");

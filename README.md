@@ -119,6 +119,12 @@ Em qualquer cartão (ou selecionando vários cartões de uma vez):
 - **⬇️ Baixar HD e ir pro Upload** — descarrega o `.mp4` em **alta qualidade (1080p/HD sem marca d'água)** via `/api/public/importar?hd=1`, **salva o `.mp4` na pasta Downloads** do teu PC/celular (já com o nome do filme confirmado) **e abre automaticamente o 📦 Upload em massa** com o vídeo carregado na fila e a pista do filme preenchida. Se o master 1080p vier em H.265/HEVC num PC cujo navegador não abre imagem HEVC, o ficheiro 1080p continua salvo nos Downloads e o painel baixa automaticamente a versão H.264 compatível para o Upload em massa nunca travar.
 - **📥 Levar pro CineClip** / **☁️ Nuvem** / **💾 Só .mp4** — atalhos opcionais para enviar só o link, processar na nuvem ou apenas guardar o `.mp4` local.
 
+A busca de tendências não usa Apify nem exige token. Perfis são lidos a partir do JSON público de perfis incorporados do TikTok; hashtags e termos tentam o TikWM gratuito e as páginas públicas do TikTok. Se nenhuma fonte trouxer vídeos e nenhum perfil tiver sido escolhido, há uma tentativa com os perfis sugeridos `@teusflix` e `@cinemaemminutos3`. Eles são editáveis pelo campo Perfis (não são um catálogo global).
+
+Perfis incorporados trazem uma seleção de até dez vídeos recentes. Podem faltar duração, curtidas, comentários e compartilhamentos: não são inventados e a interface mostra dados indisponíveis. Quando não há data explícita, ela é estimada a partir do identificador do vídeo e sinalizada na interface. O filtro de duração só se aplica a valores conhecidos; views e idade continuam sendo filtrados. O TikTok pode restringir páginas públicas: isso aparece como erro por fonte, sem exigir assinatura de outro serviço.
+
+`/api/public/tendencias` também é roteado para `netlify/functions/tendencias.mjs` na Netlify. A importação de arquivos continua usando o endpoint da Vercel/local.
+
 Os dados vêm de `/api/public/tendencias` (`server/tendencias.mjs`) e os vídeos de `/api/public/importar` (`server/importar-video.mjs`), ativos na Vercel e também nos servidores locais (`npm run dev` e `npm run nuvem`).
 
 ### 🔗 Importar do TikTok ou do Kwai

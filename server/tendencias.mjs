@@ -1,9 +1,10 @@
+import { buscarTikTokPublico } from "./tiktok-publico.mjs";
+
 /**
  * Tendências e Achados de Filmes Narrados do TikTok para o painel «🔥 Tendências».
  *
- * O TikTok não tem API aberta de "em alta". Este módulo pede ao tikwm.com (o mesmo
- * serviço que o importar-video.mjs já usa como plano B) as buscas por hashtag, por
- * termos livres (ex.: "filme narrado", "resumo de filme") e os vídeos de perfis,
+ * Perfis usam os dados públicos de perfis incorporados do TikTok. Hashtags e
+ * termos livres tentam o TikWM gratuito e as páginas públicas do TikTok. O módulo
  * junta tudo, tira o que é velho/curto/pequeno, deteta sinais de narração (voz
  * original, marcadores de resumo/recap, duração de corte narrado) e ordena por «hype»:
  * visualizações POR HORA (com pouco peso para a idade) e engajamento.
@@ -15,7 +16,9 @@
 const TIKWM = "https://www.tikwm.com";
 const PAUSA_MS = 1150; // o tikwm grátis aceita ~1 pedido por segundo
 const MAX_FONTES = 10;
-const TIMEOUT_MS = 12_000;
+const TIMEOUT_MS = 6000;
+const ORCAMENTO_MS = 45_000;
+export const PERFIS_PUBLICOS_PADRAO = ["teusflix", "cinemaemminutos3"];
 
 export const TAGS_NARRADOS_PADRAO = [
   "filmesnarrados",
@@ -220,12 +223,12 @@ function normalizar(v, origem, agoraMs) {
   if (!id || !usuario) return null;
   const legenda = limpo(v.title || v.desc || "");
   const nomeAutor = limpo(autor.nickname || usuario);
-  const duracao = Number(v.duration) || 0;
+  const duracao = v._publico && v.duration == null ? null : Number(v.duration) || 0;
   const music = v.music_info || v.music || {};
   const infoNarrado = analisarNarrado({
     legenda,
     autor: usuario,
-    nomeAutor,
+    nomeAutor: nomeAutor + " " + (autor.signature || ""),
     musicaTitulo: limpo(music.title || ""),
     musicaOriginal: Boolean(music.original),
     duracao,
@@ -243,11 +246,13 @@ function normalizar(v, origem, agoraMs) {
     capa: limpo(v.origin_cover || v.cover || ""),
     duracao,
     views: Number(v.play_count ?? v.playCount) || 0,
-    curtidas: Number(v.digg_count ?? v.diggCount) || 0,
-    comentarios: Number(v.comment_count ?? v.commentCount) || 0,
-    compartilhamentos: Number(v.share_count ?? v.shareCount) || 0,
+    curtidas: v._publico && v.digg_count == null ? null : Number(v.digg_count ?? v.diggCount) || 0,
+    comentarios: v._publico && v.comment_count == null ? null : Number(v.comment_count ?? v.commentCount) || 0,
+    compartilhamentos: v._publico && v.share_count == null ? null : Number(v.share_count ?? v.shareCount) || 0,
     criadoEm: Number(v.create_time ?? v.createTime) || 0,
     origem,
+    provedor: v._publico ? "tiktok-publico" : "tikwm",
+    dataEstimada: !!v._dataEstimada,
     temHd,
     tamanhoBytes: tamanhoHd || tamanhoPadrao || 0,
     narrado: infoNarrado.narrado,
@@ -270,13 +275,13 @@ function motivoDaFalha(e) {
   return "rede: " + String((causa || (e && e.message) || "falhou")).slice(0, 80);
 }
 
-async function pedirJson(url, fetchFn) {
+async function pedirJson(url, fetchFn, prazo) {
   let ultimo = "sem resposta";
   for (let tentativa = 0; tentativa < 2; tentativa++) {
     try {
       const r = await fetchFn(url, {
         headers: { "User-Agent": UA, Accept: "application/json, text/plain, */*", Referer: TIKWM + "/", "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8" },
-        signal: AbortSignal.timeout(TIMEOUT_MS),
+        signal: AbortSignal.timeout(Math.max(1, Math.min(TIMEOUT_MS, prazo - Date.now()))),
       });
       const texto = await r.text();
       let j = null;
@@ -291,92 +296,21 @@ async function pedirJson(url, fetchFn) {
     } catch (e) {
       ultimo = motivoDaFalha(e);
     }
+    if (Date.now() + PAUSA_MS + 400 >= prazo) break;
     await esperar(PAUSA_MS + 400);
   }
   throw new Error(ultimo);
 }
 
 
-/* ------------------------------------------------------------------ Apify */
-
-const APIFY_ATOR = "clockworks~tiktok-scraper";
-const APIFY_TIMEOUT_MS = 110_000;
-
-/** Um item do clockworks/tiktok-scraper → o mesmo formato do tikwm (para o resto não mudar). */
-function deApify(v) {
-  const meta = v.authorMeta || {};
-  const video = v.videoMeta || {};
-  const music = v.musicMeta || {};
-  const criado = Number(v.createTime) || Math.floor(Date.parse(v.createTimeISO || "") / 1000) || 0;
-  const maiorLado = Math.max(Number(video.height) || 0, Number(video.width) || 0);
-  return {
-    video_id: v.id,
-    title: v.text || "",
-    origin_cover: video.coverUrl || video.originalCoverUrl || "",
-    duration: Number(video.duration) || 0,
-    play_count: v.playCount,
-    digg_count: v.diggCount,
-    comment_count: v.commentCount,
-    share_count: v.shareCount,
-    create_time: criado,
-    author: { unique_id: meta.name || meta.uniqueId || "", nickname: meta.nickName || meta.name || "" },
-    music_info: {
-      title: music.musicName || "",
-      author: music.musicAuthor || "",
-      original: Boolean(music.musicOriginal),
-    },
-    _temHd: maiorLado >= 1080,
-  };
-}
-
-async function buscarNoApify(token, tags, perfis, termos, fetchFn) {
-  const url = `https://api.apify.com/v2/acts/${APIFY_ATOR}/run-sync-get-dataset-items?token=${encodeURIComponent(token)}`;
-  const corpo = {
-    hashtags: tags,
-    profiles: perfis,
-    ...(termos && termos.length ? { searchQueries: termos } : {}),
-    resultsPerPage: 25,
-    shouldDownloadVideos: false,
-    shouldDownloadCovers: false,
-    shouldDownloadSubtitles: false,
-    shouldDownloadSlideshowImages: false,
-  };
-  let r;
-  try {
-    r = await fetchFn(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify(corpo),
-      signal: AbortSignal.timeout(APIFY_TIMEOUT_MS),
-    });
-  } catch (e) {
-    throw new Error(motivoDaFalha(e));
-  }
-  if (r.status === 401 || r.status === 403) throw new Error("token do Apify recusado — confere se colaste o token certo");
-  if (r.status === 402) throw new Error("o Apify ficou sem crédito este mês");
-  if (r.status === 404) throw new Error("o Apify não encontrou o robô do TikTok");
-  const texto = await r.text();
-  let lista = null;
-  try {
-    lista = JSON.parse(texto);
-  } catch {}
-  if (!r.ok || !Array.isArray(lista)) {
-    let detalhe = "";
-    try {
-      detalhe = (JSON.parse(texto).error || {}).message || "";
-    } catch {}
-    throw new Error(`o Apify respondeu HTTP ${r.status}${detalhe ? ": " + String(detalhe).slice(0, 100) : ""}`);
-  }
-  return lista.filter((v) => v && v.id && !v.error);
-}
-
 /**
- * @param {{modo?:"cortes"|"narrados", tags?:string[]|string, termos?:string[]|string, perfis?:string[]|string, dias?:number, minViews?:number, minDuracao?:number, maxDuracao?:number, apenasNarrados?:boolean, max?:number, apifyToken?:string}} p
+ * @param {{modo?:"cortes"|"narrados", tags?:string[]|string, termos?:string[]|string, perfis?:string[]|string, dias?:number, minViews?:number, minDuracao?:number, maxDuracao?:number, apenasNarrados?:boolean, max?:number}} p
  * @param {{fetchFn?:Function, agora?:number, pausa?:number}} deps
  */
 export async function buscarTendencias(p = {}, deps = {}) {
   const fetchFn = deps.fetchFn || fetch;
   const agora = deps.agora || Date.now();
+  const prazo = Date.now() + (deps.orcamentoMs ?? ORCAMENTO_MS);
   const pausa = deps.pausa ?? PAUSA_MS;
   const modo = p.modo === "narrados" ? "narrados" : "cortes";
   const tags = listaDe(p.tags, 5);
@@ -393,83 +327,107 @@ export async function buscarTendencias(p = {}, deps = {}) {
       : Boolean(p.apenasNarrados && String(p.apenasNarrados) !== "0" && String(p.apenasNarrados) !== "false");
   const max = Math.max(5, Math.min(100, Number(p.max) || 40));
 
+  const limite = agora - dias * 86_400_000;
+  const passaFiltros = (v) => v.criadoEm * 1000 >= limite && v.views >= minViews
+    && (v.duracao == null || (v.duracao >= minDuracao && v.duracao <= maxDuracao))
+    && (!apenasNarrados || v.narrado);
+
   const fontes = [
     ...tags.map((t) => ({
       tipo: "hashtag",
+      valor: t,
       rotulo: `#${t}`,
       url: `${TIKWM}/api/feed/search?keywords=${encodeURIComponent("#" + t)}&count=30&cursor=0&hd=1`,
     })),
     ...termos.map((q) => ({
       tipo: "termo",
+      valor: q,
       rotulo: `🔎 ${q}`,
       url: `${TIKWM}/api/feed/search?keywords=${encodeURIComponent(q)}&count=30&cursor=0&hd=1`,
     })),
     ...perfis.map((u) => ({
       tipo: "perfil",
+      valor: u,
       rotulo: `@${u}`,
       url: `${TIKWM}/api/user/posts?unique_id=${encodeURIComponent(u)}&count=30&cursor=0&hd=1`,
     })),
-  ].slice(0, MAX_FONTES);
+  ];
+  fontes.sort((a, b) => Number(b.tipo === "perfil") - Number(a.tipo === "perfil"));
+  fontes.splice(MAX_FONTES);
 
   const estados = [];
   const todos = new Map();
-  const token = String(p.apifyToken || "").trim();
-  if (token) {
-    // Com token do Apify usa só ele (uma execução para todas as hashtags, termos e perfis): é a via estável.
-    try {
-      const lista = await buscarNoApify(token, tags, perfis, termos, fetchFn);
-      let aceites = 0;
-      for (const v of lista) {
-        const item = normalizar(deApify(v), "apify", agora);
-        if (item && !todos.has(item.id)) {
-          todos.set(item.id, item);
-          aceites++;
-        }
+  let tikwmBloqueado = false;
+  function juntar(videos, origem) {
+    let novos = 0;
+    for (const v of videos) {
+      const item = normalizar(v, origem, agora);
+      if (!item) continue;
+      if (!todos.has(item.id)) { todos.set(item.id, item); novos++; }
+      else {
+        const anterior = todos.get(item.id);
+        if (item.temHd) anterior.temHd = true;
+        if (item.tamanhoBytes > anterior.tamanhoBytes) anterior.tamanhoBytes = item.tamanhoBytes;
       }
-      estados.push({ fonte: "Apify", ok: true, videos: lista.length, novos: aceites });
-    } catch (e) {
-      estados.push({ fonte: "Apify", ok: false, erro: e.message });
     }
-    fontes.length = 0;
+    return novos;
   }
-  for (let i = 0; i < fontes.length; i++) {
-    const f = fontes[i];
-    if (i > 0 && pausa) await esperar(pausa);
-    try {
-      const dados = await pedirJson(f.url, fetchFn);
-      const videos = Array.isArray(dados.videos) ? dados.videos : [];
-      let aceites = 0;
-      for (const v of videos) {
-        const item = normalizar(v, f.rotulo, agora);
-        if (!item) continue;
-        if (!todos.has(item.id)) {
-          todos.set(item.id, item);
-          aceites++;
-        } else {
-          // Se o mesmo vídeo apareceu também numa busca narrada/perfil, preserva o melhor sinal de HD
-          const anterior = todos.get(item.id);
-          if (item.temHd && !anterior.temHd) anterior.temHd = true;
-          if (item.tamanhoBytes > anterior.tamanhoBytes) anterior.tamanhoBytes = item.tamanhoBytes;
-        }
-      }
-      estados.push({ fonte: f.rotulo, ok: true, videos: videos.length, novos: aceites });
-    } catch (e) {
-      estados.push({ fonte: f.rotulo, ok: false, erro: e.message });
+  async function consultar(f) {
+    const erros = [];
+    // Perfis: dados públicos primeiro, sem provedor intermediário.
+    if (f.tipo === "perfil") {
+      try {
+        const videos = await buscarTikTokPublico(f, fetchFn, Math.min(8000, prazo - Date.now()));
+        estados.push({ fonte: f.rotulo, ok: true, provedor: "tiktok-publico", videos: videos.length, novos: juntar(videos, f.rotulo) });
+        return;
+      } catch (e) { erros.push(e.message); }
     }
+    if (!tikwmBloqueado && Date.now() < prazo) {
+      try {
+        const dados = await pedirJson(f.url, fetchFn, prazo);
+        const videos = Array.isArray(dados.videos) ? dados.videos : [];
+        if (videos.length) {
+          estados.push({ fonte: f.rotulo, ok: true, provedor: "tikwm", videos: videos.length, novos: juntar(videos, f.rotulo) });
+          return;
+        }
+        erros.push("TikWM devolveu uma lista vazia");
+      } catch (e) {
+        erros.push(e.message);
+        if (/403|429|anti-rob[oô]|Free Api Limit/i.test(e.message)) tikwmBloqueado = true;
+      }
+    }
+    if (f.tipo !== "perfil" && Date.now() < prazo) {
+      try {
+        const videos = await buscarTikTokPublico(f, fetchFn, Math.min(8000, prazo - Date.now()));
+        estados.push({ fonte: f.rotulo, ok: true, provedor: "tiktok-publico", videos: videos.length, novos: juntar(videos, f.rotulo) });
+        return;
+      } catch (e) { erros.push(e.message); }
+    }
+    estados.push({ fonte: f.rotulo, ok: false, erro: erros.join(" · ") || "Tempo limite da busca atingido" });
+  }
+  // Reserva tempo para os perfis sugeridos se as buscas genéricas falharem.
+  const prazoFontes = perfis.length ? prazo : prazo - Math.min(16000, (deps.orcamentoMs ?? ORCAMENTO_MS) / 2);
+  for (let i = 0; i < fontes.length; i++) {
+    if (Date.now() >= prazoFontes) { estados.push({ fonte: fontes[i].rotulo, ok: false, erro: "Tempo limite da busca atingido" }); continue; }
+    if (i > 0 && pausa && !tikwmBloqueado) await esperar(Math.min(pausa, Math.max(0, prazo - Date.now())));
+    await consultar(fontes[i]);
+  }
+  // Sem perfis escolhidos e sem nenhum vídeo: tenta os canais sugeridos, indicados na interface.
+  if (![...todos.values()].some(passaFiltros) && !perfis.length && Date.now() < prazo) {
+    await Promise.all(PERFIS_PUBLICOS_PADRAO.map(async (u) => {
+      const f = { tipo: "perfil", valor: u, rotulo: "@" + u + " (sugerido)" };
+      try {
+        const videos = await buscarTikTokPublico(f, fetchFn, Math.min(8000, prazo - Date.now()));
+        estados.push({ fonte: f.rotulo, ok: true, provedor: "tiktok-publico", videos: videos.length, novos: juntar(videos, f.rotulo) });
+      } catch (e) { estados.push({ fonte: f.rotulo, ok: false, erro: e.message }); }
+    }));
   }
 
-  const limite = agora - dias * 86_400_000;
   const pontuacaoOrdenacao = (v) =>
     modo === "narrados" ? Math.round(v.hype * (1 + (v.notaNarrado || 0) / 100)) : v.hype;
 
   const itens = [...todos.values()]
-    .filter((v) => {
-      if (v.criadoEm * 1000 < limite) return false;
-      if (v.views < minViews) return false;
-      if (v.duracao < minDuracao || v.duracao > maxDuracao) return false;
-      if (apenasNarrados && !v.narrado) return false;
-      return true;
-    })
+    .filter(passaFiltros)
     .sort((a, b) => pontuacaoOrdenacao(b) - pontuacaoOrdenacao(a) || b.hype - a.hype)
     .slice(0, max);
 

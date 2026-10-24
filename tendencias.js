@@ -35,8 +35,8 @@
   var CHAVE_USADOS = "cineclip.tendencias.usados";
   var CHAVE_BAIXADOS = "cineclip.tendencias.baixados";
   var CHAVE_FILMES = "cineclip.tendencias.filmes";
-  var CHAVE_RESULTADO = "cineclip.tendencias.resultado.v2";
-  var CHAVE_RESULTADO_NARRADOS = "cineclip.tendencias.narrados.resultado.v2";
+  var CHAVE_RESULTADO = "cineclip.tendencias.resultado.v3";
+  var CHAVE_RESULTADO_NARRADOS = "cineclip.tendencias.narrados.resultado.v3";
   var VALIDADE_RESULTADO_MS = 10 * 60 * 1000;
 
   var SUGESTOES_CORTES = ["cenasdefilme", "filmes", "movieclips", "cortesdefilmes", "melhorescenas", "seriesetv"];
@@ -66,7 +66,6 @@
     esconderUsados: true,
     salvarNoDispositivo: true,
     iniciarAutomatico: false,
-    apifyKey: "",
   };
 
   var OPCOES_NARRADOS_OMISSAO = {
@@ -110,6 +109,10 @@
     jaBuscou: false,
     jaBuscouPorModo: { cortes: false, narrados: false },
   };
+  if ("apifyKey" in estado.opcoes) {
+    delete estado.opcoes.apifyKey;
+    gravarJson(CHAVE_OPCOES, estado.opcoes);
+  }
   var raiz = null;
 
   /* -------------------------------------------------- ambiente substituível */
@@ -146,6 +149,7 @@
     return norm(s).replace(/ /g, "");
   }
   function numeroCurto(n) {
+    if (n == null) return "—";
     n = Number(n) || 0;
     if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1).replace(/\.0$/, "").replace(".", ",") + " mi";
     if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e4 ? 0 : 1).replace(/\.0$/, "").replace(".", ",") + " mil";
@@ -158,6 +162,7 @@
     return (b / (1024 * 1024)).toFixed(1).replace(/\.0$/, "").replace(".", ",") + " MB";
   }
   function duracaoCurta(seg) {
+    if (seg == null) return "duração não informada";
     var s = Math.max(0, Math.round(Number(seg) || 0));
     if (s < 60) return s + " s";
     var m = Math.floor(s / 60);
@@ -217,7 +222,6 @@
     var o = opcoesAtuais();
     var q = new URLSearchParams();
     if (ehNarrados) q.set("modo", "narrados");
-    if (String(estado.opcoes.apifyKey || "").trim()) q.set("via", "apify");
     if (String(o.tags || "").trim()) q.set("tags", o.tags);
     if (ehNarrados && String(o.termos || "").trim()) q.set("termos", o.termos);
     if (String(o.perfis || "").trim()) q.set("perfis", o.perfis);
@@ -267,10 +271,9 @@
     estado.aviso = "";
     desenhar();
     try {
-      var token = String(estado.opcoes.apifyKey || "").trim();
       var r = await fetch(
         "/api/public/tendencias?" + q + (forcar ? "&fresco=1" : ""),
-        { signal: controle.signal, ...(token ? { headers: { "X-Apify-Token": token } } : {}) }
+        { signal: controle.signal }
       );
       if (!r.ok) {
         var msg = "";
@@ -307,14 +310,13 @@
     estado.selecionados = {};
     var falhas = estado.estados.filter(function (e) { return !e.ok; });
     if (!estado.itens.length) {
-      var semToken = !String(estado.opcoes.apifyKey || "").trim();
       estado.aviso = falhas.length === estado.estados.length && falhas.length
-        ? "Nenhuma fonte respondeu (" + falhas[0].erro + ")." + (semToken ? " O serviço grátis bloqueia servidores com frequência: cola abaixo um token do Apify (tem crédito grátis todo mês) para buscar de forma estável." : "")
+        ? "Nenhuma fonte respondeu (" + falhas[0].erro + ")." + " Tente novamente ou indique perfis públicos de filmes. Nenhum token é necessário."
         : estado.modo === "narrados"
         ? "Nenhum corte narrado passou nos filtros. Experimenta baixar o mínimo de views, aumentar os dias ou desmarcar «Só com sinais de narração»."
         : "Nada passou nos filtros. Baixa o mínimo de visualizações ou aumenta os dias.";
     } else if (falhas.length) {
-      estado.aviso = "Algumas fontes falharam: " + falhas.map(function (f) { return f.fonte + " (" + f.erro + ")"; }).join(", ") + ".";
+      estado.aviso = "Mostrando vídeos das fontes disponíveis. " + falhas.length + " fonte(s) não respondeu(ram); veja os detalhes em Fontes da busca.";
     }
     desenhar();
     resolverFilmes();
@@ -895,14 +897,6 @@
     });
     return el("label", { className: "ct-campo" }, [el("span", { text: rotulo }), inp]);
   }
-  function campoSenha(rotulo, chave, ph) {
-    var inp = el("input", { type: "password", value: estado.opcoes[chave] || "", placeholder: ph || "", autocomplete: "off" });
-    inp.addEventListener("input", function () {
-      estado.opcoes[chave] = inp.value;
-      gravarOpcoes();
-    });
-    return el("label", { className: "ct-campo" }, [el("span", { text: rotulo }), inp]);
-  }
   function campoListaDe(alvo, rotulo, chave, opcoes) {
     var sel = el("select", {}, opcoes.map(function (o) {
       var opt = el("option", { value: String(o[0]), text: o[1] });
@@ -978,7 +972,7 @@
           blocoFilme,
           blocoSinais,
           el("div", { className: "ct-meta", text: "👁 " + numeroCurto(it.views) + " · ❤ " + numeroCurto(it.curtidas) + " · ↗ " + numeroCurto(it.compartilhamentos) }),
-          el("div", { className: "ct-meta", text: "@" + it.autor + " · " + haQuanto(it.criadoEm) + " · " + duracaoCurta(it.duracao) }),
+          el("div", { className: "ct-meta", text: "@" + it.autor + " · " + haQuanto(it.criadoEm) + (it.dataEstimada ? " (data estimada)" : "") + " · " + duracaoCurta(it.duracao) }),
           el("div", { className: "ct-leg", text: it.legenda || "(sem legenda)" }),
         ]),
       ]),
@@ -1178,7 +1172,7 @@
       opcoesChecks.push(
         el("label", { className: "ct-opcao" }, [
           chkNarrados,
-          el("span", { text: "🎙️ Só com sinais de narração / voz original" }),
+          el("span", { text: "🎙️ Só com sinais de narração / resumo" }),
         ])
       );
     }
@@ -1241,7 +1235,7 @@
         disabled: estado.carregando ? true : null,
         onClick: function () { buscar(true); },
         text: estado.carregando
-          ? "A buscar… (pode levar uns 10 s)"
+          ? "A buscar… (até 45 s)"
           : ehNarrados
           ? "🎙️ Buscar cortes narrados"
           : "🔥 Buscar tendências",
@@ -1254,18 +1248,22 @@
         chipsTags,
         chipsTermos,
         el("div", { className: "ct-linha" }, linhaSelects),
-        campoSenha("Token do Apify (opcional, mais estável)", "apifyKey", "apify_api_..."),
-        el("p", { className: "ct-meta", style: "margin:0" }, [
-          "O serviço grátis do TikTok costuma bloquear servidores. O ",
-          el("a", { href: "https://console.apify.com/account/integrations", target: "_blank", rel: "noreferrer", text: "Apify", style: "color:inherit;text-decoration:underline" }),
-          " resolve isso: conta grátis com crédito mensal (confere o preço atual lá). O token fica só neste aparelho.",
-        ]),
+        el("p", { className: "ct-meta", text: "Busca gratuita, sem token. Se hashtags e termos não responderem e nenhum perfil for indicado, tentamos @teusflix e @cinemaemminutos3. Perfis incorporados mostram até 10 vídeos recentes; não são um ranking global do TikTok. Duração e engajamento podem não ser informados: aparecem como —. O filtro de duração se aplica somente quando ela é conhecida." }),
         el("div", { className: "ct-opcoes-grade" }, opcoesChecks),
       ])
     );
 
     if (estado.erro) raiz.appendChild(el("div", { className: "ct-aviso erro", text: estado.erro }));
     else if (estado.aviso) raiz.appendChild(el("div", { className: "ct-aviso", text: estado.aviso }));
+
+    if (estado.estados.length) {
+      raiz.appendChild(el("details", { className: "ct-fontes" }, [
+        el("summary", { text: "Fontes da busca" }),
+        el("ul", {}, estado.estados.map(function (f) {
+          return el("li", { text: (f.ok ? "✓ " : "⚠ ") + f.fonte + (f.ok ? " · " + (f.provedor === "tiktok-publico" ? "TikTok público" : "TikWM") + " · " + (f.videos || 0) + " vídeo(s)" : " · " + f.erro) });
+        })),
+      ]));
+    }
 
     var itensVisiveis = estado.itens.filter(function (it) {
       return !(o.esconderUsados && estado.usados[it.id]);
