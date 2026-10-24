@@ -1,0 +1,1 @@
+onClick:()=>{if(m.id==="auto"){lt("auto");return}V(prev=>{if(m.id==="sem_gancho")
