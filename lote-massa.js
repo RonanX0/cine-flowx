@@ -686,7 +686,7 @@
     var s = app.settings || {};
     // Chaves de Groq/OpenRouter/Serper e exemplos de ganchos: o motor lê-as daqui (no servidor não há localStorage do app).
     try { if (window.CineClipMotor && window.CineClipMotor.configurar) window.CineClipMotor.configurar(s); } catch (e) {}
-    // 🚀 Modo direto: sem identificar o filme e sem IA — gancho e legenda das
+    // 🚀 Modo direto: sem identificar o filme — gancho da lista e legenda variada das
     // listas prontas e 1.º comentário fixo. Ignora os modos escolhidos no painel.
     var eDireto = (ctx && typeof ctx.modoDireto === "boolean")
       ? ctx.modoDireto
@@ -1022,13 +1022,18 @@
     if (!blob || !blob.size) throw erroComTipo("O FFmpeg não devolveu o vídeo processado.", "processamento");
 
     /* 5. Legenda ------------------------------------------------------------- */
-    definirPasso(item, eDireto ? "A escolher a legenda pronta…" : "A escrever a legenda…", 0.88);
+    definirPasso(item, eDireto ? "A variar a legenda com IA…" : "A escrever a legenda…", 0.88);
     var legenda = "";
     if (eDireto) {
-      // Sem IA: a legenda sai da lista pronta (Configurações → Lista de legendas),
+      // A IA varia a legenda; a lista pronta serve de reserva,
       // com o gancho sorteado no lugar de {gancho}. Não precisa do nome do filme.
       if (!window.CineClipMotor) throw new Error("A lista de legendas não carregou. Atualize a página.");
-      legenda = window.CineClipMotor.legendasDaLista({ gancho: gancho }).legenda;
+      var opLegenda = { gancho: gancho, evitar: (filaGanchos || []).map(function (r) { return r.caption || ""; }) };
+      var variacao = typeof core.gerarLegendaDireta === "function"
+        ? await core.gerarLegendaDireta(opLegenda)
+        : window.CineClipMotor.legendasDaLista(opLegenda);
+      legenda = variacao.legenda;
+      if (variacao.modo !== "ia") item.aviso = (item.aviso ? item.aviso + " " : "") + "Legenda da lista usada como reserva (IA indisponível ou sem chave).";
     }
     if (!legenda) try {
       legenda = await core.gerarLegenda(s.groqKey, filme, s.lang, {
@@ -2455,7 +2460,7 @@
         className: "cl-sub",
         text:
           (estado.opcoes.modoDireto
-            ? "🚀 Modo direto ligado: sem identificar o filme e sem IA — o gancho e a legenda saem das listas prontas, o 1.º comentário é «LINK DO FILME NA MINHA B10» e o Reel agenda no próximo horário livre"
+            ? "🚀 Modo direto ligado: sem identificar o filme — gancho da lista e legenda variada pela IA (lista como reserva), o 1.º comentário é «LINK DO FILME NA MINHA B10» e o Reel agenda no próximo horário livre"
             : "Para cada vídeo o app usa até 90 segundos, identifica o filme, escolhe o gancho da lista e cria a legenda e agenda o Reel no próximo horário livre") +
           (conta && conta.name ? " de " + conta.name : "") + ". Processa até " + (estado.opcoes.simultaneos || MAX_SIMULTANEOS) + " vídeos ao mesmo tempo. Podes fechar este painel e ver o Agendador enquanto isso.",
       }),
@@ -2581,7 +2586,7 @@
     });
     corpo.push(el("label", { className: "cl-opcao" }, [
       caixaDireto,
-      el("span", { text: "🚀 Modo direto (sem achar o nome do filme e sem IA): o gancho e a legenda saem das listas prontas das Configurações e o 1.º comentário é «LINK DO FILME NA MINHA B10». Ignora os dois modos acima." }),
+      el("span", { text: "🚀 Modo direto: gancho da lista e legenda variada pela IA; sem chave ou em caso de falha, usa a lista das Configurações e o 1.º comentário é «LINK DO FILME NA MINHA B10». Ignora os dois modos acima." }),
     ]));
 
     corpo.push(desenharSecaoCelular());

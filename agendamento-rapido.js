@@ -598,7 +598,11 @@
         // (Configurações). A legenda manual, se existir, continua a mandar.
         if (!window.CineClipMotor) throw new Error("A lista de legendas não carregou. Atualize a página.");
         var ganchoLeg = window.CineClipMotor.ganchosDaLista({}).ganchos[0];
-        legenda = window.CineClipMotor.legendasDaLista({ gancho: ganchoLeg }).legenda;
+        var variacao = typeof core.gerarLegendaDireta === "function"
+          ? await core.gerarLegendaDireta({ gancho: ganchoLeg })
+          : window.CineClipMotor.legendasDaLista({ gancho: ganchoLeg });
+        legenda = variacao.legenda;
+        if (variacao.modo !== "ia") item.aviso = (item.aviso ? item.aviso + " " : "") + "Legenda da lista usada como reserva (IA indisponível ou sem chave).";
       } else {
         legenda = aplicarModelo(estado.opcoes.modelo, {
           titulo: titulo,
@@ -1046,7 +1050,7 @@
     return el("div", { className: "cr-opcoes" }, [
       el("div", { className: "cr-opcoes-titulo", text: "Opções" }),
       opcaoSimples("identificar", "🔎 Identificar o filme com a IA — escreve a legenda e traz a capa (pôster) do TMDB"),
-      opcaoSimples("modoDireto", "🚀 Modo direto (sem achar o nome do filme e sem IA): legenda da lista pronta das Configurações + 1.º comentário «LINK DO FILME NA MINHA B10» (ignora o identificador)"),
+      opcaoSimples("modoDireto", "🚀 Modo direto: legenda variada pela IA, lista pronta como reserva + 1.º comentário «LINK DO FILME NA MINHA B10» (ignora o identificador)"),
       el("label", { className: "cr-opcao" }, [
         el("span", { text: "Modo do identificador: " }),
         selectIdent,

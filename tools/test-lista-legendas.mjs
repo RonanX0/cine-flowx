@@ -61,7 +61,27 @@ try {
   assert(html.includes('id:"legendasBoas"'), 'Configurações: Lista de legendas prontas');
   assert(html.includes('if(r&&r.firstComment)return'), 'publicador do app prefere o firstComment do Reel');
   assert(html.includes('if (item && item.firstComment) return'), 'Robô 24h prefere o firstComment do Reel');
-  assert(html.includes('CineClipMotor.legendasDaLista({gancho:ue'), 'Estúdio gera a legenda da lista no modo Lista');
+  assert(html.includes('CineClipMotor.legendaVariada({gancho:ue'), 'Estúdio gera a legenda da lista no modo Lista');
+
+  // Variação com IA simulada: sem analisar o filme, com histórico e reserva.
+  assert.equal((await motor.legendaVariada({ gancho: 'Gancho 👀' })).modo, 'lista', 'sem chave usa lista');
+  motor.configurar({ geminiKey: 'teste', legendasBoas: 'Modelo pronto #Cinema' });
+  let pedidos = [];
+  const h = { gemini: async (key, parts) => { pedidos.push(parts[0].text); return 'Pausa no feed: qual cena você indicaria hoje? 🍿 #Cinema'; } };
+  const primeira = await motor.legendaVariada({ gancho: 'Gancho pronto 👀' }, h);
+  assert.equal(primeira.modo, 'ia');
+  assert(pedidos[0].includes('Não identifique filmes') && pedidos[0].includes('Gancho pronto'), 'prompt sem identificação, baseado no gancho');
+  let nova = 0;
+  const segunda = await motor.legendaVariada({}, { gemini: async () => ++nova === 1 ? primeira.legenda : 'Qual cena ficou na sua memória esta semana? 🎬 #Filmes' });
+  assert.equal(nova, 2, 'repete pedido quando IA repete legenda');
+  assert.notEqual(primeira.legenda, segunda.legenda);
+  const falha = await motor.legendaVariada({}, { gemini: async () => { throw new Error('429'); } });
+  assert.equal(falha.modo, 'lista', 'cota ou falha usa reserva');
+  const repeticao = await motor.legendaVariada({}, h);
+  assert.equal(repeticao.modo, 'lista', 'duas repetições usam reserva');
+  const invalida = await motor.legendaVariada({}, { gemini: async () => 'x'.repeat(2201) });
+  assert.equal(invalida.modo, 'lista', 'saída longa demais usa reserva');
+  assert.equal(JSON.parse(app.window.localStorage.getItem('cineclip.legendas.ia')).length, 2, 'histórico de legendas IA persistido');
 
   assert.equal(chamadas, 0, 'nenhuma requisição de rede');
   console.log('OK: legendas prontas — rotação, {gancho}/{filme}/{ano}, blocos por ---, persistência, reserva síncrona, configuração e bundle; zero rede.');

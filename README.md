@@ -22,14 +22,14 @@ A identificação do filme é independente: para dispensá-la, selecione
 preparação de vídeo para IA; quadros ainda são usados para detectar duplicados.
 Identificações abaixo de 65% não ficam no cache nem são reutilizadas dele.
 
-## 🚀 Modo direto (sem achar o nome do filme, sem IA)
+## 🚀 Modo direto (sem achar o nome do filme)
 
 Para quem não precisa do nome do filme/série em lado nenhum, o **🚀 Modo direto**
 (atível no **Upload em massa** e na aba **⚡ Rápido**) agenda o Reel sem identificar
-nada e sem chamar IA — logo, sem erros de chave, cota ou rede:
+o filme. A IA varia a legenda usando uma chave Gemini, Groq ou OpenRouter das Configurações. Sem chave ou em caso de falha, usa uma legenda pronta:
 
 - **Gancho**: sai da *Lista de ganchos* (as 24 frases prontas ou a tua lista).
-- **Legenda**: sai da **Configurações → Lista de legendas prontas** — 12 legendas
+- **Legenda**: a IA reescreve a cada vídeo, variando abertura e convite para comentar, sem inventar detalhes do filme. A reserva sai de **Configurações → Lista de legendas prontas** — 12 legendas
   prontas com CTA e hashtags que rodam sem repetir (24 ganchos × 12 legendas).
   Para personalizar, escreve lá uma legenda por bloco, blocos separados por uma
   linha só com `---`; `{gancho}` vira o gancho sorteado e `{filme}`/`{ano}` só
@@ -40,7 +40,7 @@ nada e sem chamar IA — logo, sem erros de chave, cota ou rede:
   continua a ser o modelo (`🎬 {filme}` + LINK NA B10).
 
 No **Estúdio** (1 vídeo), o modo **📋 Lista de ganchos** faz o mesmo caminho:
-*Gerar legenda* sorteia da lista de legendas (sem precisar de identificar o filme)
+*Gerar legenda* varia o texto com IA e usa a lista como reserva (sem identificar o filme)
 e um Reel agendado sem filme identificado leva o mesmo 1.º comentário fixo.
 Quem já tem o Robô 24h colado no Apps Script deve gerar o roteiro outra vez para
 apanhar o `firstComment` do Reel.
