@@ -250,6 +250,38 @@ function apiProxyPlugin(): Plugin {
       return;
     }
 
+    if (req.url.startsWith("/api/public/tendencias")) {
+      const mod: any = await import(
+        new URL("./api/public/tendencias.js", import.meta.url).href
+      );
+      await mod.default(req, res);
+      return;
+    }
+
+    if (req.url.startsWith("/api/public/importar")) {
+      const mod: any = await import(
+        new URL("./api/public/importar.js", import.meta.url).href
+      );
+      await mod.default(req, res);
+      return;
+    }
+
+    if (req.url.startsWith("/api/public/ia")) {
+      const reqAny = req as any;
+      if (req.method === "POST" && reqAny.body === undefined) {
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) {
+          chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+        }
+        reqAny.body = Buffer.concat(chunks);
+      }
+      const mod: any = await import(
+        new URL("./api/public/ia.js", import.meta.url).href
+      );
+      await mod.default(reqAny, res);
+      return;
+    }
+
     if (!req.url.startsWith("/api/public/nvidia")) {
       return next();
     }

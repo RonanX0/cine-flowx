@@ -5,7 +5,7 @@
  *
  *   node tools/test-tendencias.mjs
  */
-import { buscarTendencias, candidatosDeTitulo, listaDe, pontuar } from "../server/tendencias.mjs";
+import { analisarNarrado, buscarTendencias, candidatosDeTitulo, listaDe, pontuar, termosDeBusca } from "../server/tendencias.mjs";
 import handler from "../api/public/tendencias.js";
 
 let pass = 0, fail = 0;
@@ -133,6 +133,105 @@ console.log("\n🌐 Endpoint");
   check("só aceita GET", r.statusCode === 405);
   r = await pedir({ url: "/api/public/tendencias?tags=a1", headers: { host: "cine-flowx.vercel.app", origin: "https://site-alheio.example" } });
   check("recusa outro site (CORS)", r.statusCode === 403);
+}
+
+console.log("\n🎙️ Achados de Cortes de Filmes Narrados");
+{
+  check(
+    "termosDeBusca preserva espaços nas frases e limpa repetidos/aspas",
+    JSON.stringify(termosDeBusca('"filme narrado", Resumo de Filme; filme narrado\ncortes de filmes narrados')) ===
+      JSON.stringify(["filme narrado", "Resumo de Filme", "cortes de filmes narrados"])
+  );
+  const cNarrado = candidatosDeTitulo("Nome do filme: O Preço do Amanhã - Parte 1 🎙️ #filmesnarrados #resumodefilmes #parte1").map((x) => x.titulo);
+  check("tira «Parte 1» do candidato e ignora #filmesnarrados/#resumodefilmes", cNarrado.includes("O Preço do Amanhã") && !cNarrado.some((t) => /filmes\s*narrados|parte/i.test(t)), JSON.stringify(cNarrado));
+  const cNarrado2 = candidatosDeTitulo("Filme narrado: Interestelar (2014) | Pt. 2").map((x) => x.titulo);
+  check("reconhece «Filme narrado:» e limpa «Pt. 2»", cNarrado2.includes("Interestelar"), JSON.stringify(cNarrado2));
+
+  const sigSim = analisarNarrado({
+    legenda: "Resumo completo do filme 😱 Parte 1 #filmesnarrados",
+    autor: "cinenarrado",
+    musicaTitulo: "som original - Cine Narrado",
+    musicaOriginal: true,
+    duracao: 95,
+  });
+  check("deteta corte narrado com voz original e corte longo", sigSim.narrado === true && sigSim.somOriginal === true && sigSim.notaNarrado >= 70 && sigSim.sinaisNarrado.some((s) => /Narrado/.test(s)) && sigSim.sinaisNarrado.some((s) => /Voz original/.test(s)), JSON.stringify(sigSim));
+
+  const sigNao = analisarNarrado({
+    legenda: "edit brabo 🔥 #fyp #edit",
+    autor: "editsx",
+    musicaTitulo: "MONTAGEM PR FUNK",
+    musicaOriginal: false,
+    duracao: 14,
+  });
+  check("edit curto com música comercial não passa como narrado", sigNao.narrado === false && sigNao.notaNarrado === 0);
+
+  const buscas = [];
+  const fetchNarrados = async (url) => {
+    buscas.push(String(url));
+    const u = new URL(url);
+    const kw = u.searchParams.get("keywords") || "";
+    if (kw === "#filmesnarrados") {
+      return new Response(JSON.stringify({
+        code: 0,
+        data: {
+          videos: [
+            video("n1", {
+              title: 'Filme narrado: "Gladiador" - Parte 1 #filmesnarrados',
+              duration: 185,
+              play_count: 600_000,
+              create_time: h(8),
+              hdplay: "https://v16.tiktokcdn.com/hd_n1.mp4",
+              hd_size: 18_500_000,
+              music_info: { title: "som original", original: true },
+            }),
+            video("edit1", {
+              title: "olha esse edit #fyp",
+              duration: 30,
+              play_count: 900_000,
+              create_time: h(6),
+              music_info: { title: "After Dark", original: false },
+            }),
+          ],
+        },
+      }));
+    }
+    if (kw === "resumo de filme") {
+      return new Response(JSON.stringify({
+        code: 0,
+        data: {
+          videos: [
+            video("n2", {
+              title: "Resumo de filme: O Poço (2019) completo",
+              duration: 420,
+              play_count: 500_000,
+              create_time: h(5),
+              hd_size: 32_000_000,
+              music_info: { title: "som original - Resumos", original: true },
+            }),
+          ],
+        },
+      }));
+    }
+    return new Response(JSON.stringify({ code: 0, data: { videos: [] } }));
+  };
+
+  const rn = await buscarTendencias(
+    { modo: "narrados", tags: "filmesnarrados", termos: "resumo de filme", minViews: 10_000, dias: 14 },
+    { fetchFn: fetchNarrados, agora: AGORA, pausa: 0 }
+  );
+  check("busca hashtags (#) e frases livres com hd=1", buscas.some((u) => /keywords=%23filmesnarrados/.test(u) && /hd=1/.test(u)) && buscas.some((u) => /keywords=resumo\+de\+filme|keywords=resumo%20de%20filme/.test(u)));
+  check("aceita cortes narrados longos (>5 min, até 10 min) e filtra edits sem narração", rn.itens.map((x) => x.id).includes("n1") && rn.itens.map((x) => x.id).includes("n2") && !rn.itens.map((x) => x.id).includes("edit1"), JSON.stringify(rn.itens.map((x) => x.id)));
+  check("traz metadados de HD e sinais de narração em cada achado", rn.itens[0].temHd === true && rn.itens[0].tamanhoBytes > 0 && rn.itens[0].narrado === true);
+
+  const resp = () => ({ headers: {}, setHeader(n, v) { this.headers[n.toLowerCase()] = v; }, end(b) { this.body = b; } });
+  const rEnd = resp();
+  await handler(
+    { method: "GET", url: "/api/public/tendencias?modo=narrados&termos=resumo+de+filme&min=1000", headers: { host: "cine-flowx.vercel.app" } },
+    rEnd,
+    { fetchFn: fetchNarrados, pausa: 0, semCache: true }
+  );
+  const corpoEnd = JSON.parse(rEnd.body);
+  check("endpoint aceita modo=narrados só com termos livres", rEnd.statusCode === 200 && corpoEnd.modo === "narrados" && corpoEnd.itens.length === 1 && corpoEnd.itens[0].id === "n2");
 }
 
 console.log("\n─────────────────────────────────────────────");

@@ -336,7 +336,7 @@
   async function baixarLinkDoServidor(link, aoProgresso) {
     var r;
     try {
-      r = await fetch("/api/public/importar?url=" + encodeURIComponent(link));
+      r = await fetch("/api/public/importar?url=" + encodeURIComponent(link) + "&hd=1&codec=h264");
     } catch (e) {
       throw new Error("Sem ligação ao servidor do CineClip.");
     }
@@ -560,6 +560,7 @@
         bytes: bytesF,
         origem: origF || undefined,
         caixaId: caixaF || undefined,
+        dica: f.pistaLink ? String(f.pistaLink) : undefined,
         estado: "pendente",
         passo: "",
         progresso: 0,
@@ -2465,6 +2466,17 @@
             importarLinks();
           },
         }, [estado.links.aImportar ? "A importar…" : "Importar links"]),
+        window.CineTendencias && typeof window.CineTendencias.abrirModo === "function"
+          ? el("button", {
+              type: "button",
+              className: "cl-btn cl-sec",
+              title: "Descobrir cortes de filmes narrados no TikTok e baixar em alta qualidade",
+              onClick: function () {
+                fechar();
+                window.CineTendencias.abrirModo("narrados");
+              },
+            }, ["🎙️ Achados narrados (HD)"])
+          : null,
         el("span", { className: "cl-peso cl-links-estado", role: "status", text: estado.links.estado }),
       ]),
     ]));
@@ -2642,9 +2654,18 @@
     return e.returnValue;
   });
 
+  function receberVideos(ficheiros, opcoes) {
+    abrir(ficheiros);
+    if (opcoes && opcoes.iniciar && !estado.aCorrer && pendentes().length && !faltaConfigurar()) {
+      iniciar();
+    }
+  }
+
   window.CineLote = {
     abrir: abrir,
     fechar: fechar,
+    /** Recebe ficheiros já baixados em alta qualidade (ex.: painel de Achados Narrados) e abre o Upload em massa. */
+    receberVideos: receberVideos,
     /** Chamado pela sincronização do app (patch 31-links-cofre). */
     mesclarLinks: mesclarLinks,
     /** Leva links para o fluxo normal: «aqui» (este aparelho) ou «nuvem» (o servidor trata). Usado pelo painel 🔥 Tendências. */

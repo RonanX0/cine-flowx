@@ -107,15 +107,19 @@ com `video_metadata`. O mesmo vídeo é reutilizado entre a identificação e o 
 upload). Se o upload falhar (CORS, rede, ficheiro gigante), o fluxo cai automaticamente para
 os frames + áudio como antes; os caminhos Groq/OpenRouter usam até 3 quadros + a transcrição do áudio (Whisper da Groq).
 
-### 🔥 Tendências (cortes em alta no TikTok)
+### 🔥 Tendências e 🎙️ Achados de Filmes Narrados (TikTok em HD + Upload direto)
 
-Aba **🔥 Tendências**: busca por hashtags e perfis de cortes (padrão: `#cenasdefilme`, `#filmes`,
-`#movieclips`), ordena os vídeos por **«hype»** (visualizações por hora + engajamento), mostra o
-**nome do filme** (tirado da legenda e confirmado no TMDB — o título tem de bater por inteiro) e
-tem **📥 Levar pro CineClip** (entra no Upload em massa) e **☁️ Nuvem** (o servidor processa e
-agenda). Os que já levaste ficam escondidos. Os dados vêm de `/api/public/tendencias`
-(`server/tendencias.mjs`), que usa o tikwm.com — um serviço **não oficial**: pode limitar
-(1 pedido/segundo) ou mudar, e o painel mostra qual fonte falhou. Só funciona no site publicado.
+Na aba **🔥 Tendências** tens dois sub-painéis:
+
+- **🔥 Cortes em alta** — busca por hashtags e perfis de cortes (padrão: `#cenasdefilme`, `#filmes`, `#movieclips`) e ordena por **«hype»** (visualizações por hora + engajamento).
+- **🎙️ Filmes Narrados (Achados)** — painel dedicado a **cortes e resumos de filmes narrados** no TikTok: combina hashtags narradas (`#filmesnarrados`, `#resumodefilmes`, `#filmenarrado`, `#cortesdefilmesnarrados`, `#explicandofilmes`), **frases livres de busca** (`"filme narrado"`, `"resumo de filme"`, `"cortes de filmes narrados"`), aceita vídeos longos até **10 minutos**, deteta sinais de locução (**🔊 Voz original**, **🎙️ Narrado**, **📖 Resumo**, **⏱️ 1min+**) e limpa marcadores como `Parte 1` / `Pt. 2` para confirmar o filme exato e o pôster no TMDB.
+
+Em qualquer cartão (ou selecionando vários cartões de uma vez):
+
+- **⬇️ Baixar HD e ir pro Upload** — descarrega o `.mp4` em **alta qualidade (1080p/HD sem marca d'água)** via `/api/public/importar?hd=1`, **salva o `.mp4` na pasta Downloads** do teu PC/celular (já com o nome do filme confirmado) **e abre automaticamente o 📦 Upload em massa** com o vídeo carregado na fila e a pista do filme preenchida. Se o master 1080p vier em H.265/HEVC num PC cujo navegador não abre imagem HEVC, o ficheiro 1080p continua salvo nos Downloads e o painel baixa automaticamente a versão H.264 compatível para o Upload em massa nunca travar.
+- **📥 Levar pro CineClip** / **☁️ Nuvem** / **💾 Só .mp4** — atalhos opcionais para enviar só o link, processar na nuvem ou apenas guardar o `.mp4` local.
+
+Os dados vêm de `/api/public/tendencias` (`server/tendencias.mjs`) e os vídeos de `/api/public/importar` (`server/importar-video.mjs`), ativos na Vercel e também nos servidores locais (`npm run dev` e `npm run nuvem`).
 
 ### 🔗 Importar do TikTok ou do Kwai
 

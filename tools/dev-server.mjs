@@ -21,6 +21,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { createMockCloud } from "./mock-r2-worker.mjs";
 import { createMockDrive } from "./mock-drive-backend.mjs";
+import tendenciasHandler from "../api/public/tendencias.js";
+import importarHandler from "../api/public/importar.js";
+import iaHandler from "../api/public/ia.js";
 
 const root = path.resolve(import.meta.dirname, "..");
 /* Raiz dos estáticos: o repositório, ou dist/ com DIST=1 para conferir o deploy real. */
@@ -88,6 +91,29 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify({ ok: false, error: err && err.message ? err.message : "Erro interno" }));
     }
     console.log(`📁 ${req.method} ${pathname}${url.search} → ${res.statusCode}`);
+    return;
+  }
+
+  if (pathname === "/api/public/tendencias") {
+    await tendenciasHandler(req, res);
+    console.log(`🔥 ${req.method} ${pathname}${url.search} → ${res.statusCode}`);
+    return;
+  }
+
+  if (pathname === "/api/public/importar") {
+    await importarHandler(req, res);
+    console.log(`⬇️  ${req.method} ${pathname}${url.search} → ${res.statusCode}`);
+    return;
+  }
+
+  if (pathname === "/api/public/ia") {
+    if (req.method === "POST" && req.body === undefined) {
+      const chunks = [];
+      for await (const c of req) chunks.push(typeof c === "string" ? Buffer.from(c) : c);
+      req.body = Buffer.concat(chunks);
+    }
+    await iaHandler(req, res);
+    console.log(`🔎 ${req.method} ${pathname} → ${res.statusCode}`);
     return;
   }
 

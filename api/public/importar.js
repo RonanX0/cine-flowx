@@ -3,15 +3,16 @@ import { iaCorsHeadersFor, iaForbiddenOrigin } from "../../server/ia-proxy.mjs";
 import { abrirVideo, ErroImportacao, LIMITE_BYTES, nomeDoFicheiro, resolverVideo } from "../../server/importar-video.mjs";
 
 /**
- * GET /api/public/importar?url=<link do TikTok ou do Kwai>
+ * GET /api/public/importar?url=<link do TikTok ou do Kwai>[&hd=1][&codec=h264][&download=1]
  * Responde com o .mp4 em streaming e os detalhes em cabeçalhos X-Cineclip-*.
- * O CORS segue a mesma regra do proxy da NVIDIA (o próprio site, localhost e
- * ALLOWED_ORIGINS).
+ * Com hd=1 prioriza o stream Full HD (1080p sem marca d'água).
+ * O CORS segue a mesma regra do proxy da IA (o próprio site, localhost e ALLOWED_ORIGINS).
  */
 export default async function handler(req, res, deps = {}) {
   const fetchFn = deps.fetchFn || fetch;
   const headers = req.headers || {};
-  const cors = iaCorsHeadersFor(headers.origin, headers.host || headers["x-forwarded-host"]);
+  const hostEfetivo = headers["x-forwarded-host"] || headers.host;
+  const cors = iaCorsHeadersFor(headers.origin, hostEfetivo);
 
   if (!cors) {
     Object.entries(iaForbiddenOrigin.headers).forEach(([n, v]) => res.setHeader(n, v));
@@ -20,7 +21,8 @@ export default async function handler(req, res, deps = {}) {
   }
   Object.entries({
     ...cors,
-    "Access-Control-Expose-Headers": "X-Cineclip-Nome, X-Cineclip-Plataforma, X-Cineclip-Autor, X-Cineclip-Titulo, X-Cineclip-Codec, X-Cineclip-Duracao, Content-Length",
+    "Access-Control-Expose-Headers":
+      "X-Cineclip-Nome, X-Cineclip-Plataforma, X-Cineclip-Autor, X-Cineclip-Titulo, X-Cineclip-Codec, X-Cineclip-Qualidade, X-Cineclip-Tamanho, X-Cineclip-Duracao, Content-Length, Content-Disposition",
   }).forEach(([n, v]) => res.setHeader(n, v));
 
   if (req.method === "OPTIONS") {
@@ -29,17 +31,27 @@ export default async function handler(req, res, deps = {}) {
   }
   if (req.method !== "GET") return erro(res, 405, "Usa GET com ?url=");
 
-  let link = "";
+  let params = new URLSearchParams();
   try {
-    link = new URL(req.url || "", "http://local").searchParams.get("url") || "";
+    params = new URL(req.url || "", "http://local").searchParams;
   } catch {}
+  let link = params.get("url") || "";
   if (!link && req.query && typeof req.query.url === "string") link = req.query.url;
   if (!link) return erro(res, 400, "Falta o parâmetro url.");
+
+  const hdParam = params.get("hd") || (req.query && req.query.hd) || "";
+  const qualParam = params.get("qualidade") || (req.query && req.query.qualidade) || "";
+  const codecParam = params.get("codec") || (req.query && req.query.codec) || "";
+  const downloadParam = params.get("download") || (req.query && req.query.download) || "";
+
+  const altaQualidade = hdParam === "1" || hdParam === "true" || qualParam === "alta" || qualParam === "hd";
+  const preferirCodec = String(codecParam || "").toLowerCase();
+  const comoAnexo = downloadParam === "1" || downloadParam === "true";
 
   let aberto;
   let info;
   try {
-    info = await resolverVideo(link, { fetchFn });
+    info = await resolverVideo(link, { fetchFn, altaQualidade, preferirCodec });
     aberto = await abrirVideo(info, { fetchFn });
   } catch (e) {
     const estado = e instanceof ErroImportacao ? e.estado : 500;
@@ -48,15 +60,24 @@ export default async function handler(req, res, deps = {}) {
 
   const { resposta, candidato, tamanho } = aberto;
   const cabecalho = (v) => encodeURIComponent(String(v || "").slice(0, 200));
+  const nome = nomeDoFicheiro(info);
+  const qualidade = candidato.qualidade || (candidato.altura ? `${candidato.altura}p` : "sd");
+  const tamanhoTotal = tamanho || Number(candidato.tamanho) || 0;
+
   res.statusCode = 200;
   res.setHeader("Content-Type", "video/mp4");
   res.setHeader("Cache-Control", "no-store");
-  res.setHeader("X-Cineclip-Nome", cabecalho(nomeDoFicheiro(info)));
+  res.setHeader("X-Cineclip-Nome", cabecalho(nome));
   res.setHeader("X-Cineclip-Plataforma", info.plataforma);
   res.setHeader("X-Cineclip-Autor", cabecalho(info.autor));
   res.setHeader("X-Cineclip-Titulo", cabecalho(info.titulo));
   res.setHeader("X-Cineclip-Codec", cabecalho(candidato.codec));
+  res.setHeader("X-Cineclip-Qualidade", cabecalho(qualidade));
+  res.setHeader("X-Cineclip-Tamanho", String(tamanhoTotal));
   res.setHeader("X-Cineclip-Duracao", String(info.duracao || 0));
+  if (comoAnexo) {
+    res.setHeader("Content-Disposition", `attachment; filename="${nome.replace(/[^a-zA-Z0-9._-]/g, "_")}"`);
+  }
   if (tamanho) res.setHeader("Content-Length", String(tamanho));
 
   let enviados = 0;

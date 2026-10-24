@@ -20,16 +20,39 @@ const ITENS = [
   { id: "3", url: "https://www.tiktok.com/@x/video/3", autor: "x", legenda: "#Zzzzz Nome Inventado", capa: "", duracao: 30, views: 300_000, curtidas: 1000, comentarios: 10, compartilhamentos: 10, criadoEm: agoraS - 10 * 3600, hype: 20000, candidatos: [{ titulo: "Zzzzz", origem: "hashtag" }] },
 ];
 
-function criar({ tmdbKey = "tmdb-k", resposta } = {}) {
+function criar({ tmdbKey = "tmdb-k", resposta, respostaImportar } = {}) {
   const dom = new JSDOM('<!doctype html><body><div id="cc-tendencias-monte"></div></body>', { url: "https://exemplo.test/", runScripts: "outside-only", pretendToBeVisual: true });
   const w = dom.window;
-  const chamadas = { api: [], tmdb: [], levar: [] };
+  const chamadas = { api: [], tmdb: [], levar: [], receberVideos: [], importar: [], salvosLocal: [] };
   w.fetch = async (url, init) => {
     const u = new URL(String(url), "https://exemplo.test");
     if (u.pathname === "/api/public/tendencias") {
       chamadas.api.push(u.search); chamadas.cabecalhos = init && init.headers;
-      const r = resposta ? resposta() : { status: 200, corpo: { geradoEm: Date.now(), estados: [{ fonte: "#cenasdefilme", ok: true }], itens: JSON.parse(JSON.stringify(ITENS)) } };
+      const r = resposta ? resposta(u) : { status: 200, corpo: { geradoEm: Date.now(), estados: [{ fonte: "#cenasdefilme", ok: true }], itens: JSON.parse(JSON.stringify(ITENS)) } };
       return { ok: r.status === 200, status: r.status, json: async () => r.corpo };
+    }
+    if (u.pathname === "/api/public/importar") {
+      chamadas.importar.push(u.search);
+      const padrao = {
+        status: 200,
+        bytes: new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112, 97, 118, 99, 49]),
+        cabecalhos: {
+          "content-length": "12",
+          "X-Cineclip-Nome": "tiktok_cortes_1.mp4",
+          "X-Cineclip-Codec": "h264",
+          "X-Cineclip-Qualidade": "1080p",
+          "X-Cineclip-Titulo": "Corte narrado",
+        },
+      };
+      const cfg = respostaImportar ? respostaImportar(u) : padrao;
+      const mapaCab = new Map(Object.entries(cfg.cabecalhos || padrao.cabecalhos).map(([k, v]) => [k.toLowerCase(), String(v)]));
+      return {
+        ok: cfg.status === 200,
+        status: cfg.status,
+        headers: { get: (n) => mapaCab.get(String(n).toLowerCase()) || null },
+        arrayBuffer: async () => (cfg.bytes || padrao.bytes).buffer,
+        json: async () => cfg.corpo || {},
+      };
     }
     if (u.hostname === "api.themoviedb.org") {
       const q = u.searchParams.get("query");
@@ -40,9 +63,13 @@ function criar({ tmdbKey = "tmdb-k", resposta } = {}) {
     return { ok: false, status: 404, json: async () => ({}) };
   };
   w.__CineClipApp = { settings: { tmdbKey } };
-  w.CineLote = { levarLinks: async (links, destino) => { chamadas.levar.push([links, destino]); } };
+  w.CineLote = {
+    levarLinks: async (links, destino) => { chamadas.levar.push([links, destino]); },
+    receberVideos: (ficheiros, opcoes) => { chamadas.receberVideos.push({ ficheiros, opcoes }); },
+  };
   w.navigator.clipboard = { writeText: async () => {} };
   w.eval(fs.readFileSync(new URL("../tendencias.js", import.meta.url), "utf8"));
+  w.CineTendencias._interno.ambiente.salvarLocal = (f) => { chamadas.salvosLocal.push(f); return true; };
   return { w, chamadas, texto: () => w.document.getElementById("cc-tendencias-monte").textContent, cartoes: () => [...w.document.querySelectorAll(".ct-card")] };
 }
 
@@ -130,6 +157,145 @@ console.log("\n🧰 Token do Apify");
   c.w.document.getElementById("cc-tendencias-monte").className = "";
   await dormir(900);
   check("bloqueado e sem token → sugere o Apify", /token do Apify/.test(c.texto()) && /bloqueado pelo anti-robô/.test(c.texto()));
+}
+
+console.log("\n🎙️ Achados de Filmes Narrados + Baixar HD e ir pro Upload");
+{
+  const itensNarrados = [
+    {
+      id: "n10",
+      url: "https://www.tiktok.com/@cinenarrado/video/10",
+      autor: "cinenarrado",
+      legenda: 'Filme narrado: "The Hangover" - Parte 1 #filmesnarrados',
+      capa: "https://x/10.jpg",
+      duracao: 125,
+      views: 1_500_000,
+      curtidas: 180_000,
+      comentarios: 950,
+      compartilhamentos: 14_000,
+      criadoEm: agoraS - 5 * 3600,
+      hype: 85000,
+      temHd: true,
+      tamanhoBytes: 16 * 1024 * 1024,
+      narrado: true,
+      sinaisNarrado: ["🎙️ Narrado", "🔊 Voz original", "⏱️ 1min+"],
+      candidatos: [{ titulo: "The Hangover", origem: "aspas" }],
+    },
+    {
+      id: "n11",
+      url: "https://www.tiktok.com/@resumoshd/video/11",
+      autor: "resumoshd",
+      legenda: "Resumo completo de filme #resumodefilmes",
+      capa: "https://x/11.jpg",
+      duracao: 92,
+      views: 800_000,
+      curtidas: 70_000,
+      comentarios: 300,
+      compartilhamentos: 4000,
+      criadoEm: agoraS - 8 * 3600,
+      hype: 55000,
+      temHd: true,
+      tamanhoBytes: 12 * 1024 * 1024,
+      narrado: true,
+      sinaisNarrado: ["📖 Resumo", "🔊 Voz original"],
+      candidatos: [],
+    },
+  ];
+
+  const c = criar({
+    resposta: (u) => ({
+      status: 200,
+      corpo: {
+        geradoEm: Date.now(),
+        modo: u.searchParams.get("modo") || "cortes",
+        estados: [{ fonte: "#filmesnarrados", ok: true }],
+        itens: u.searchParams.get("modo") === "narrados" ? JSON.parse(JSON.stringify(itensNarrados)) : JSON.parse(JSON.stringify(ITENS)),
+      },
+    }),
+  });
+  c.w.document.getElementById("cc-tendencias-monte").className = "";
+  await dormir(900);
+
+  const btnAbaNarrados = [...c.w.document.querySelectorAll(".ct-aba")].find((b) => /Filmes Narrados/.test(b.textContent));
+  check("mostra a aba «🎙️ Filmes Narrados (Achados)»", !!btnAbaNarrados);
+  btnAbaNarrados.click();
+  await dormir(250);
+
+  const ultimaQuery = c.chamadas.api[c.chamadas.api.length - 1] || "";
+  check("ao mudar para Filmes Narrados, busca modo=narrados com hashtags e frases narradas", /modo=narrados/.test(ultimaQuery) && /tags=filmesnarrados/.test(ultimaQuery) && /termos=filme\+narrado/.test(ultimaQuery) && /minDur=25/.test(ultimaQuery), ultimaQuery);
+  check("mostra os sinais de narração e o selo HD com tamanho", /🎙️ Narrado/.test(c.cartoes()[0].textContent) && /🔊 Voz original/.test(c.cartoes()[0].textContent) && /HD · 16 MB/.test(c.cartoes()[0].textContent), c.cartoes()[0].textContent);
+
+  // Clicar em «⬇️ Baixar HD e ir pro Upload» no 1.º cartão
+  const btnBaixarUpload = [...c.cartoes()[0].querySelectorAll("button")].find((b) => /Baixar HD e ir pro Upload/.test(b.textContent));
+  check("cartão tem o botão principal «⬇️ Baixar HD e ir pro Upload»", !!btnBaixarUpload);
+  btnBaixarUpload.click();
+  await dormir(150);
+
+  check("chama /api/public/importar com hd=1", c.chamadas.importar.length === 1 && /hd=1/.test(c.chamadas.importar[0]) && /cinenarrado/.test(decodeURIComponent(c.chamadas.importar[0])), JSON.stringify(c.chamadas.importar));
+  check("salva o arquivo .mp4 em HD nos Downloads com o nome do filme confirmado", c.chamadas.salvosLocal.length === 1 && /se_beber_nao_case_2009_cinenarrado_n10_hd\.mp4/.test(c.chamadas.salvosLocal[0].name), c.chamadas.salvosLocal[0] && c.chamadas.salvosLocal[0].name);
+  check("envia automaticamente o File para o 📦 Upload em massa com pista do filme e link de origem", c.chamadas.receberVideos.length === 1 && c.chamadas.receberVideos[0].ficheiros.length === 1 && c.chamadas.receberVideos[0].ficheiros[0].pistaLink === "Se Beber, Não Case! (2009)" && c.chamadas.receberVideos[0].ficheiros[0]._origemLink === "https://www.tiktok.com/@cinenarrado/video/10");
+  check("avisa que baixou em 1080P, salvou nos Downloads e carregou no Upload em massa", /1080P/.test(c.texto()) && /Downloads/.test(c.texto()) && /Upload em massa/.test(c.texto()), c.texto().slice(0, 350));
+
+  // Desmarcar esconder para selecionar os 2 e baixar em lote
+  const chkEsconder = c.w.document.querySelector(".ct-opcao input");
+  chkEsconder.checked = false;
+  chkEsconder.dispatchEvent(new c.w.Event("change"));
+  c.cartoes().forEach((card) => {
+    const sel = card.querySelector(".ct-sel input");
+    sel.checked = true;
+    sel.dispatchEvent(new c.w.Event("change"));
+  });
+  const btnLote = [...c.w.document.querySelectorAll(".ct-barra-lote button")].find((b) => /Baixar 2 em HD/.test(b.textContent));
+  check("selecionar múltiplos cartões abre barra para baixar todos em HD + Upload", !!btnLote);
+  btnLote.click();
+  await dormir(200);
+  check("baixa os 2 vídeos em HD e envia os 2 juntos para o Upload em massa", c.chamadas.receberVideos.length === 2 && c.chamadas.receberVideos[1].ficheiros.length === 2 && c.chamadas.salvosLocal.length === 3);
+}
+
+console.log("\n🛡️ Fallback automático HEVC → H.264 para o Upload em massa + Integração real com lote-massa.js");
+{
+  const dom = new JSDOM('<!doctype html><body><div id="cc-tendencias-monte"></div></body>', { url: "https://exemplo.test/", runScripts: "outside-only", pretendToBeVisual: true });
+  const w = dom.window;
+  const pedidosImp = [];
+  const salvos = [];
+  w.__CineClipApp = { settings: { groqKey: "g", tmdbKey: "t" }, account: { id: "acc1", name: "@cine" } };
+  w.CineClipCore = {};
+  w.navigator.clipboard = { writeText: async () => {} };
+  w.fetch = async (url) => {
+    const u = new URL(String(url), "https://exemplo.test");
+    if (u.pathname === "/api/public/tendencias") {
+      return { ok: true, status: 200, json: async () => ({ geradoEm: Date.now(), estados: [{ fonte: "#filmesnarrados", ok: true }], itens: [ITENS[0]] }) };
+    }
+    if (u.pathname === "/api/public/importar") {
+      pedidosImp.push(u.search);
+      const ehH264 = u.searchParams.get("codec") === "h264";
+      const cab = new Map([
+        ["content-length", ehH264 ? "16" : "24"],
+        ["x-cineclip-nome", "tiktok_cortes_1.mp4"],
+        ["x-cineclip-codec", ehH264 ? "h264" : "bytevc1"],
+        ["x-cineclip-qualidade", ehH264 ? "720p" : "1080p"],
+      ]);
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: (n) => cab.get(String(n).toLowerCase()) || null },
+        arrayBuffer: async () => new Uint8Array(ehH264 ? 16 : 24).buffer,
+      };
+    }
+    return { ok: true, status: 200, json: async () => ({ results: [] }) };
+  };
+  w.eval(fs.readFileSync(new URL("../lote-massa.js", import.meta.url), "utf8"));
+  w.eval(fs.readFileSync(new URL("../tendencias.js", import.meta.url), "utf8"));
+  w.CineTendencias._interno.ambiente.salvarLocal = (f) => { salvos.push(f); return true; };
+  // Simula um navegador de PC sem suporte a imagem HEVC
+  w.CineTendencias._interno.ambiente.podeDecodificar = async () => false;
+
+  await w.CineTendencias.baixarParaUpload([ITENS[0]]);
+  check("salva o master 1080p (24 bytes) nos Downloads do utilizador", salvos.length === 1 && salvos[0].size === 24);
+  check("busca automaticamente codec=h264 (16 bytes) para o Upload em massa não travar", pedidosImp.length === 2 && /codec=h264/.test(pedidosImp[1]));
+  const estadoLote = w.CineLote._interno.estado;
+  check("abre o modal real do 📦 Upload em massa já com o vídeo H.264 pendente e com a dica do filme", estadoLote.aberto === true && estadoLote.itens.length === 1 && estadoLote.itens[0].bytes === 16 && estadoLote.itens[0].dica === "The Hangover");
+  dom.window.close();
 }
 
 console.log("\n─────────────────────────────────────────────");

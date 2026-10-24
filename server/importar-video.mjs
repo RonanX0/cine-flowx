@@ -1,20 +1,25 @@
 /**
- * 🔗 IMPORTAR POR LINK — TikTok e Kwai
+ * 🔗 IMPORTAR POR LINK — TikTok e Kwai (com modo Alta Qualidade / HD)
  * ---------------------------------------------------------------------------
  * Recebe o link de um vídeo do TikTok ou do Kwai e devolve o .mp4 ao navegador
  * (em streaming, para não esbarrar no limite de 4,5 MB de resposta da Vercel).
  *
  * TikTok:
  *   1. lê a página do vídeo e o JSON __UNIVERSAL_DATA_FOR_REHYDRATION__;
- *      escolhe primeiro as versões H.264 (o H.265 não abre em muitos PCs);
- *   2. se a página vier sem dados (o TikTok desafia servidores), usa o tikwm.com.
+ *      lê resolução/bitrate reais (UrlKey, Width/Height, GearName, Bitrate);
+ *   2. no modo normal (ou ?codec=h264) escolhe primeiro as versões H.264 de maior
+ *      resolução (compatível com qualquer navegador e com o FFmpeg do lote);
+ *   3. no modo Alta Qualidade (?hd=1), se a página web vier limitada a 540p/720p,
+ *      consulta também o tikwm.com (?hd=1) para obter o stream master Full HD
+ *      (1080p sem marca d'água), mantendo todos os fallbacks seguros;
+ *   4. se a página vier sem dados (desafio anti-robô), usa o tikwm.com.
  * Kwai:
  *   procura o .mp4 na página (meta og:video, campos JSON conhecidos ou qualquer
  *   link .mp4 dos servidores do Kwai).
  *
  * Segurança: só aceita links do TikTok/Kwai e só descarrega de domínios conhecidos
  * dessas plataformas (sem isto a função seria um proxy aberto para qualquer site).
- * Os cookies que a página do TikTok devolve são reenviados só ao CDN do vídeo.
+ * Os cookies que a página do TikTok devolve são reenviados só ao CDN do TikTok.
  */
 
 export const LIMITE_BYTES = 300 * 1024 * 1024;
@@ -179,12 +184,48 @@ function codecDoUrlKey(urlKey) {
   return m ? { codec: m[1], altura: Number(m[2]), bitrate: Number(m[3]) } : null;
 }
 
+function alturaDoGear(gearName, qualityType) {
+  const m = /(?:^|[_-])(2160|1440|1080|720|540|480|360)p?(?:[_-]|$)/i.exec(String(gearName || ""));
+  if (m) return Number(m[1]);
+  const qt = Number(qualityType);
+  if (qt === 2 || qt === 10) return 1080;
+  if (qt === 14 || qt === 15) return 720;
+  if (qt === 20) return 540;
+  return 0;
+}
+
+function alturaDeDimensoes(w, h) {
+  const lw = Number(w) || 0;
+  const lh = Number(h) || 0;
+  return lw > 0 && lh > 0 ? Math.min(lw, lh) : 0;
+}
+
+function rotuloQualidade(altura, codec, marcaDeAgua) {
+  if (marcaDeAgua) return "wm";
+  if (altura >= 1080) return "1080p";
+  if (altura >= 720) return "720p";
+  if (altura > 0) return `${altura}p`;
+  if (codec === "hd") return "1080p";
+  return "sd";
+}
+
+function semDuplicadosPermitidos(lista) {
+  const vistos = new Set();
+  return lista.filter((c) => {
+    if (!c || !c.url || vistos.has(c.url) || !hostDeVideoPermitido(c.url) || hostDe(c.url) === "www.tiktok.com") return false;
+    vistos.add(c.url);
+    return true;
+  });
+}
+
 /**
  * Candidatos de download de um itemStruct do TikTok, do melhor para o pior:
- * H.264 do bitrateInfo (maior resolução primeiro), playAddr, depois H.265, e por
- * fim downloadAddr (tem a marca de água do TikTok).
+ *   • modo padrão / preferirCodec="h264": H.264 (maior resolução primeiro), playAddr,
+ *     depois H.265, e por fim downloadAddr (marca de água);
+ *   • modo altaQualidade (sem forçar H.264): 1080p+ H.264 primeiro, depois 1080p+ Full HD,
+ *     depois 720p H.264, restantes sem marca d'água, e marca d'água por último.
  */
-export function candidatosTikTok(item) {
+export function candidatosTikTok(item, { altaQualidade = false, preferirCodec = "" } = {}) {
   const video = (item && item.video) || {};
   const h264 = [];
   const outros = [];
@@ -195,28 +236,74 @@ export function candidatosTikTok(item) {
     const meta = codecDoUrlKey(play.UrlKey) || {};
     const codec = String(info.CodecType || meta.codec || "").toLowerCase();
     if (codec.includes("bytevc2")) continue; // H.266 da ByteDance: ninguém reproduz
-    const alvo = codec.includes("h264") ? h264 : outros;
-    alvo.push({ urls, codec: codec.includes("h264") ? "h264" : codec || "desconhecido", altura: meta.altura || 0, bitrate: meta.bitrate || 0, tamanho: Number(play.DataSize) || 0 });
+    const altura =
+      meta.altura ||
+      alturaDeDimensoes(play.Width, play.Height) ||
+      alturaDoGear(info.GearName, info.QualityType) ||
+      0;
+    const bitrate = meta.bitrate || Number(info.Bitrate) || 0;
+    const tamanho = Number(play.DataSize) || 0;
+    const ehH264 = codec.includes("h264") || codec.includes("avc");
+    const alvo = ehH264 ? h264 : outros;
+    alvo.push({
+      urls,
+      codec: ehH264 ? "h264" : codec || "desconhecido",
+      altura,
+      bitrate,
+      tamanho,
+    });
   }
-  const ordenar = (a, b) => b.altura - a.altura || b.bitrate - a.bitrate;
+  const ordenar = (a, b) => b.altura - a.altura || b.bitrate - a.bitrate || b.tamanho - a.tamanho;
   h264.sort(ordenar);
   outros.sort(ordenar);
-  const lista = [];
-  for (const c of h264) for (const url of c.urls) lista.push({ url, codec: "h264", tamanho: c.tamanho });
+
+  const expandir = (grupos) => {
+    const out = [];
+    for (const c of grupos) {
+      for (const url of c.urls) {
+        out.push({
+          url,
+          codec: c.codec,
+          tamanho: c.tamanho,
+          ...(c.altura ? { altura: c.altura } : {}),
+          qualidade: rotuloQualidade(c.altura, c.codec, false),
+        });
+      }
+    }
+    return out;
+  };
+
+  const playLista = [];
   const play = Array.isArray(video.playAddr) ? video.playAddr.map((p) => p && p.src) : [video.playAddr];
+  const alturaVideo = alturaDeDimensoes(video.width, video.height);
   for (const p of play) {
     const url = comoUrl(p);
-    if (url) lista.push({ url, codec: video.codecType || "?" });
+    if (url) {
+      playLista.push({
+        url,
+        codec: video.codecType || "?",
+        ...(alturaVideo ? { altura: alturaVideo } : {}),
+        qualidade: rotuloQualidade(alturaVideo, video.codecType || "?", false),
+      });
+    }
   }
-  for (const c of outros) for (const url of c.urls) lista.push({ url, codec: c.codec, tamanho: c.tamanho });
+
   const dl = comoUrl(video.downloadAddr);
-  if (dl) lista.push({ url: dl, codec: "h264", marcaDeAgua: true });
-  const vistos = new Set();
-  return lista.filter((c) => {
-    if (vistos.has(c.url) || !hostDeVideoPermitido(c.url) || hostDe(c.url) === "www.tiktok.com") return false;
-    vistos.add(c.url);
-    return true;
-  });
+  const wmLista = dl ? [{ url: dl, codec: "h264", marcaDeAgua: true, qualidade: "wm" }] : [];
+
+  let lista;
+  if (altaQualidade && preferirCodec !== "h264") {
+    const h264Full = expandir(h264.filter((c) => c.altura >= 1080));
+    const outrosFull = expandir(outros.filter((c) => c.altura >= 1080));
+    const h264Hd = expandir(h264.filter((c) => c.altura >= 720 && c.altura < 1080));
+    const h264Resto = expandir(h264.filter((c) => c.altura < 720));
+    const outrosResto = expandir(outros.filter((c) => c.altura < 1080));
+    lista = [...h264Full, ...outrosFull, ...h264Hd, ...h264Resto, ...playLista, ...outrosResto, ...wmLista];
+  } else {
+    lista = [...expandir(h264), ...playLista, ...expandir(outros), ...wmLista];
+  }
+
+  return semDuplicadosPermitidos(lista);
 }
 
 function idTikTok(url) {
@@ -224,7 +311,63 @@ function idTikTok(url) {
   return m ? m[1] : "";
 }
 
-async function resolverTikTok(fetchFn, link) {
+async function consultarTikwm(fetchFn, alvo, { preferirCodec = "", modoLegado = false } = {}) {
+  try {
+    const r = await fetchFn("https://www.tikwm.com/api/?hd=1&url=" + encodeURIComponent(alvo), {
+      headers: { "User-Agent": UA, Accept: "application/json" },
+      signal: AbortSignal.timeout(TEMPO_PAGINA_MS),
+    });
+    const j = await r.json();
+    const d = j && j.code === 0 && j.data;
+    if (!d) {
+      return { ok: false, erro: "tikwm: " + ((j && j.msg) || "sem vídeo na resposta") };
+    }
+    const abs = (u) => (typeof u === "string" && u.startsWith("/") ? "https://www.tikwm.com" + u : comoUrl(u));
+    const hdUrl = abs(d.hdplay);
+    const playUrl = abs(d.play);
+    const wmUrl = abs(d.wmplay);
+
+    let brutos;
+    if (modoLegado) {
+      brutos = [hdUrl, playUrl, wmUrl]
+        .filter(Boolean)
+        .map((url) => ({
+          url,
+          codec: "?",
+          qualidade: url === wmUrl ? "wm" : url === hdUrl ? "1080p" : "720p",
+          ...(url === hdUrl ? { altura: 1080, tamanho: Number(d.hd_size) || 0 } : {}),
+          ...(url === playUrl ? { altura: 720, tamanho: Number(d.size) || 0 } : {}),
+          marcaDeAgua: url === wmUrl,
+        }));
+    } else {
+      const cHd = hdUrl
+        ? { url: hdUrl, codec: "hd", qualidade: "1080p", altura: 1080, tamanho: Number(d.hd_size) || 0, marcaDeAgua: false }
+        : null;
+      const cPlay = playUrl
+        ? { url: playUrl, codec: "h264", qualidade: "720p", altura: 720, tamanho: Number(d.size) || 0, marcaDeAgua: false }
+        : null;
+      const cWm = wmUrl
+        ? { url: wmUrl, codec: "h264", qualidade: "wm", tamanho: Number(d.wm_size) || 0, marcaDeAgua: true }
+        : null;
+      brutos = (preferirCodec === "h264" ? [cPlay, cHd, cWm] : [cHd, cPlay, cWm]).filter(Boolean);
+    }
+
+    const candidatos = semDuplicadosPermitidos(brutos);
+    if (!candidatos.length) return { ok: false, erro: "tikwm: sem vídeo válido na resposta" };
+    return {
+      ok: true,
+      id: String(d.id || idTikTok(alvo) || ""),
+      autor: String((d.author && (d.author.unique_id || d.author.nickname)) || ""),
+      titulo: String(d.title || ""),
+      duracao: Number(d.duration) || 0,
+      candidatos,
+    };
+  } catch {
+    return { ok: false, erro: "tikwm indisponível" };
+  }
+}
+
+async function resolverTikTok(fetchFn, link, { altaQualidade = false, preferirCodec = "" } = {}) {
   const problemas = [];
   let pagina = null;
   try {
@@ -234,6 +377,7 @@ async function resolverTikTok(fetchFn, link) {
     problemas.push(e.message);
   }
 
+  let infoPagina = null;
   if (pagina) {
     if (/\/login(\?|$)/.test(new URL(pagina.url).pathname)) problemas.push("O TikTok pediu login para este vídeo.");
     const dados = jsonDoScript(pagina.html, "__UNIVERSAL_DATA_FOR_REHYDRATION__");
@@ -243,9 +387,9 @@ async function resolverTikTok(fetchFn, link) {
       problemas.push(`O TikTok devolveu o código ${detalhe.statusCode} (vídeo privado, apagado ou com restrição).`);
     }
     if (item && item.video) {
-      const candidatos = candidatosTikTok(item);
+      const candidatos = candidatosTikTok(item, { altaQualidade, preferirCodec });
       if (candidatos.length) {
-        return {
+        infoPagina = {
           plataforma: "tiktok",
           id: String(item.id || idTikTok(pagina.url) || ""),
           autor: String((item.author && (item.author.uniqueId || item.author.nickname)) || ""),
@@ -254,45 +398,65 @@ async function resolverTikTok(fetchFn, link) {
           candidatos,
           cabecalhos: { Referer: pagina.url, ...(pagina.cookies ? { Cookie: pagina.cookies } : {}) },
         };
+        // No modo normal (ou quando a página já trouxe H.264 Full HD 1080p), devolve já sem chamada extra.
+        const jaTemFullHdH264 = candidatos.some((c) => !c.marcaDeAgua && c.codec === "h264" && (c.altura || 0) >= 1080);
+        if (!altaQualidade || jaTemFullHdH264) return infoPagina;
+      } else {
+        problemas.push("A página do TikTok não trazia o link do vídeo.");
       }
-      problemas.push("A página do TikTok não trazia o link do vídeo.");
     } else if (!problemas.length) {
       problemas.push("A página do TikTok veio sem os dados do vídeo (desafio anti-robô).");
     }
   }
 
-  // Plano B: tikwm.com (serviço público que resolve links do TikTok).
-  try {
-    const alvo = pagina ? pagina.url : link;
-    const r = await fetchFn("https://www.tikwm.com/api/?hd=1&url=" + encodeURIComponent(alvo), {
-      headers: { "User-Agent": UA, Accept: "application/json" },
-      signal: AbortSignal.timeout(TEMPO_PAGINA_MS),
-    });
-    const j = await r.json();
-    const d = j && j.code === 0 && j.data;
-    if (d) {
-      const abs = (u) => (typeof u === "string" && u.startsWith("/") ? "https://www.tikwm.com" + u : comoUrl(u));
-      const candidatos = [abs(d.hdplay), abs(d.play), abs(d.wmplay)]
-        .filter(Boolean)
-        .filter((u, i, a) => a.indexOf(u) === i && hostDeVideoPermitido(u))
-        .map((url) => ({ url, codec: "?", marcaDeAgua: url === abs(d.wmplay) }));
-      if (candidatos.length) {
-        return {
-          plataforma: "tiktok",
-          id: String(d.id || idTikTok(alvo) || ""),
-          autor: String((d.author && (d.author.unique_id || d.author.nickname)) || ""),
-          titulo: String(d.title || ""),
-          duracao: Number(d.duration) || 0,
-          candidatos,
-          cabecalhos: {},
-          via: "tikwm",
-        };
+  // Plano B (ou upgrade para Full HD 1080p quando ?hd=1 e a página web limitou a resolução): tikwm.com
+  const alvo = pagina ? pagina.url : link;
+  const tw = await consultarTikwm(fetchFn, alvo, {
+    preferirCodec,
+    modoLegado: !altaQualidade && !preferirCodec,
+  });
+
+  if (infoPagina) {
+    if (tw.ok) {
+      const semMarcaPag = infoPagina.candidatos.filter((c) => !c.marcaDeAgua);
+      const semMarcaTw = tw.candidatos.filter((c) => !c.marcaDeAgua);
+      const comMarca = [
+        ...infoPagina.candidatos.filter((c) => c.marcaDeAgua),
+        ...tw.candidatos.filter((c) => c.marcaDeAgua),
+      ];
+      let combinados;
+      if (preferirCodec === "h264") {
+        const h264HdPag = semMarcaPag.filter((c) => c.codec === "h264" && (c.altura || 0) >= 720);
+        const h264Tw = semMarcaTw.filter((c) => c.codec === "h264");
+        const restoPag = semMarcaPag.filter((c) => !(c.codec === "h264" && (c.altura || 0) >= 720));
+        const restoTw = semMarcaTw.filter((c) => c.codec !== "h264");
+        combinados = [...h264HdPag, ...h264Tw, ...restoPag, ...restoTw, ...comMarca];
+      } else {
+        const fullHdPag = semMarcaPag.filter((c) => (c.altura || 0) >= 1080);
+        const fullHdTw = semMarcaTw.filter((c) => (c.altura || 0) >= 1080);
+        const restoPag = semMarcaPag.filter((c) => (c.altura || 0) < 1080);
+        const restoTw = semMarcaTw.filter((c) => (c.altura || 0) < 1080);
+        combinados = [...fullHdPag, ...fullHdTw, ...restoPag, ...restoTw, ...comMarca];
       }
+      infoPagina.candidatos = semDuplicadosPermitidos(combinados);
     }
-    problemas.push("tikwm: " + ((j && j.msg) || "sem vídeo na resposta"));
-  } catch (e) {
-    problemas.push("tikwm indisponível");
+    return infoPagina;
   }
+
+  if (tw.ok) {
+    return {
+      plataforma: "tiktok",
+      id: tw.id,
+      autor: tw.autor,
+      titulo: tw.titulo,
+      duracao: tw.duracao,
+      candidatos: tw.candidatos,
+      cabecalhos: {},
+      via: "tikwm",
+    };
+  }
+
+  problemas.push(tw.erro);
   throw new ErroImportacao("Não consegui obter este vídeo do TikTok. " + problemas.join(" · "), 502);
 }
 
@@ -326,7 +490,7 @@ export function candidatosKwai(html) {
   return lista
     .map(comoUrl)
     .filter((u) => u && hostDeVideoPermitido(u) && !vistos.has(u) && vistos.add(u))
-    .map((url) => ({ url, codec: "?" }));
+    .map((url) => ({ url, codec: "?", qualidade: "hd" }));
 }
 
 async function resolverKwai(fetchFn, link) {
@@ -352,13 +516,15 @@ async function resolverKwai(fetchFn, link) {
 /* ----------------------------------------------------------- público */
 
 /** Descobre de onde descarregar o vídeo (sem descarregar ainda). */
-export async function resolverVideo(entrada, { fetchFn = fetch } = {}) {
+export async function resolverVideo(entrada, { fetchFn = fetch, altaQualidade = false, preferirCodec = "" } = {}) {
   const link = normalizarLink(entrada);
   const plataforma = plataformaDe(link);
   if (!plataforma) {
     throw new ErroImportacao("Cola um link do TikTok ou do Kwai (ex.: https://www.tiktok.com/@perfil/video/123…).", 400);
   }
-  return plataforma === "tiktok" ? resolverTikTok(fetchFn, link) : resolverKwai(fetchFn, link);
+  return plataforma === "tiktok"
+    ? resolverTikTok(fetchFn, link, { altaQualidade, preferirCodec })
+    : resolverKwai(fetchFn, link);
 }
 
 /** Nome de ficheiro seguro: tiktok_perfil_123.mp4 */
