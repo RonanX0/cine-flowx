@@ -234,6 +234,18 @@ console.log("\n🎙️ Achados de Cortes de Filmes Narrados");
   check("endpoint aceita modo=narrados só com termos livres", rEnd.statusCode === 200 && corpoEnd.modo === "narrados" && corpoEnd.itens.length === 1 && corpoEnd.itens[0].id === "n2");
 }
 
+console.log("\n🎙️ Falsos positivos de narração");
+{
+  check("vídeo comum longo com áudio original não é narrado", !analisarNarrado({ legenda: "Meu passeio na praia", musicaOriginal: true, duracao: 90 }).narrado);
+  check("cena de filme com diálogo original não é narrada", !analisarNarrado({ legenda: "Cena de filme #cinema", musicaTitulo: "som original", duracao: 40 }).narrado);
+  check("canal de recaps continua sendo um sinal válido", analisarNarrado({ autor: "filmes.recaps", duracao: 90 }).narrado);
+  const fetchFn = async () => new Response(JSON.stringify({ code: 0, data: { videos: [video("sem-narracao", { title: "Uma cena", duration: 90, music_info: { original: true } })] } }));
+  const r = await buscarTendencias({ modo: "narrados", perfis: "canalcenas", minViews: 0 }, { fetchFn, agora: AGORA, pausa: 0 });
+  check("perfil explícito também respeita o filtro Só narrados", r.itens.length === 0);
+  const semFiltro = await buscarTendencias({ modo: "narrados", perfis: "canalcenas", minViews: 0, apenasNarrados: false }, { fetchFn, agora: AGORA, pausa: 0 });
+  check("desmarcar Só narrados permite revisar vídeos sem sinais", semFiltro.itens.length === 1);
+}
+
 console.log("\n─────────────────────────────────────────────");
 if (fail) { console.log(`❌ ${pass} passaram, ${fail} falharam:`); falhas.forEach((f) => console.log("   • " + f)); process.exit(1); }
 console.log(`✅ ${pass} passaram, 0 falharam`);

@@ -35,8 +35,8 @@
   var CHAVE_USADOS = "cineclip.tendencias.usados";
   var CHAVE_BAIXADOS = "cineclip.tendencias.baixados";
   var CHAVE_FILMES = "cineclip.tendencias.filmes";
-  var CHAVE_RESULTADO = "cineclip.tendencias.resultado";
-  var CHAVE_RESULTADO_NARRADOS = "cineclip.tendencias.narrados.resultado";
+  var CHAVE_RESULTADO = "cineclip.tendencias.resultado.v2";
+  var CHAVE_RESULTADO_NARRADOS = "cineclip.tendencias.narrados.resultado.v2";
   var VALIDADE_RESULTADO_MS = 10 * 60 * 1000;
 
   var SUGESTOES_CORTES = ["cenasdefilme", "filmes", "movieclips", "cortesdefilmes", "melhorescenas", "seriesetv"];
@@ -231,6 +231,9 @@
     return q.toString();
   }
 
+  var buscaAtual = 0;
+  var controleBusca = null;
+
   async function buscar(forcar) {
     if (estado.carregando) return;
     var ehNarrados = estado.modo === "narrados";
@@ -255,6 +258,10 @@
         return;
       }
     }
+    var numeroBusca = ++buscaAtual;
+    var modoBusca = estado.modo;
+    controleBusca = new AbortController();
+    var controle = controleBusca;
     estado.carregando = true;
     estado.erro = "";
     estado.aviso = "";
@@ -263,7 +270,7 @@
       var token = String(estado.opcoes.apifyKey || "").trim();
       var r = await fetch(
         "/api/public/tendencias?" + q + (forcar ? "&fresco=1" : ""),
-        token ? { headers: { "X-Apify-Token": token } } : undefined
+        { signal: controle.signal, ...(token ? { headers: { "X-Apify-Token": token } } : {}) }
       );
       if (!r.ok) {
         var msg = "";
@@ -274,13 +281,19 @@
         throw new Error(msg || "O servidor respondeu " + r.status + ".");
       }
       var dados = await r.json();
-      gravarJson(chaveCache, { q: q, t: Date.now(), dados: dados });
+      if (numeroBusca !== buscaAtual || modoBusca !== estado.modo) return;
+      // Falhas de fontes não devem bloquear novas tentativas por dez minutos.
+      if (dados.itens && dados.itens.length) gravarJson(chaveCache, { q: q, t: Date.now(), dados: dados });
       aplicar(dados);
     } catch (e) {
+      if (numeroBusca !== buscaAtual) return;
       estado.erro = e && e.message ? e.message : "Não consegui buscar os vídeos.";
     } finally {
-      estado.carregando = false;
-      desenhar();
+      if (numeroBusca === buscaAtual) {
+        controleBusca = null;
+        estado.carregando = false;
+        desenhar();
+      }
     }
     resolverFilmes();
   }
@@ -310,6 +323,11 @@
   function alternarModo(novoModo) {
     var m = novoModo === "narrados" ? "narrados" : "cortes";
     if (estado.modo === m && estado.montado) return;
+    // Invalida a resposta antiga mesmo quando o transporte ignora o cancelamento.
+    buscaAtual++;
+    if (controleBusca) controleBusca.abort();
+    controleBusca = null;
+    estado.carregando = false;
     estado.modo = m;
     try {
       localStorage.setItem(CHAVE_MODO, m);
@@ -402,7 +420,8 @@
     if (!chave || aResolver) return;
     aResolver = true;
     try {
-      var fila = estado.itens.slice();
+      var itensDaBusca = estado.itens;
+      var fila = itensDaBusca.slice();
       var paralelo = 3;
       var proximo = 0;
       await Promise.all(
@@ -418,6 +437,7 @@
       gravarJson(CHAVE_FILMES, estado.filmes);
     } finally {
       aResolver = false;
+      if (estado.itens !== itensDaBusca) resolverFilmes();
     }
   }
 
@@ -909,7 +929,7 @@
         filme.poster ? el("img", { src: filme.poster, alt: "" }) : null,
         el("div", {}, [
           el("div", { text: "🎬 " + filme.titulo }),
-          el("small", { text: (filme.tipo === "tv" ? "Série" : "Filme") + (filme.ano ? " · " + filme.ano : "") + " · confirmado no TMDB" }),
+          el("small", { text: (filme.tipo === "tv" ? "Série" : "Filme") + (filme.ano ? " · " + filme.ano : "") + " · título da legenda encontrado no TMDB" }),
         ]),
       ]);
     } else if (it.candidatos && it.candidatos.length && (filme === undefined && temChave)) {
@@ -917,7 +937,7 @@
     } else if (it.candidatos && it.candidatos.length) {
       blocoFilme = el("div", { className: "ct-prov", text: "Nome provável: " + it.candidatos[0].titulo + (temChave ? " (não confirmado)" : " — põe a chave TMDB para confirmar") });
     } else {
-      blocoFilme = el("div", { className: "ct-nada", text: "❔ O nome não aparece na legenda — o CineClip identifica pelo vídeo." });
+      blocoFilme = el("div", { className: "ct-nada", text: "❔ O nome não aparece na legenda. Importe o vídeo para tentar identificar o filme." });
     }
 
     var sinais = Array.isArray(it.sinaisNarrado) ? it.sinaisNarrado : [];
@@ -930,7 +950,7 @@
       ? "✓ " + String(jaBaixou.qualidade || "HD").toUpperCase()
       : it.temHd
       ? "HD" + (it.tamanhoBytes ? " · " + bytesLegiveis(it.tamanhoBytes) : "")
-      : "HD";
+      : "Qualidade a verificar";
 
     var chkSel = el("input", {
       type: "checkbox",

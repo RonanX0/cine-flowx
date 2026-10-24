@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Aba «🔥 Tendências» (tendencias.js) num DOM simulado: busca, nome do filme
- * confirmado no TMDB, esconder os já levados, «Levar pro CineClip», erros.
+ * título da legenda encontrado no TMDB, esconder os já levados, «Levar pro CineClip», erros.
  *
  *   node tools/test-tendencias-ui.mjs
  */
@@ -28,7 +28,7 @@ function criar({ tmdbKey = "tmdb-k", resposta, respostaImportar } = {}) {
     const u = new URL(String(url), "https://exemplo.test");
     if (u.pathname === "/api/public/tendencias") {
       chamadas.api.push(u.search); chamadas.cabecalhos = init && init.headers;
-      const r = resposta ? resposta(u) : { status: 200, corpo: { geradoEm: Date.now(), estados: [{ fonte: "#cenasdefilme", ok: true }], itens: JSON.parse(JSON.stringify(ITENS)) } };
+      const r = resposta ? await resposta(u) : { status: 200, corpo: { geradoEm: Date.now(), estados: [{ fonte: "#cenasdefilme", ok: true }], itens: JSON.parse(JSON.stringify(ITENS)) } };
       return { ok: r.status === 200, status: r.status, json: async () => r.corpo };
     }
     if (u.pathname === "/api/public/importar") {
@@ -85,9 +85,9 @@ console.log("\n🔥 Monta, busca e mostra");
   check("a busca leva hashtags, dias e mínimo de views", /tags=cenasdefilme/.test(c.chamadas.api[0]) && /dias=7/.test(c.chamadas.api[0]) && /min=20000/.test(c.chamadas.api[0]), c.chamadas.api[0]);
   check("mostra um cartão por corte", c.cartoes().length === 3);
   await dormir(200);
-  check("o filme é confirmado no TMDB (nome do TMDB, ano, tipo)", /Se Beber, Não Case!/.test(c.cartoes()[0].textContent) && /2009/.test(c.cartoes()[0].textContent) && /confirmado no TMDB/.test(c.cartoes()[0].textContent), c.cartoes()[0].textContent);
+  check("o título da legenda é encontrado no TMDB (nome, ano, tipo)", /Se Beber, Não Case!/.test(c.cartoes()[0].textContent) && /2009/.test(c.cartoes()[0].textContent) && /título da legenda encontrado no TMDB/.test(c.cartoes()[0].textContent), c.cartoes()[0].textContent);
   check("o título tem de bater por inteiro (The Hangover ≠ Part II)", !/Part II/.test(c.cartoes()[0].textContent));
-  check("sem nome na legenda, diz que o CineClip identifica pelo vídeo", /não aparece na legenda/.test(c.cartoes()[1].textContent));
+  check("sem nome na legenda, orienta importar para tentar identificar", /não aparece na legenda/.test(c.cartoes()[1].textContent) && /Importe o vídeo para tentar identificar/.test(c.cartoes()[1].textContent));
   check("candidato que o TMDB não conhece fica como «não confirmado»", /Nome provável: Zzzzz \(não confirmado\)/.test(c.cartoes()[2].textContent), c.cartoes()[2].textContent);
   check("mostra views e hype por hora", /2 mi/.test(c.cartoes()[0].textContent) && /🔥/.test(c.cartoes()[0].textContent));
 
@@ -143,7 +143,7 @@ console.log("\n🧰 Token do Apify");
   const c = criar();
   c.w.document.getElementById("cc-tendencias-monte").className = "";
   await dormir(900);
-  check("sem token não manda o cabeçalho", !c.chamadas.cabecalhos);
+  check("sem token não manda o cabeçalho", !c.chamadas.cabecalhos || !c.chamadas.cabecalhos["X-Apify-Token"]);
   const campo = [...c.w.document.querySelectorAll(".ct-campo input")].find((i) => i.type === "password");
   check("há um campo de senha para o token", !!campo);
   campo.value = "apify_api_abc"; campo.dispatchEvent(new c.w.Event("input"));
@@ -296,6 +296,38 @@ console.log("\n🛡️ Fallback automático HEVC → H.264 para o Upload em mass
   const estadoLote = w.CineLote._interno.estado;
   check("abre o modal real do 📦 Upload em massa já com o vídeo H.264 pendente e com a dica do filme", estadoLote.aberto === true && estadoLote.itens.length === 1 && estadoLote.itens[0].bytes === 16 && estadoLote.itens[0].dica === "The Hangover");
   dom.window.close();
+}
+
+console.log("\n🔁 Troca de modo durante uma busca e qualidade desconhecida");
+{
+  const pendentes = [];
+  const c = criar({ tmdbKey: "", resposta: (u) => new Promise((resolve) => pendentes.push({ modo: u.searchParams.get("modo") || "cortes", resolve })) });
+  c.w.CineTendencias.montar();
+  const primeira = c.w.CineTendencias.buscar(true);
+  c.w.CineTendencias._interno.alternarModo("narrados");
+  check("mudar de modo inicia a nova busca sem esperar a anterior", pendentes.length === 2 && pendentes[1].modo === "narrados");
+  pendentes[1].resolve({ status: 200, corpo: { itens: [{ ...ITENS[1], id: "narrado", legenda: "Filme narrado novo", temHd: false }], estados: [] } });
+  await dormir(20);
+  pendentes[0].resolve({ status: 200, corpo: { itens: ITENS, estados: [] } });
+  await primeira;
+  const estado = c.w.CineTendencias._interno.estado;
+  check("resposta atrasada não substitui os narrados nem marca Cortes como buscado", estado.itens.length === 1 && estado.itens[0].id === "narrado" && estado.jaBuscouPorModo.narrados && !estado.jaBuscouPorModo.cortes);
+  check("sem informação de HD, mostra qualidade a verificar", c.cartoes()[0].querySelector(".ct-selo-hd").textContent === "Qualidade a verificar");
+  c.w.close();
+}
+{
+  const pendentes = [];
+  const c = criar({ tmdbKey: "", resposta: () => new Promise((resolve) => pendentes.push(resolve)) });
+  c.w.CineTendencias.montar();
+  const primeira = c.w.CineTendencias.buscar(true);
+  c.w.CineTendencias._interno.alternarModo("narrados");
+  pendentes[0]({ status: 500, corpo: { error: "erro da aba anterior" } });
+  await primeira;
+  check("erro antigo não encerra nem exibe erro na busca nova", c.w.CineTendencias._interno.estado.carregando && !c.w.CineTendencias._interno.estado.erro);
+  pendentes[1]({ status: 200, corpo: { itens: [], estados: [{ ok: false, erro: "falha temporária" }] } });
+  await dormir(20);
+  check("falha temporária de fontes não é gravada no cache", !c.w.localStorage.getItem("cineclip.tendencias.narrados.resultado.v2"));
+  c.w.close();
 }
 
 console.log("\n─────────────────────────────────────────────");
