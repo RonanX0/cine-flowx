@@ -194,7 +194,9 @@ export function analisarNarrado({ legenda = "", autor = "", nomeAutor = "", musi
     nota += 8;
   }
 
-  const narrado = Boolean(temNarrado || temResumo || temCanal || (somOriginal && duracao >= 35));
+  // Áudio original e duração também aparecem em cenas sem locução e vídeos comuns.
+  // Só marcadores de narração/resumo ou um canal especializado habilitam o filtro.
+  const narrado = Boolean(temNarrado || temResumo || temCanal);
   return {
     narrado,
     notaNarrado: Math.min(100, nota),
@@ -465,7 +467,7 @@ export async function buscarTendencias(p = {}, deps = {}) {
       if (v.criadoEm * 1000 < limite) return false;
       if (v.views < minViews) return false;
       if (v.duracao < minDuracao || v.duracao > maxDuracao) return false;
-      if (apenasNarrados && !v.narrado && !String(v.origem || "").startsWith("@")) return false;
+      if (apenasNarrados && !v.narrado) return false;
       return true;
     })
     .sort((a, b) => pontuacaoOrdenacao(b) - pontuacaoOrdenacao(a) || b.hype - a.hype)
