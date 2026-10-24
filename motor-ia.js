@@ -853,6 +853,73 @@
     return { cena: "", ganchos: pool.slice(0, 5), modo: "lista" };
   }
 
+  // Legendas prontas do «modo direto»: sem identificar o filme e sem IA. {gancho}
+  // vira o gancho sorteado da lista; {filme}/{ano} só entram quando existem
+  // (a linha que os usa sai, como no primeiro comentário). Nas Configurações,
+  // uma legenda por bloco, blocos separados por uma linha só com ---.
+  var LEGENDAS_PRONTAS = [
+    "{gancho}\n\n🎬 Nome do filme? Tá no link da minha B10 👀\n\n#Filmes #Cinema #Reels #CenasDeFilme #DicaDeFilme",
+    "{gancho}\n\nAssiste até o fim e me conta: valeu o play? 💬\n\n#Cinema #Filmes #CenaDeFilme #ReelsBrasil #DicaDeFilme",
+    "{gancho}\n\nSalva pra assistir depois 🍿\nLink do filme na minha B10 🎬\n\n#Filmes #Series #Cinema #Reels #FilmeBom",
+    "{gancho}\n\nMarca aquela pessoa que precisa ver essa cena 👀\n\n#CenasDeFilme #Filmes #Reels #Cinema #Maratona",
+    "{gancho}\n\nQuer o filme completo? Link na minha B10 🎬\n\n#Filmes #Cinema #DicaDeFilme #Reels #Pipoca",
+    "{gancho}\n\nDe 0 a 10, que nota essa cena merece? Comenta aí 💬\n\n#Cinema #Filmes #Reels #CenasQueMarcam #Filme",
+    "{gancho}\n\n🍿 Pausa rápida no feed pra uma boa cena.\nNome e link na minha B10 🎬\n\n#Filmes #Cinema #Reels #Series #CenaDeFilme",
+    "{gancho}\n\nSegue a página pra uma cena dessas todo dia 🎬\n\n#Filmes #DicaDeFilme #Cinema #ReelsBrasil #FilmesESeries",
+    "{gancho}\n\nVocê já conhecia esse filme? Conta nos comentários 👇\n\n#Cinema #CenasDeFilme #Filmes #Reels #Curiosidades",
+    "{gancho}\n\n🔗 Link do filme na minha B10\nSalva o post pra não perder 🍿\n\n#Filmes #Cinema #Reels #FilmeBom #DicaDeFilme",
+    "{gancho}\n\nCompartilha com quem ama cinema 🎥\n\n#CenaDeFilme #Filmes #Cinema #Reels #Series",
+    "{gancho}\n\nQual filme você quer ver aqui? Pede nos comentários 💬\n\n#Filmes #Cinema #Reels #Maratona #CenasDeFilme"
+  ];
+  // 1.º comentário fixo dos Reels do modo direto (guardado no próprio Reel como
+  // `firstComment`; os publicadores — app, Robô 24h e webhook — preferem-no ao modelo).
+  var COMENTARIO_DIRETO = "LINK DO FILME NA MINHA B10";
+  var historicoLegendas = [];
+  function legendasPersonalizadas(texto) {
+    var blocos = [];
+    var atual = [];
+    String(texto || "").split(/\r?\n/).forEach(function (linha) {
+      if (linha.trim() === "---") { blocos.push(atual.join("\n")); atual = []; }
+      else atual.push(linha);
+    });
+    blocos.push(atual.join("\n"));
+    return blocos.map(function (b) { return b.trim(); }).filter(Boolean);
+  }
+  function aplicarLegenda(modelo, extra) {
+    var gancho = String(extra.gancho || "").trim();
+    var filme = String(extra.filme || "").trim();
+    var ano = String(extra.ano || "").trim();
+    var linhas = String(modelo).replace(/\r/g, "").split("\n").map(function (l) {
+      if (!ano) l = l.replace(/\s*\(\{ano\}\)/g, "");
+      if ((!gancho && l.indexOf("{gancho}") >= 0) || (!filme && l.indexOf("{filme}") >= 0) || (!ano && l.indexOf("{ano}") >= 0)) return null;
+      return l.split("{gancho}").join(gancho).split("{filme}").join(filme).split("{ano}").join(ano);
+    }).filter(function (l) { return l !== null; });
+    return linhas.join("\n").replace(/\n{3,}/g, "\n\n").trim().slice(0, 2200);
+  }
+  // Mesma disciplina dos ganchos: reserva síncrona (lotes em paralelo nunca
+  // repetem), histórico persistido e lista inteira antes de recomeçar.
+  function legendasDaLista(extra) {
+    extra = extra || {};
+    var s = settingsAtuais();
+    var personalizadas = legendasPersonalizadas(s.legendasBoas);
+    var pool = Array.from(new Set(personalizadas.length ? personalizadas : LEGENDAS_PRONTAS));
+    if (!pool.length) throw new Error("Não há legendas prontas. Edite a lista nas Configurações.");
+    try { var salvoL = JSON.parse(raiz.localStorage.getItem("cineclip.legendas.usadas") || "[]"); if (Array.isArray(salvoL)) historicoLegendas = salvoL; } catch (_) {}
+    var evitarL = Array.isArray(extra.evitar) ? extra.evitar.map(norm) : [];
+    var usadasL = historicoLegendas.map(norm);
+    pool.sort(function (a, b) {
+      var ea = evitarL.includes(norm(a)), eb = evitarL.includes(norm(b));
+      if (ea !== eb) return ea ? 1 : -1;
+      return usadasL.lastIndexOf(norm(a)) - usadasL.lastIndexOf(norm(b));
+    });
+    var escolhido = pool[0];
+    historicoLegendas = historicoLegendas.filter(function (v) { return norm(v) !== norm(escolhido); }).concat(escolhido).slice(-500);
+    try { raiz.localStorage.setItem("cineclip.legendas.usadas", JSON.stringify(historicoLegendas)); } catch (_) {}
+    var legenda = aplicarLegenda(escolhido, extra);
+    if (!legenda) legenda = String(extra.gancho || "").trim() || "#Filmes #Cinema #Reels #CenasDeFilme";
+    return { legenda: legenda, modelo: escolhido, modo: "lista" };
+  }
+
   async function ganchos(h, o) {
     o = o || {};
     var ex = o.extra && typeof o.extra === "object" ? o.extra : {};
@@ -997,7 +1064,7 @@
     [raiz.__CineClipApp && raiz.__CineClipApp.settings, cfgManual].forEach(function (fonte) {
       if (!fonte || typeof fonte !== "object") return;
       Object.keys(fonte).forEach(function (k) {
-        if (fonte[k] != null && (k === "ganchosBons" || k === "ganchosRuins" || String(fonte[k]).trim() !== "")) s[k] = fonte[k];
+        if (fonte[k] != null && (k === "ganchosBons" || k === "ganchosRuins" || k === "legendasBoas" || String(fonte[k]).trim() !== "")) s[k] = fonte[k];
       });
     });
     return s;
@@ -1488,6 +1555,9 @@
     usaLista: usaLista,
     ganchosDaLista: ganchosDaLista,
     ganchosPadrao: GANCHOS_PRONTOS.slice(),
+    legendasDaLista: legendasDaLista,
+    legendasPadrao: LEGENDAS_PRONTAS.slice(),
+    comentarioDireto: COMENTARIO_DIRETO,
     aprender: aprender,
     configurar: function (s) { Prov.configurar(s); },
     prov: Prov,

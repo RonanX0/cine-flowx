@@ -219,6 +219,11 @@ console.log("\n7. Primeiro comentário em cada Reel (Robô 24h)");
     const ok = comentar(conta, "MEDIA_1", reel, modelo({ settings: {} }));
     check("comenta no Reel publicado via Graph API", ok.id === "COMENTARIO_1" && chamadas.length === 1 && chamadas[0].url.endsWith("/MEDIA_1/comments"), chamadas.map((c) => c.url).join(","));
     check("manda o texto e o token", chamadas[0] && chamadas[0].opts.payload.message === "🎬 Interestelar\nLINK NA B10" && chamadas[0].opts.payload.access_token === "EAAG_token");
+    check("modo direto: o firstComment do Reel manda no modelo", texto(modelo({ settings: {} }), { title: "video_9", firstComment: "LINK DO FILME NA MINHA B10" }) === "LINK DO FILME NA MINHA B10");
+    check("modo direto: firstComment do Reel vence mesmo desligado nas configurações", texto(modelo({ settings: { primeiroComentario: "" } }), { title: "video_9", firstComment: "LINK DO FILME NA MINHA B10" }) === "LINK DO FILME NA MINHA B10");
+    chamadas.length = 0;
+    const direto = comentar(conta, "MEDIA_1", { title: "video_9", firstComment: "LINK DO FILME NA MINHA B10" }, modelo({ settings: {} }));
+    check("modo direto: o robô publica só «LINK DO FILME NA MINHA B10»", direto.id === "COMENTARIO_1" && !!chamadas[0] && chamadas[0].opts.payload.message === "LINK DO FILME NA MINHA B10", chamadas[0] && JSON.stringify(chamadas[0].opts.payload.message));
 
     chamadas.length = 0;
     responder = () => ({ error: { code: 10, message: "(#10) Application does not have permission for this action" } });

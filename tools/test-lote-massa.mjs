@@ -178,6 +178,33 @@ console.log("Lista padrão + sem identificação: nenhuma análise de mídia ou 
   dom.window.close();
 }
 
+console.log("🚀 Modo direto: sem identificação e sem IA — legenda da lista e 1.º comentário fixo");
+{
+  const dom = novoDom();
+  const { window } = dom;
+  const c = cenario(window, { settings: { legendasBoas: "GANCHO: {gancho}\n\n#TesteA\n---\nOutra legenda {gancho} #TesteB" } });
+  // Mesmo com os modos de IA selecionados no painel, o direto ignora-os.
+  c.lote.estado.opcoes.modoDireto = true;
+  c.lote.estado.opcoes.modoIdentificacao = "auto";
+  c.lote.estado.opcoes.modoGancho = "suspense";
+  let chamLegenda = 0;
+  c.core.gerarLegenda = async () => { chamLegenda++; return "LEGENDA DA IA"; };
+  let audio = 0;
+  c.core.audio = async () => { audio++; throw new Error("não deve extrair áudio"); };
+  window.CineLote.abrir();
+  check("o painel tem a opção 🚀 Modo direto", /Modo direto/.test(window.document.querySelector(".cl-painel").textContent));
+  c.lote.adicionarFicheiros([ficheiro(window, "longo.mp4"), ficheiro(window, "curto.mp4")]);
+  await c.lote.iniciar();
+  check("direto: os 2 Reels entram na fila", c.fila.length === 2, `fila=${c.fila.length}`);
+  check("direto: não identifica o filme nem chama a IA (gancho/legenda)", c.chamadas.identificar === 0 && c.chamadas.gerarGancho === 0 && chamLegenda === 0, `identificar=${c.chamadas.identificar} legenda=${chamLegenda}`);
+  check("direto: não prepara áudio nem vídeo para IA", audio === 0 && !c.chamadas.videoParaIA);
+  check("direto: a legenda sai da lista pronta com o gancho no lugar de {gancho}", c.fila.every((r) => r.caption.includes(r.hookText) && /#Teste[AB]/.test(r.caption) && !r.caption.includes("{gancho}")), c.fila.map((r) => r.caption).join(" // "));
+  check("direto: as 2 legendas-modelo rodam sem repetir no lote", new Set(c.fila.map((r) => r.caption.includes("#TesteA"))).size === 2);
+  check("direto: o gancho também vem da lista pronta (sem IA)", c.fila.every((r) => window.CineClipMotor.ganchosPadrao.includes(r.hookText)), c.fila.map((r) => r.hookText).join(" | "));
+  check("direto: o Reel leva o 1.º comentário «LINK DO FILME NA MINHA B10»", c.fila.every((r) => r.firstComment === "LINK DO FILME NA MINHA B10"), JSON.stringify(c.fila.map((r) => r.firstComment)));
+  dom.window.close();
+}
+
 console.log("A1. Um lote com vídeos bons, um H.265, um com pouca certeza e um inválido");
 {
   const dom = novoDom();

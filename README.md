@@ -22,6 +22,29 @@ A identificação do filme é independente: para dispensá-la, selecione
 preparação de vídeo para IA; quadros ainda são usados para detectar duplicados.
 Identificações abaixo de 65% não ficam no cache nem são reutilizadas dele.
 
+## 🚀 Modo direto (sem achar o nome do filme, sem IA)
+
+Para quem não precisa do nome do filme/série em lado nenhum, o **🚀 Modo direto**
+(atível no **Upload em massa** e na aba **⚡ Rápido**) agenda o Reel sem identificar
+nada e sem chamar IA — logo, sem erros de chave, cota ou rede:
+
+- **Gancho**: sai da *Lista de ganchos* (as 24 frases prontas ou a tua lista).
+- **Legenda**: sai da **Configurações → Lista de legendas prontas** — 12 legendas
+  prontas com CTA e hashtags que rodam sem repetir (24 ganchos × 12 legendas).
+  Para personalizar, escreve lá uma legenda por bloco, blocos separados por uma
+  linha só com `---`; `{gancho}` vira o gancho sorteado e `{filme}`/`{ano}` só
+  entram quando existem. Campo vazio = lista pronta.
+- **1.º comentário**: exatamente `LINK DO FILME NA MINHA B10`, guardado no próprio
+  Reel (`firstComment`) e preferido ao modelo das Configurações pelos três
+  publicadores (app, Robô 24h e webhook Make/n8n). Nos outros modos o comentário
+  continua a ser o modelo (`🎬 {filme}` + LINK NA B10).
+
+No **Estúdio** (1 vídeo), o modo **📋 Lista de ganchos** faz o mesmo caminho:
+*Gerar legenda* sorteia da lista de legendas (sem precisar de identificar o filme)
+e um Reel agendado sem filme identificado leva o mesmo 1.º comentário fixo.
+Quem já tem o Robô 24h colado no Apps Script deve gerar o roteiro outra vez para
+apanhar o `firstComment` do Reel.
+
 ## Estrutura do Projeto
 
 - `index.html` — aplicação React já compilada (interface, processamento com FFmpeg e identificação do filme)

@@ -239,13 +239,14 @@
         simultaneos: (sim >= 1 && sim <= MAX_SIMULTANEOS) ? Math.round(sim) : MAX_SIMULTANEOS,
         modoGancho: MODOS_GANCHO_VALIDOS.indexOf(o.modoGancho) !== -1 ? o.modoGancho : "auto",
         modoIdentificacao: MODOS_IDENT_VALIDOS.indexOf(o.modoIdentificacao) !== -1 ? o.modoIdentificacao : "auto",
+        modoDireto: !!o.modoDireto,
         aoPartilhar: o.aoPartilhar === "aqui" || o.aoPartilhar === "pc" || o.aoPartilhar === "nuvem" ? o.aoPartilhar : "perguntar",
         processarLinksDoCelular: typeof o.processarLinksDoCelular === "boolean" ? o.processarLinksDoCelular : !eCelular(),
         botaoColar: o.botaoColar !== false,
         avisarLinkCopiado: o.avisarLinkCopiado !== false,
       };
     } catch (e) {
-      return { agendarComPoucaCerteza: false, simultaneos: MAX_SIMULTANEOS, modoGancho: "auto", modoIdentificacao: "auto", aoPartilhar: "perguntar", processarLinksDoCelular: !eCelular(), botaoColar: true, avisarLinkCopiado: true };
+      return { agendarComPoucaCerteza: false, simultaneos: MAX_SIMULTANEOS, modoGancho: "auto", modoIdentificacao: "auto", modoDireto: false, aoPartilhar: "perguntar", processarLinksDoCelular: !eCelular(), botaoColar: true, avisarLinkCopiado: true };
     }
   }
 
@@ -628,7 +629,7 @@
     var app = ambiente.app();
     if (!core || !app) return "O app ainda está a carregar. Tenta de novo dentro de alguns segundos.";
     var s = app.settings || {};
-    var modoIdent = (estado.opcoes && estado.opcoes.modoIdentificacao) || s.identMode || "auto";
+    var modoIdent = (estado.opcoes && estado.opcoes.modoDireto) ? "sem_id" : ((estado.opcoes && estado.opcoes.modoIdentificacao) || s.identMode || "auto");
     var temIA = !!String(s.groqKey || "").trim() || !!String(s.openrouterKey || "").trim() || !!String(s.geminiKey || "").trim();
     if (!temIA && modoIdent !== "sem_id") return "Adiciona a tua chave Google Gemini, Groq ou OpenRouter nas configurações — a IA identifica o filme e cria o gancho e a legenda.";
     if (!String(s.tmdbKey || "").trim() && modoIdent !== "sem_id") return "Adiciona a tua chave TMDB nas configurações — é ela que confirma o filme e traz o pôster e a sinopse.";
@@ -666,6 +667,11 @@
     };
   }
 
+  /** 1.º comentário fixo do modo direto («LINK DO FILME NA MINHA B10»). */
+  function textoComentarioDireto() {
+    return (window.CineClipMotor && window.CineClipMotor.comentarioDireto) || "LINK DO FILME NA MINHA B10";
+  }
+
   /**
    * Leva um vídeo do ficheiro original até à fila do Agendador.
    * Lança um erro (com `tipo`) quando não pode continuar.
@@ -680,8 +686,13 @@
     var s = app.settings || {};
     // Chaves de Groq/OpenRouter/Serper e exemplos de ganchos: o motor lê-as daqui (no servidor não há localStorage do app).
     try { if (window.CineClipMotor && window.CineClipMotor.configurar) window.CineClipMotor.configurar(s); } catch (e) {}
-    var modoIdent = (ctx && ctx.modoIdentificacao) || (estado.opcoes && estado.opcoes.modoIdentificacao) || s.identMode || "auto";
-    var modoGancho = (ctx && ctx.modoGancho) || (estado.opcoes && estado.opcoes.modoGancho) || s.hookMode || "auto";
+    // 🚀 Modo direto: sem identificar o filme e sem IA — gancho e legenda das
+    // listas prontas e 1.º comentário fixo. Ignora os modos escolhidos no painel.
+    var eDireto = (ctx && typeof ctx.modoDireto === "boolean")
+      ? ctx.modoDireto
+      : !!(estado.opcoes && estado.opcoes.modoDireto);
+    var modoIdent = eDireto ? "sem_id" : ((ctx && ctx.modoIdentificacao) || (estado.opcoes && estado.opcoes.modoIdentificacao) || s.identMode || "auto");
+    var modoGancho = eDireto ? "auto" : ((ctx && ctx.modoGancho) || (estado.opcoes && estado.opcoes.modoGancho) || s.hookMode || "auto");
     var ficheiro = item.ficheiro;
 
     /* 1. Ler o vídeo (metadados + dimensões em paralelo) ------------------- */
@@ -1011,9 +1022,15 @@
     if (!blob || !blob.size) throw erroComTipo("O FFmpeg não devolveu o vídeo processado.", "processamento");
 
     /* 5. Legenda ------------------------------------------------------------- */
-    definirPasso(item, "A escrever a legenda…", 0.88);
+    definirPasso(item, eDireto ? "A escolher a legenda pronta…" : "A escrever a legenda…", 0.88);
     var legenda = "";
-    try {
+    if (eDireto) {
+      // Sem IA: a legenda sai da lista pronta (Configurações → Lista de legendas),
+      // com o gancho sorteado no lugar de {gancho}. Não precisa do nome do filme.
+      if (!window.CineClipMotor) throw new Error("A lista de legendas não carregou. Atualize a página.");
+      legenda = window.CineClipMotor.legendasDaLista({ gancho: gancho }).legenda;
+    }
+    if (!legenda) try {
       legenda = await core.gerarLegenda(s.groqKey, filme, s.lang, {
         cena: cena,
         hookText: gancho,
@@ -1090,6 +1107,7 @@
         poster: filme.poster,
         hookText: gancho,
         caption: legendaLimpa,
+        firstComment: eDireto ? textoComentarioDireto() : undefined,
         videoBlob: blob,
         videoFileName: base + "_cineclip.mp4",
         videoSize: blob.size || 0,
@@ -2436,7 +2454,9 @@
       el("p", {
         className: "cl-sub",
         text:
-          "Para cada vídeo o app usa até 90 segundos, identifica o filme, escolhe o gancho da lista e cria a legenda e agenda o Reel no próximo horário livre" +
+          (estado.opcoes.modoDireto
+            ? "🚀 Modo direto ligado: sem identificar o filme e sem IA — o gancho e a legenda saem das listas prontas, o 1.º comentário é «LINK DO FILME NA MINHA B10» e o Reel agenda no próximo horário livre"
+            : "Para cada vídeo o app usa até 90 segundos, identifica o filme, escolhe o gancho da lista e cria a legenda e agenda o Reel no próximo horário livre") +
           (conta && conta.name ? " de " + conta.name : "") + ". Processa até " + (estado.opcoes.simultaneos || MAX_SIMULTANEOS) + " vídeos ao mesmo tempo. Podes fechar este painel e ver o Agendador enquanto isso.",
       }),
     ];
@@ -2491,7 +2511,7 @@
       ]),
     ]));
 
-    var seletorIdent = el("select", { className: "cl-select", "aria-label": "Modo de identificação" }, [
+    var seletorIdent = el("select", { className: "cl-select", "aria-label": "Modo de identificação", disabled: estado.opcoes.modoDireto || null, title: estado.opcoes.modoDireto ? "Desligado pelo 🚀 Modo direto" : null }, [
       el("option", { value: "auto", text: "🎯 IA Completa (Vídeo + Áudio + Google)" }),
       el("option", { value: "dialogo", text: "💬 Busca por Falas / Legendas (OCR + Áudio)" }),
       el("option", { value: "dica", text: "⚡ Rápido por Nome / Dica" }),
@@ -2508,7 +2528,7 @@
       seletorIdent,
     ]));
 
-    var seletorGancho = el("select", { className: "cl-select", "aria-label": "Modo do gancho viral" }, [
+    var seletorGancho = el("select", { className: "cl-select", "aria-label": "Modo do gancho viral", disabled: estado.opcoes.modoDireto || null, title: estado.opcoes.modoDireto ? "Desligado pelo 🚀 Modo direto" : null }, [
       el("option", { value: "auto", text: "📋 Lista de ganchos (sem IA)" }),
       el("option", { value: "suspense", text: "😰 Suspense / Tensão" }),
       el("option", { value: "polemica", text: "🔥 Polêmica / Dilema" }),
@@ -2551,6 +2571,17 @@
     corpo.push(el("label", { className: "cl-opcao" }, [
       caixa,
       el("span", { text: "Agendar mesmo quando a IA tem pouca certeza do filme (abaixo de " + CONFIANCA_MINIMA + "%). Desligado, esses vídeos ficam para rever." }),
+    ]));
+
+    var caixaDireto = el("input", { type: "checkbox", checked: estado.opcoes.modoDireto || null });
+    caixaDireto.addEventListener("change", function () {
+      estado.opcoes.modoDireto = caixaDireto.checked;
+      gravarOpcoes();
+      desenhar();
+    });
+    corpo.push(el("label", { className: "cl-opcao" }, [
+      caixaDireto,
+      el("span", { text: "🚀 Modo direto (sem achar o nome do filme e sem IA): o gancho e a legenda saem das listas prontas das Configurações e o 1.º comentário é «LINK DO FILME NA MINHA B10». Ignora os dois modos acima." }),
     ]));
 
     corpo.push(desenharSecaoCelular());

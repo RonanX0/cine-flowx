@@ -315,6 +315,7 @@ async function pS(u,o,a,i){
 var IG_COMENTARIO_PADRAO="🎬 {filme}\nLINK NA B10";
 function igTextoComentario(modelo,r){
   modelo=modelo==null?IG_COMENTARIO_PADRAO:String(modelo);
+  if(r&&r.firstComment)return String(r.firstComment).trim().slice(0,2200);
   if(!modelo.trim())return"";
   var identificado=!!(r&&(r.year||r.poster||r.originalTitle));
   var filme=identificado?String(r.title||"").trim():"";
