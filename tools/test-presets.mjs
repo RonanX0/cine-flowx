@@ -146,6 +146,14 @@ function desenhar(preset, texto, geo, { rodape = "", rodapeCor = "", cor = "", p
   const htmlCor = fs.readFileSync(path.join(root, "index.html"), "utf8");
   check("cor do gancho: grava só depois de parar de mexer (debounce)", htmlCor.includes("window.__ccCorH=setTimeout(()=>ye({hookColor:v,hookTextColor:v}),700)"));
   check("cor do rodapé: idem", htmlCor.includes("window.__ccCorF=setTimeout(()=>ye({footerColor:v,rodapeCor:v}),700)"));
+  /* Os campos de TEXTO tinham o mesmo problema: cada tecla gravava o cofre
+     inteiro na nuvem e escrever ficava aos solavancos. Passam a ser campos
+     não-controlados com o mesmo atraso dos seletores de cor. */
+  for (const [campo, timer] of [["footerText", "__ccTxtRodape"], ["perfilNome", "__ccTxtNome"], ["perfilArroba", "__ccTxtArroba"]]) {
+    check(`${campo}: grava só depois de parar de escrever`, htmlCor.includes(`window.${timer}=setTimeout(`), campo);
+    check(`${campo}: grava ao sair do campo, para não se perder a última tecla`, htmlCor.includes(`window.${timer}=0;ye({`), campo);
+    check(`${campo}: já não grava a cada tecla`, !htmlCor.includes(`type:"text",value:j.${campo}`), campo);
+  }
   check("os seletores já não regravam o cofre a cada evento", !htmlCor.includes("onChange:N=>ye({hookColor:N.target.value,hookTextColor:N.target.value})") && !htmlCor.includes("onChange:N=>ye({footerColor:N.target.value,rodapeCor:N.target.value})"));
 }
 
