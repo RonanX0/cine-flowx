@@ -154,6 +154,14 @@ function desenhar(preset, texto, geo, { rodape = "", rodapeCor = "", cor = "", p
     check(`${campo}: grava ao sair do campo, para não se perder a última tecla`, htmlCor.includes(`window.${timer}=0;ye({`), campo);
     check(`${campo}: já não grava a cada tecla`, !htmlCor.includes(`type:"text",value:j.${campo}`), campo);
   }
+  /* A foto do perfil vive nas definições da conta, que vão para o localStorage
+     (~5 MB) e para o cofre. Guardar o ficheiro original em base64 enche a quota
+     num instante, e o `setItem` a rebentar faz a gravação inteira falhar — as
+     definições parecem "desaparecer". Por isso a reserva, quando não consegue
+     reduzir a imagem, fica SEM foto em vez de guardar a original. */
+  check("a foto é reduzida a 160px antes de ser guardada", htmlCor.includes('cv.width=L;cv.height=L') && htmlCor.includes('const L=160'));
+  check("falhando a redução, não guarda a imagem original", !htmlCor.includes("ye({perfilAvatar:src})"), "ainda guarda o src cru");
+  check("e avisa em vez de falhar calado", htmlCor.includes('ye({perfilAvatar:""});alert('));
   check("os seletores já não regravam o cofre a cada evento", !htmlCor.includes("onChange:N=>ye({hookColor:N.target.value,hookTextColor:N.target.value})") && !htmlCor.includes("onChange:N=>ye({footerColor:N.target.value,rodapeCor:N.target.value})"));
 }
 
