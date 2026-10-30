@@ -95,7 +95,7 @@ e muda tudo de uma vez: o fundo, o estilo do gancho e a **caixa do vídeo**.
 | **Padrão do app** (`atual`) | preto (ou desfocado) | branco, com pílula escura | automática: 16:9 fica a 720×406, vertical preenche o 9:16 | — |
 | **Escuro** (`escuro`) | preto | fluorescente `#ECFA12`, 900, linhas coladas (0,88 em), sem pílula | **1:1** de 648 px, 5 % de margem lateral, cantos com raio de 30 px, do 27,4 % ao 78,0 % da altura | verde `#2DBD2C` a 93,55 % (texto opcional) |
 | **Claro** (`claro`) | branco | preto `#000000`, sem pílula | **faixa 4:3** de ponta a ponta (720×540), do 30,1 % ao 72,2 % da altura | — |
-| **Perfil** (`perfil`) | branco | preto `#000000`, sem pílula | **maleável**: largura toda, altura a seguir o vídeo, entre 26,0 % e 84,0 % | **faixa preta** fixa a 88,4 % a abraçar o texto, letras brancas, e uma 2.ª linha preta a 93,8 % |
+| **Perfil** (`perfil`) | branco | preto `#000000`, sem pílula, a começar por baixo do cabeçalho | **maleável**: largura toda, altura a seguir o vídeo, entre 26,0 % e 84,0 % | **faixa preta** fixa a 88,4 % a abraçar o texto, letras brancas, e uma 2.ª linha preta a 93,8 % |
 | **Destaque** (`destaque`) | branco | vermelho `#EC1C24` (mais pequeno) com o contorno preto automático | **maleável**, largura toda, entre 25,0 % e 84,0 % | o mesmo rodapé fixo do **Perfil** |
 
 O **Perfil** e o **Destaque** usam uma **caixa maleável** (`caixa: "livre"`), que é a diferença
@@ -119,8 +119,29 @@ Nestes dois o rodapé é **fixo do preset** (`rodapeFixo`), não um campo da con
 do formato e ganha ao `rodapeTexto` das definições. A cor do texto também vem do preset — a
 cor por omissão da conta é verde, que sobre a faixa preta não é o que se quer.
 
-O cabeçalho de perfil das capturas (foto redonda, nome e @) **não** está incluído — precisa de
-uma imagem por conta, que o app ainda não guarda.
+### Cabeçalho de perfil (preset **Perfil**)
+
+O preset **Perfil** desenha no topo um cabeçalho tipo post **centrado**: **foto redonda**,
+**nome**, **selo azul** e **@** da conta. O bloco inteiro é medido e centrado no eixo, por
+isso um nome maior empurra-o para a esquerda em vez de o desalinhar. O conteúdo vem da conta do Instagram (cada conta tem o seu), a
+geometria vem do preset, e **campo vazio não aparece**. Configura-se em
+**Configurações → conta do Instagram → Formatação do Reel**:
+
+| Campo | O que é |
+| --- | --- |
+| Nome no cabeçalho | o nome a negrito, como aparece no perfil |
+| @ no cabeçalho | a arroba é garantida (escrever `cena.seguinte` dá `@cena.seguinte`) |
+| Foto do perfil | a imagem é **reduzida a 160×160 e recortada ao centro** antes de ser guardada — um PNG inteiro estoirava a quota do `localStorage` |
+| Selo de verificado | o selo azul ao lado do nome, desenhado em vetor (não é uma imagem) |
+
+Com o cabeçalho no topo, o gancho começa mais abaixo (`ganchoInicio`, 17 % em vez dos 6,5 %
+dos outros presets) para não lhe escrever por cima.
+
+O desenho do gancho no browser é **síncrono** e não pode esperar por uma imagem, por isso o
+avatar fica em cache no `motor-ia.js`: `CineClipMotor.avatarPerfil()` devolve-o quando está
+pronto e `CineClipMotor.avatarPronto()` dá a promessa para o processamento esperar antes de
+gerar o PNG — um Reel publicado sem a foto seria pior do que esperar 50 ms. No servidor, onde
+o desenho é assíncrono, a imagem é carregada na hora.
 
 As medidas dos dois presets foram tiradas **pixel a pixel** de duas capturas de Reels reais
 (`formato-1.png` e `formato-2.png`, na raiz do repositório) — nada foi inventado:
@@ -150,6 +171,18 @@ Sem preset, o servidor mantém o aspeto que sempre teve (fundo branco, gancho pr
 presets **Escuro** e **Claro** é que levam as cores e a caixa medidas. O estilo viaja da conta
 até ao FFmpeg pelo `lote-massa.js` (argumentos 8–12 do `processar`) — antes o Estúdio lia o
 estilo de uma variável errada e o fundo/cor escolhidos nunca chegavam ao vídeo.
+
+### Faixas brancas também são cortadas
+
+O recorte automático de faixas (letterbox) passou a apanhar, além do **preto**, uma banda
+**branca uniforme**. Muitos cortes vêm de Reels **já formatados**, com uma área branca em cima
+para o gancho antigo: sem isto essa área entrava na caixa do preset e afastava o vídeo do
+texto novo — num exemplo real, 588 px de branco em cima e 344 px em baixo num 1080×1920.
+
+O limiar do branco é propositadamente severo (**97 %** das amostras da linha acima de 248,
+contra os 65 % de píxeis escuros do preto) para não comer uma cena genuinamente clara;
+`tools/test-barras-pretas.mjs` verifica os três casos — faixa preta, faixa branca e cinzento
+claro, que **não** pode contar como faixa.
 
 ## 📦 Upload em massa
 

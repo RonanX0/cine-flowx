@@ -96,13 +96,15 @@ const codigo = [
 
 /** Canvas falso que regista tudo o que o `_h` desenha. */
 function canvasFalso() {
-  const chamadas = { fillText: [], strokeText: [], fill: [], arc: [], roundRect: [], cores: [], fonts: [] };
+  const chamadas = { fillText: [], strokeText: [], fill: [], arc: [], roundRect: [], cores: [], fonts: [], drawImage: [], fillRect: [] };
   const ctx = {
     font: "", fillStyle: "", textAlign: "", textBaseline: "",
     shadowColor: "", shadowBlur: 0, shadowOffsetX: 0, shadowOffsetY: 0,
     strokeStyle: "", lineWidth: 0, lineJoin: "", lineCap: "", miterLimit: 0,
-    clearRect() {}, save() {}, restore() {}, beginPath() {}, closePath() {},
-    moveTo() {}, rect() {}, stroke() {},
+    clearRect() {}, save() {}, restore() {}, beginPath() {}, closePath() {}, clip() {},
+    drawImage(...a) { chamadas.drawImage.push(a); },
+    moveTo() {}, lineTo() {}, rect() {}, stroke() {},
+    fillRect(...a) { chamadas.fillRect.push({ args: a, cor: ctx.fillStyle }); },
     roundRect(...a) { chamadas.roundRect.push(a); },
     arc(...a) { chamadas.arc.push(a); },
     fill(regra) { chamadas.fill.push({ regra: regra || "nonzero", cor: ctx.fillStyle }); },
@@ -129,9 +131,11 @@ const api = contexto.api;
 const { PRESETS_DO_REEL, Eh, _h, caixaDoPreset } = api;
 
 /** Desenha o gancho como o app desenha (GS/Im) e devolve o registo do canvas. */
-function desenhar(preset, texto, geo, { rodape = "", rodapeCor = "", cor = "" } = {}) {
+function desenhar(preset, texto, geo, { rodape = "", rodapeCor = "", cor = "", perfil } = {}) {
   const { canvas, chamadas } = canvasFalso();
   const caixa = caixaDoPreset(preset, geo, rodape, rodapeCor);
+  // No app o perfil vem das definições da conta; no teste injeta-se à mão.
+  if (perfil !== undefined) caixa.perfil = perfil;
   _h(canvas, geo.outWidth, geo.outHeight, geo.padY, texto, !texto, cor, preset, caixa);
   return { canvas, chamadas, caixa };
 }
@@ -200,6 +204,56 @@ check("destaque = gancho vermelho, menor do que o do perfil",
   `${PRESETS_DO_REEL.destaque.ganchoTamanho} vs ${PRESETS_DO_REEL.perfil.ganchoTamanho}`);
 check("o contorno preto do gancho continua ligado para cor que não seja preta",
   /usaBordaPreta=!\/\^#\(\?:000\|000000\)\$\/i\.test/.test(modulo), "o desenho perdeu a borda automática");
+
+/* ------------------------------------------------- cabeçalho de perfil */
+{
+  const geo = Eh(1080, 1920, { top: 0, bottom: 0, vw: 1080, vh: 1920 }, 720, "perfil");
+  const PERFIL = { nome: "Cena seguinte", arroba: "@cena.seguinte", avatar: "data:image/png;base64,AA==", verificado: true };
+
+  const com = desenhar("perfil", "Esse filme será seu proximo vicio", geo, { perfil: PERFIL });
+  const textos = com.chamadas.fillText.map((c) => c.texto);
+  check("cabeçalho: escreve o nome da conta", textos.includes("Cena seguinte"), JSON.stringify(textos));
+  check("cabeçalho: escreve o @ com arroba garantida",
+    textos.includes("@cena.seguinte") && !textos.includes("cena.seguinte"), JSON.stringify(textos));
+  check("cabeçalho: o @ sai em cinzento, não na cor do gancho",
+    com.chamadas.fillText.find((c) => c.texto === "@cena.seguinte")?.cor === PRESETS_DO_REEL.perfil.perfilArrobaCor);
+  check("cabeçalho: desenha o selo azul do verificado",
+    com.chamadas.fill.some((x) => String(x.cor).toUpperCase() === "#1D9BF0"), JSON.stringify(com.chamadas.fill.map((x) => x.cor)));
+
+  const semSelo = desenhar("perfil", "Gancho", geo, { perfil: { ...PERFIL, verificado: false } });
+  check("cabeçalho: sem verificado, não há selo azul",
+    !semSelo.chamadas.fill.some((x) => String(x.cor).toUpperCase() === "#1D9BF0"));
+
+  const soNome = desenhar("perfil", "Gancho", geo, { perfil: { nome: "Só Nome", arroba: "", avatar: "" } });
+  const textosSo = soNome.chamadas.fillText.map((c) => c.texto);
+  check("cabeçalho: campo vazio não aparece", textosSo.includes("Só Nome") && !textosSo.some((t) => t.startsWith("@")));
+
+  /* Centragem: o bloco (foto + nome/@) vai ao centro, por isso um nome maior
+     empurra-o para a esquerda. Sem foto, o texto fica simétrico no eixo. */
+  const curto = desenhar("perfil", "G", geo, { perfil: { nome: "AB", arroba: "", avatar: "", verificado: false } });
+  const longo = desenhar("perfil", "G", geo, { perfil: { nome: "ABCDEFGHIJKLMNOP", arroba: "", avatar: "", verificado: false } });
+  const xCurto = curto.chamadas.fillText.find((c) => c.texto === "AB").x;
+  const xLongo = longo.chamadas.fillText.find((c) => c.texto === "ABCDEFGHIJKLMNOP").x;
+  check("cabeçalho: um nome maior empurra o bloco para a esquerda", xLongo < xCurto, `${xLongo} vs ${xCurto}`);
+  // O canvas falso mede len*px*0.55; usa-se a mesma conta para saber o centro.
+  const larguraFalsa = (t, px) => String(t).length * px * 0.55;
+  const nf = Math.round(geo.outWidth * PRESETS_DO_REEL.perfil.perfilNomeTamanho);
+  const centroCurto = xCurto + larguraFalsa("AB", nf) / 2;
+  check("cabeçalho: sem foto, o texto fica centrado no eixo",
+    Math.abs(centroCurto - geo.outWidth / 2) <= 2, `centro=${centroCurto.toFixed(1)} meio=${geo.outWidth / 2}`);
+
+  const sem = desenhar("perfil", "Gancho", geo, { perfil: null });
+  check("sem conta configurada não há cabeçalho nenhum",
+    !sem.chamadas.fillText.some((c) => /Cena seguinte|@/.test(c.texto)), JSON.stringify(sem.chamadas.fillText.map((c) => c.texto)));
+
+  // O gancho tem de começar por baixo do cabeçalho, senão escrevia-lhe em cima.
+  const yGancho = Math.min(...com.chamadas.fillText.filter((c) => /Esse filme/.test(c.texto)).map((c) => c.y));
+  const fimCabecalho = geo.outHeight * PRESETS_DO_REEL.perfil.perfilArrobaY;
+  check("o gancho começa por baixo do cabeçalho", yGancho > fimCabecalho, `gancho y=${yGancho} cabeçalho até ${Math.round(fimCabecalho)}`);
+  check("o destaque não leva cabeçalho", !PRESETS_DO_REEL.destaque.perfilCabecalho);
+  check("ganchoInicio só existe onde há cabeçalho",
+    PRESETS_DO_REEL.perfil.ganchoInicio > 0.065 && !PRESETS_DO_REEL.destaque.ganchoInicio);
+}
 
 check("preset desconhecido cai no atual", api.presetDoReel("inventado").id === "atual" && api.presetDoReel().id === "atual");
 

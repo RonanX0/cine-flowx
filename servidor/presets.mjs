@@ -102,6 +102,22 @@ export const PRESETS_DO_REEL = {
     // Cor própria: a segunda linha é texto sobre o fundo branco, não acompanha
     // a cor do gancho (que no destaque é vermelha).
     rodapeNotaCor: "#000000",
+    /* Cabeçalho tipo post: foto redonda, nome, selo e @ da conta ativa. O
+       conteúdo vem da conta (nome/@/foto), a geometria é do preset. Com o
+       cabeçalho a ocupar o topo, o gancho começa mais abaixo (`ganchoInicio`)
+       para não lhe subir por cima. */
+    perfilCabecalho: true,
+    perfilY: 0.0766,
+    perfilAvatarR: 0.075,
+    // O bloco inteiro (foto + nome/@) é centrado; `perfilEspaco` é a folga
+    // entre a foto e o texto. Não há X fixo: a largura depende do nome.
+    perfilEspaco: 0.028,
+    perfilNomeTamanho: 0.044,
+    perfilNomeY: 0.0625,
+    perfilArrobaTamanho: 0.036,
+    perfilArrobaY: 0.0985,
+    perfilArrobaCor: "#8E8E93",
+    ganchoInicio: 0.17,
   },
   destaque: {
     id: "destaque",

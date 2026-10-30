@@ -1802,6 +1802,54 @@
     return texto.slice(0, LIMITE_LEGENDA);
   }
 
+  /* ------------------------------------------- avatar do cabeçalho de perfil
+   * O desenho do gancho (`_h`) é síncrono — não pode esperar por uma imagem —
+   * mas o avatar da conta é um data URL que precisa de ser descodificado. Por
+   * isso guarda-se aqui a imagem já carregada: `avatarPerfil` devolve-a quando
+   * está pronta e dispara o carregamento quando ainda não está, e
+   * `avatarPronto` dá a promessa para o processamento esperar antes de gerar o
+   * PNG — um Reel publicado sem a foto seria pior do que esperar 50 ms.
+   */
+  var avatarEstado = { src: "", img: null, promessa: null };
+
+  function avatarCarregar(src) {
+    src = String(src || "");
+    if (!src) {
+      avatarEstado = { src: "", img: null, promessa: null };
+      return Promise.resolve(null);
+    }
+    if (avatarEstado.src === src && avatarEstado.promessa) return avatarEstado.promessa;
+    avatarEstado = { src: src, img: null, promessa: null };
+    avatarEstado.promessa = new Promise(function (resolve) {
+      try {
+        var im = new raiz.Image();
+        im.onload = function () {
+          if (avatarEstado.src === src) avatarEstado.img = im;
+          resolve(avatarEstado.img);
+        };
+        im.onerror = function () { resolve(null); };
+        im.src = src;
+      } catch (_) {
+        resolve(null);
+      }
+    });
+    return avatarEstado.promessa;
+  }
+
+  /** A imagem já carregada, ou null (e começa a carregá-la para a próxima). */
+  function avatarPerfil(src) {
+    src = String(src || "");
+    if (!src) return null;
+    if (avatarEstado.src !== src) { avatarCarregar(src); return null; }
+    var im = avatarEstado.img;
+    return im && im.complete && im.naturalWidth > 0 ? im : null;
+  }
+
+  /** Espera o avatar ficar pronto (usado antes de gerar o PNG do Reel). */
+  function avatarPronto(src) {
+    return avatarCarregar(src);
+  }
+
   /** Busca no TMDB e devolve a legenda pronta em formato de ficha. */
   async function legendaFicha(item, extra, h) {
     var chave = String((settingsAtuais() || {}).tmdbKey || "").trim();
@@ -1822,6 +1870,8 @@
     legendaVariada: legendaVariada,
     legendasPadrao: LEGENDAS_PRONTAS.slice(),
     legendaFicha: legendaFicha,
+    avatarPerfil: avatarPerfil,
+    avatarPronto: avatarPronto,
     montarFicha: montarFicha,
     dadosFicha: dadosFicha,
     comentarioDireto: COMENTARIO_DIRETO,
