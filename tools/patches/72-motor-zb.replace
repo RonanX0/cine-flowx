@@ -1,4 +1,4 @@
   /* ==CINECLIP-MOTOR-IA== perceção → pesquisa no Google → conferência no TMDB (motor-ia.js) */
   if(typeof window!=="undefined"&&window.CineClipMotor&&!(i&&i.motorAntigo))return window.CineClipMotor.identificar(_ccMotorH(),{nvidiaKey:r,frames,lang:a,opcoes:i||{},identMode,hookMode,pistaNome,dica:rawHint});
-  const u=a==="pt-PT"?"Escreve os campos 'cena' e 'ganchos' em Português de Portugal.":"Escreva os campos 'cena' e 'ganchos' em Português do Brasil.";
+  const u=!1?"Escreve os campos 'cena' e 'ganchos' em Português de Portugal.":"Escreva os campos 'cena' e 'ganchos' em Português do Brasil.";
   const focoDialogo=

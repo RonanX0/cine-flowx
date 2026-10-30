@@ -727,20 +727,19 @@
       '- "momento_forte": o instante mais tenso ou surpreendente, numa frase curta.\n' +
       '- "emocao": a emoção dominante.\n' +
       '- "falas": as frases mais marcantes ditas (até 4).\n' +
-      (lang === "pt-PT" ? "Escreve em Português de Portugal.\n" : "Escreva em Português do Brasil.\n") +
+      "Escreva em Português do Brasil.\n" +
       'Responda SOMENTE com JSON válido: {"roteiro": "", "momento_forte": "", "emocao": "", "falas": []}'
     );
   }
 
   function promptEscrever(lang, cena, obra, instModo, evitar, usuario) {
     usuario = usuario || { bons: [], ruins: [] };
-    var pt = lang === "pt-PT";
     var ctx = [];
     if (obra.titulo) ctx.push("Título: " + obra.titulo + (obra.ano ? " (" + obra.ano + ")" : ""));
     if (obra.generos) ctx.push("Gênero: " + obra.generos);
     if (obra.sinopse) ctx.push("Sinopse: " + obra.sinopse);
     return (
-      "Você escreve os ganchos de uma página " + (pt ? "portuguesa" : "brasileira") + " de cortes de filmes e séries com milhões de seguidores no TikTok e no Reels. " +
+      "Você escreve os ganchos de uma página brasileira de cortes de filmes e séries com milhões de seguidores no TikTok e no Reels. " +
       "O gancho é a frase no topo do vídeo que decide se a pessoa para de rolar.\n\n" +
       "O QUE ACONTECE NESTE CORTE (é a ÚNICA fonte de verdade — não invente nada além disto):\n" +
       (cena.roteiro ? "- Roteiro: " + cena.roteiro + "\n" : "") +
@@ -753,7 +752,7 @@
       "- Mostram o COMEÇO da situação e escondem o desfecho: a pessoa precisa assistir para saber o que acontece.\n" +
       "- São concretos: citam o que realmente está em jogo NESTE corte (a confissão, a arma, o segredo, a ligação, a porta, o dinheiro).\n" +
       "- Usam o papel das pessoas (o policial, a detetive, o pai, a garota, o chefe), NUNCA nomes de personagens ou atores.\n" +
-      "- São frases faladas, como " + (pt ? "um português" : "um brasileiro") + " escreveria no TikTok: 6 a 10 palavras, no máximo 52 caracteres, 1 emoji no fim.\n" +
+      "- São frases faladas, como um brasileiro escreveria no TikTok: 6 a 10 palavras, no máximo 52 caracteres, 1 emoji no fim.\n" +
       "- Variam o formato: situação tensa, revelação pela metade, pergunta para quem assiste, POV, contraste (\"Ele só queria X e acabou Y\"), aviso.\n\n" +
       (usuario.bons.length
         ? "GANCHOS QUE O DONO DA PÁGINA APROVOU (são de OUTRAS cenas — imite o jeito, o ritmo e o tamanho, mas não copie):\n- " + usuario.bons.join("\n- ") + "\n\n"
@@ -767,7 +766,7 @@
       "- o desfecho, nomes de personagens, atores ou da obra.\n" +
       (instModo ? "\n" + instModo + "\n(Escreva os 10 ganchos neste tom.)\n" : "") +
       (evitar && evitar.length ? "\nJÁ USADOS (proibido repetir ou parafrasear): " + evitar.map(function (x) { return '"' + x + '"'; }).join(", ") + "\n" : "") +
-      (pt ? "\nEscreve em Português de Portugal.\n" : "\nEscreva em Português do Brasil.\n") +
+      "\nEscreva em Português do Brasil.\n" +
       'Responda SOMENTE com JSON válido: {"ganchos": ["...", "...", "...", "...", "...", "...", "...", "...", "...", "..."]}'
     );
   }

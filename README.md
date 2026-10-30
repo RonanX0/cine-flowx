@@ -84,6 +84,18 @@ npm run preview
 > busca (Serper/DuckDuckGo) incluída. GitHub Pages serve apenas arquivos estáticos e não executa `/api/`; a
 > busca na web (Serper/DuckDuckGo) precisa de um backend em Vercel/Netlify (ou outro host).
 
+## 🇧🇷 Idioma: só português do Brasil
+
+O app tinha um seletor **pt-PT / pt-BR** e vinha com **Portugal por omissão**, por isso a
+legenda saía escrita a tratar quem lê por «tu». Agora o idioma é um só: o seletor oferece
+apenas **Português (Brasil)**, a definição por omissão é `pt-BR`, e os três prompts que
+ramificavam por idioma (gancho, identificação e legenda) mandam sempre escrever em português
+do Brasil.
+
+`tools/test-provedores.mjs` verifica o caso difícil: mesmo pedindo `"pt-PT"` à força a
+`gerarLegenda`, o prompt que chega à IA manda escrever em português do Brasil, não em
+português de Portugal, e não trata quem lê por «tu».
+
 ## 🎨 Formatação do Reel (presets)
 
 Em **Configurações → conta do Instagram → Formatação do Reel** escolhes o formato do 9:16.

@@ -485,7 +485,7 @@
         ia = cacheHit.ia;
         filme = cacheHit.filme;
       } else {
-        ia = await core.identificar(s.groqKey, quadros, s.lang || "pt-PT", {
+        ia = await core.identificar(s.groqKey, quadros, s.lang || "pt-BR", {
           useFileNameHint: s.useFileNameHint !== false,
           fileName: ficheiro.name,
           metaTitle: titulo !== "Reels" ? titulo : "",
@@ -580,7 +580,7 @@
           }
         }
         if (!legenda) try {
-          legenda = await core.gerarLegenda(s.groqKey, filme, s.lang || "pt-PT", {
+          legenda = await core.gerarLegenda(s.groqKey, filme, s.lang || "pt-BR", {
             cena: ia.cena || "",
             geminiKey: s.geminiKey,
           });

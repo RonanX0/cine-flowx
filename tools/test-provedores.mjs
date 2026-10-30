@@ -404,6 +404,23 @@ console.log("\n↪️ Com as duas chaves, a Groq fica por último");
   check("com o OpenRouter em baixo, a Groq ainda assume", !!ia2 && S.groqChats.length > 0, `groq=${S.groqChats.length}`);
 }
 
+console.log("\n🇧🇷 A legenda sai sempre em português do Brasil");
+{
+  /* O app tinha um seletor pt-PT/pt-BR e vinha com Portugal por omissão, por
+     isso a legenda era escrita a tratar quem lê por «tu». Agora o idioma é um
+     só: mesmo pedindo "pt-PT" à força, o prompt tem de mandar escrever em
+     português do Brasil. */
+  const filme = { title: "Chicago P.D.", original: "Chicago P.D.", year: "2014", kind: "tv", genres: ["Crime"], overview: "Policiais de Chicago." };
+  zerar();
+  motor.prov._interno.limpar();
+  motor.configurar({ groqKey: "gsk_teste" });
+  await core.gerarLegenda("gsk_teste", filme, "pt-PT", { cena: "interrogatório", geminiKey: "" });
+  const prompts = S.groqChats.map((c) => textoDe(c)).join("\n");
+  check("mesmo com pt-PT, o prompt manda escrever em português do Brasil", /português do Brasil/i.test(prompts), prompts.slice(0, 160));
+  check("e não manda escrever em português de Portugal", !/português de Portugal/i.test(prompts));
+  check("nem trata quem lê por «tu»", !/por «tu»/.test(prompts));
+}
+
 app.fechar();
 console.log("\n─────────────────────────────────────────────");
 if (fail) { console.log(`❌ ${pass} passaram, ${fail} falharam:`); falhas.forEach((f) => console.log("   • " + f)); process.exit(1); }

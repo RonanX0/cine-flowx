@@ -1,4 +1,4 @@
-u=a==="pt-PT"?"Escreve em português de Portugal, a tratar quem lê por «tu», como um português fala no dia a dia.":"Escreva em português do Brasil, tratando quem lê por «você», do jeito que um brasileiro fala no dia a dia.",f=`QUER ASSISTIR A ${c?"ESTA SÉRIE":"ESTE FILME"}? LINK NA BIO! 🎬`,p=i!=null&&i.cena||i!=null&&i.hookText?`
+u=!1?"Escreve em português de Portugal, a tratar quem lê por «tu», como um português fala no dia a dia.":"Escreva em português do Brasil, tratando quem lê por «você», do jeito que um brasileiro fala no dia a dia.",f=`QUER ASSISTIR A ${c?"ESTA SÉRIE":"ESTE FILME"}? LINK NA BIO! 🎬`,p=i!=null&&i.cena||i!=null&&i.hookText?`
 O CORTE QUE A PESSOA ACABOU DE VER:
 - O que acontece: ${i.cena||"(não informado)"}
 - Frase no topo do vídeo: ${i.hookText||"(nenhuma)"}
