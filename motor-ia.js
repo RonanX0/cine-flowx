@@ -1583,6 +1583,233 @@
     } catch (e) { return false; }
   }
 
+
+  /* ------------------------------------------- ficha do filme (legenda longa)
+   * Legenda em formato de ficha técnica, montada SÓ com dados do TMDB. Não há
+   * passo de IA aqui de propósito: estes campos vão para a legenda pública do
+   * Reel, e inventar elenco, duração ou sinopse é pior do que não os mostrar.
+   * Campo sem dado é campo que não aparece — nunca sai "undefined" nem um valor
+   * aproximado. A nota do IMDb não entra: o TMDB não a fornece (o vote_average
+   * é a nota do próprio TMDB) e rotulá-la de IMDb seria publicar número errado.
+   */
+
+  var LIMITE_LEGENDA = 2200; // máximo do Instagram
+  var CTA_FICHA = "🔗 Assista no LINK DA B10";
+
+  /** Bandeira a partir do código ISO de 2 letras (indicadores regionais). */
+  function bandeira(cod) {
+    var c = String(cod || "").trim().toUpperCase();
+    if (!/^[A-Z]{2}$/.test(c)) return "";
+    return String.fromCodePoint(0x1f1e6 + c.charCodeAt(0) - 65, 0x1f1e6 + c.charCodeAt(1) - 65);
+  }
+
+  /** Nome do país em português, com o nome do TMDB (inglês) como reserva. */
+  function nomePais(cod, reserva) {
+    var c = String(cod || "").trim().toUpperCase();
+    try {
+      if (/^[A-Z]{2}$/.test(c) && typeof Intl !== "undefined" && Intl.DisplayNames) {
+        var dn = new Intl.DisplayNames(["pt-BR"], { type: "region" });
+        var nome = dn.of(c);
+        if (nome && nome !== c) return nome;
+      }
+    } catch (_) {}
+    return String(reserva || "").trim();
+  }
+
+  /** "14" vira "14 anos"; "L" vira "Livre". Vazio continua vazio. */
+  function classificacaoLegivel(valor) {
+    var v = String(valor || "").trim();
+    if (!v) return "";
+    if (/^(l|livre|0)$/i.test(v)) return "Livre";
+    if (/^\d{1,2}$/.test(v)) return v + " anos";
+    return v;
+  }
+
+  function duracaoLegivel(min) {
+    var n = Math.round(Number(min) || 0);
+    if (n <= 0) return "";
+    if (n < 60) return "~" + n + "min";
+    var h = Math.floor(n / 60);
+    var m = n % 60;
+    return "~" + h + "h" + (m ? String(m < 10 ? "0" + m : m) + "min" : "");
+  }
+
+  /**
+   * Uma chamada ao TMDB que nunca rebenta a ficha: falhou, devolve null.
+   * Usa o `h.tmdb` do bundle quando existe; sem ele, fala com o TMDB
+   * diretamente, para a ficha poder ser chamada de ficheiros fora do bundle
+   * (lote-massa.js, agendamento-rapido.js) sem precisar de um patch.
+   */
+  async function tmdbOuNulo(h, chave, caminho, params) {
+    try {
+      if (h && typeof h.tmdb === "function") return await h.tmdb(chave, caminho, params || {});
+      var q = new URLSearchParams(params || {});
+      q.set("api_key", chave);
+      var r = await raiz.fetch("https://api.themoviedb.org/3" + caminho + "?" + q.toString());
+      if (!r || !r.ok) return null;
+      return await r.json();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /** Classificação brasileira (endpoints diferentes para filme e série). */
+  function certificacaoBr(dados, ehSerie) {
+    var res = (dados && dados.results) || [];
+    for (var i = 0; i < res.length; i++) {
+      if (String(res[i].iso_3166_1).toUpperCase() !== "BR") continue;
+      if (ehSerie) return String(res[i].rating || "");
+      var lista = res[i].release_dates || [];
+      for (var j = 0; j < lista.length; j++) {
+        if (String(lista[j].certification || "").trim()) return String(lista[j].certification).trim();
+      }
+    }
+    return "";
+  }
+
+  /**
+   * Junta tudo o que a ficha precisa. Os pedidos extra correm em paralelo e
+   * cada um pode falhar sozinho: o que faltar simplesmente não aparece.
+   */
+  async function dadosFicha(h, chave, item) {
+    if (!item || !item.id) throw new Error("Sem filme identificado no TMDB para montar a ficha.");
+    var ehSerie = item.kind === "tv";
+    var base = ehSerie ? "/tv/" + item.id : "/movie/" + item.id;
+
+    var partes = await Promise.all([
+      tmdbOuNulo(h, chave, base, { language: "pt-BR" }),
+      tmdbOuNulo(h, chave, base + (ehSerie ? "/aggregate_credits" : "/credits"), { language: "pt-BR" }),
+      tmdbOuNulo(h, chave, base + (ehSerie ? "/content_ratings" : "/release_dates"), {}),
+      tmdbOuNulo(h, chave, base + "/keywords", {}),
+    ]);
+    var d = partes[0] || {};
+    var cred = partes[1] || {};
+    var cert = partes[2];
+    var kw = partes[3] || {};
+
+    var pais = (d.production_countries || [])[0] || null;
+    var codPais = pais ? pais.iso_3166_1 : (d.origin_country || [])[0] || "";
+
+    var elenco = ((cred && cred.cast) || []).slice(0, 5).map(function (c) {
+      var papel = c.character || ((c.roles || [])[0] || {}).character || "";
+      return { nome: String(c.name || c.original_name || "").trim(), papel: String(papel || "").trim() };
+    }).filter(function (c) { return c.nome; });
+
+    var equipa = (cred && cred.crew) || [];
+    var diretor = "";
+    for (var i = 0; i < equipa.length; i++) {
+      if (/^(director|diretor)$/i.test(equipa[i].job || "")) { diretor = String(equipa[i].name || "").trim(); break; }
+    }
+    if (!diretor) diretor = String(((d.created_by || [])[0] || {}).name || "").trim();
+
+    return {
+      ehSerie: ehSerie,
+      titulo: String(d.title || d.name || (item && item.title) || "").trim(),
+      original: String(d.original_title || d.original_name || "").trim(),
+      ano: String(d.release_date || d.first_air_date || "").slice(0, 4),
+      generos: (d.genres || []).map(function (g) { return String(g.name || "").trim(); }).filter(Boolean),
+      duracao: duracaoLegivel(ehSerie ? (d.episode_run_time || [])[0] : d.runtime),
+      pais: nomePais(codPais, pais && pais.name),
+      bandeira: bandeira(codPais),
+      classificacao: classificacaoLegivel(certificacaoBr(cert, ehSerie)),
+      sinopse: String(d.overview || "").trim(),
+      elenco: elenco,
+      diretor: diretor,
+      slogan: String(d.tagline || "").trim(),
+      temporadas: Number(d.number_of_seasons) || 0,
+      episodios: Number(d.number_of_episodes) || 0,
+      estreia: String(d.release_date || d.first_air_date || "").trim(),
+      temas: ((kw.keywords || kw.results) || []).slice(0, 4).map(function (k) { return String(k.name || "").trim(); }).filter(Boolean),
+    };
+  }
+
+  /**
+   * Curiosidades só com o que o TMDB afirma — nada de IA. Por isso podem sair
+   * menos de três: é melhor duas verdadeiras do que três inventadas.
+   */
+  function curiosidadesDeFatos(d) {
+    var fora = [];
+    if (d.slogan) fora.push("O slogan oficial é “" + d.slogan + "”.");
+    if (d.diretor) fora.push((d.ehSerie ? "Criação de " : "Dirigido por ") + d.diretor + ".");
+    if (d.ehSerie && d.temporadas) {
+      fora.push(
+        "A série tem " + d.temporadas + (d.temporadas > 1 ? " temporadas" : " temporada") +
+        (d.episodios ? " e " + d.episodios + " episódios no total." : ".")
+      );
+    }
+    if (d.estreia && /^\d{4}-\d{2}-\d{2}$/.test(d.estreia)) {
+      var p = d.estreia.split("-");
+      fora.push("Estreou em " + p[2] + "/" + p[1] + "/" + p[0] + ".");
+    }
+    if (d.temas.length >= 2) fora.push("Temas centrais: " + d.temas.slice(0, 3).join(", ") + ".");
+    return fora.slice(0, 3);
+  }
+
+  /** Desenha a ficha. Linha sem dado é linha que não sai. */
+  function montarFicha(d, extra) {
+    extra = extra || {};
+    if (!d || !d.titulo) throw new Error("Sem título confirmado no TMDB para montar a ficha.");
+    var rotulo = d.ehSerie ? "Série" : "Filme";
+    var detalhe = String(extra.temporadaEpisodio || "").trim();
+    if (!detalhe && d.ehSerie && d.temporadas) detalhe = d.temporadas + (d.temporadas > 1 ? " temporadas" : " temporada");
+    if (!detalhe && d.ano) detalhe = d.ano;
+
+    var L = [];
+    L.push("🎬 " + rotulo + ": " + d.titulo + (detalhe ? " (" + detalhe + ")" : ""));
+    if (d.original && norm(d.original) !== norm(d.titulo)) L.push("📘 Título original: " + d.original);
+    if (d.generos.length) L.push("🎭 Gênero: " + d.generos.join(" | "));
+    if (d.duracao) L.push("⏰ Duração: " + d.duracao);
+    if (d.pais) L.push("🌍 País: " + d.pais + (d.bandeira ? " " + d.bandeira : ""));
+    if (d.classificacao) L.push("🏆 Classificação Indicativa: " + d.classificacao);
+
+    if (d.elenco.length) {
+      L.push("");
+      L.push("🌟 Elenco Principal:");
+      d.elenco.forEach(function (c) {
+        L.push("🔹 " + c.nome + (c.papel ? " como " + c.papel : ""));
+      });
+    }
+
+    if (d.sinopse) {
+      L.push("");
+      L.push("📜 Sinopse:");
+      L.push(d.sinopse);
+    }
+
+    var cur = curiosidadesDeFatos(d);
+    if (cur.length) {
+      L.push("");
+      L.push("🎯 Curiosidades:");
+      cur.forEach(function (c) { L.push("🔹 " + c); });
+    }
+
+    L.push("");
+    L.push("🎬 " + rotulo + ": " + d.titulo);
+    L.push(CTA_FICHA);
+
+    var texto = L.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+    if (texto.length <= LIMITE_LEGENDA) return texto;
+
+    // Não cabe no Instagram: encurta a sinopse (o único campo elástico) antes
+    // de cortar o texto a meio, para o CTA e a ficha nunca se perderem.
+    var excesso = texto.length - LIMITE_LEGENDA;
+    if (d.sinopse && d.sinopse.length > excesso + 4) {
+      var copia = {};
+      Object.keys(d).forEach(function (k) { copia[k] = d[k]; });
+      copia.sinopse = d.sinopse.slice(0, Math.max(40, d.sinopse.length - excesso - 2)).replace(/\s+\S*$/, "") + "…";
+      return montarFicha(copia, extra);
+    }
+    return texto.slice(0, LIMITE_LEGENDA);
+  }
+
+  /** Busca no TMDB e devolve a legenda pronta em formato de ficha. */
+  async function legendaFicha(item, extra, h) {
+    var chave = String((settingsAtuais() || {}).tmdbKey || "").trim();
+    if (!chave) throw new Error("A ficha precisa da chave TMDB nas Configurações.");
+    var d = await dadosFicha(h, chave, item);
+    return { legenda: montarFicha(d, extra), modo: "ficha", dados: d };
+  }
+
   raiz.CineClipMotor = {
     versao: VERSAO,
     identificar: identificar,
@@ -1594,6 +1821,9 @@
     legendasDaLista: legendasDaLista,
     legendaVariada: legendaVariada,
     legendasPadrao: LEGENDAS_PRONTAS.slice(),
+    legendaFicha: legendaFicha,
+    montarFicha: montarFicha,
+    dadosFicha: dadosFicha,
     comentarioDireto: COMENTARIO_DIRETO,
     aprender: aprender,
     configurar: function (s) { Prov.configurar(s); },

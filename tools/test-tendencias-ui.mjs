@@ -420,6 +420,41 @@ console.log("\n🐢 Limite em 1 volta ao download um-por-vez");
   c.w.close();
 }
 
+
+console.log("\n🔢 Quantos vídeos o painel pede ao servidor");
+{
+  /* O endpoint aceita 5–100 (server/tendencias.mjs) e o painel pedia 40 fixos.
+     `total` é quantos passaram pelas fontes antes do corte, e serve para o
+     utilizador saber se vale subir a opção ou aliviar os filtros. */
+  const c = criar({
+    resposta: () => ({
+      status: 200,
+      corpo: { geradoEm: Date.now(), total: 137, estados: [{ fonte: "#cenasdefilme", ok: true }], itens: JSON.parse(JSON.stringify(ITENS)) },
+    }),
+  });
+  c.w.document.getElementById("cc-tendencias-monte").className = "";
+  await dormir(900);
+
+  check("por omissão pede 60, não os 40 fixos de antes", /max=60/.test(c.chamadas.api[0] || ""), c.chamadas.api[0]);
+  check("avisa quantos cortes ficaram de fora", /Mostrando 3 de 137/.test(c.texto()), c.texto().slice(0, 200));
+
+  c.w.CineTendencias._interno.estado.opcoes.quantosVideos = 100;
+  await c.w.CineTendencias.buscar(true);
+  await dormir(250);
+  check("subir a opção pede mais ao servidor", /max=100/.test(c.chamadas.api[c.chamadas.api.length - 1] || ""), c.chamadas.api[c.chamadas.api.length - 1]);
+
+  c.w.CineTendencias._interno.estado.opcoes.quantosVideos = 500;
+  await c.w.CineTendencias.buscar(true);
+  await dormir(250);
+  check("nunca pede acima do teto do endpoint", /max=100/.test(c.chamadas.api[c.chamadas.api.length - 1] || ""), c.chamadas.api[c.chamadas.api.length - 1]);
+
+  c.w.CineTendencias._interno.estado.opcoes.quantosVideos = 0;
+  await c.w.CineTendencias.buscar(true);
+  await dormir(250);
+  check("valor inválido cai no padrão", /max=60/.test(c.chamadas.api[c.chamadas.api.length - 1] || ""), c.chamadas.api[c.chamadas.api.length - 1]);
+  c.w.close();
+}
+
 console.log("\n─────────────────────────────────────────────");
 if (fail) { console.log(`❌ ${pass} passaram, ${fail} falharam:`); falhas.forEach((f) => console.log("   • " + f)); process.exit(1); }
 console.log(`✅ ${pass} passaram, 0 falharam`);

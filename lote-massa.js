@@ -244,9 +244,11 @@
         processarLinksDoCelular: typeof o.processarLinksDoCelular === "boolean" ? o.processarLinksDoCelular : !eCelular(),
         botaoColar: o.botaoColar !== false,
         avisarLinkCopiado: o.avisarLinkCopiado !== false,
+        // Ficha técnica como legenda; só se aplica a vídeos com filme confirmado.
+        legendaFicha: o.legendaFicha !== false,
       };
     } catch (e) {
-      return { agendarComPoucaCerteza: false, simultaneos: MAX_SIMULTANEOS, modoGancho: "auto", modoIdentificacao: "auto", modoDireto: false, aoPartilhar: "perguntar", processarLinksDoCelular: !eCelular(), botaoColar: true, avisarLinkCopiado: true };
+      return { agendarComPoucaCerteza: false, simultaneos: MAX_SIMULTANEOS, modoGancho: "auto", modoIdentificacao: "auto", modoDireto: false, aoPartilhar: "perguntar", processarLinksDoCelular: !eCelular(), botaoColar: true, avisarLinkCopiado: true, legendaFicha: true };
     }
   }
 
@@ -1034,6 +1036,20 @@
         : window.CineClipMotor.legendasDaLista(opLegenda);
       legenda = variacao.legenda;
       if (variacao.modo !== "ia") item.aviso = (item.aviso ? item.aviso + " " : "") + "Legenda da lista usada como reserva (IA indisponível ou sem chave).";
+    }
+    /* Ficha técnica: só quando o filme foi mesmo confirmado no TMDB. Sem id
+       não há elenco, duração nem classificação para mostrar, e a ficha não se
+       inventa — nesse caso segue o caminho antigo (IA ou legenda simples). */
+    if (!legenda && estado.opcoes.legendaFicha && filme && filme.id && !filme._semNome) {
+      try {
+        var ficha = await window.CineClipMotor.legendaFicha(
+          { id: filme.id, kind: filme.kind || (filme.isTv ? "tv" : "movie"), title: filme.title },
+          { temporadaEpisodio: (ia && ia.temporada_episodio) || "" }
+        );
+        legenda = ficha.legenda;
+      } catch (e) {
+        item.aviso = (item.aviso ? item.aviso + " " : "") + "Não montei a ficha (" + String((e && e.message) || e).replace(/[.\s]+$/, "") + ") — segui com a legenda normal.";
+      }
     }
     if (!legenda) try {
       legenda = await core.gerarLegenda(s.groqKey, filme, s.lang, {

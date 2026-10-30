@@ -61,6 +61,11 @@
   var MAX_DOWNLOADS_SIMULTANEOS = 6;
   var DOWNLOADS_SIMULTANEOS_OMISSAO = 4;
 
+  // Quantos cortes o painel pede ao servidor. O /api/public/tendencias aceita
+  // até 100 (ver server/tendencias.mjs); o painel pedia 40 fixos.
+  var MAX_VIDEOS = 100;
+  var VIDEOS_OMISSAO = 60;
+
   var OPCOES_OMISSAO = {
     tags: "cenasdefilme, filmes, movieclips",
     perfis: "",
@@ -70,6 +75,7 @@
     salvarNoDispositivo: true,
     iniciarAutomatico: false,
     downloadsSimultaneos: DOWNLOADS_SIMULTANEOS_OMISSAO,
+    quantosVideos: VIDEOS_OMISSAO,
   };
 
   var OPCOES_NARRADOS_OMISSAO = {
@@ -84,6 +90,7 @@
     salvarNoDispositivo: true,
     iniciarAutomatico: false,
     downloadsSimultaneos: DOWNLOADS_SIMULTANEOS_OMISSAO,
+    quantosVideos: VIDEOS_OMISSAO,
   };
 
   function lerModoInicial() {
@@ -236,7 +243,7 @@
       q.set("minDur", String(o.minDuracao || 25));
       q.set("narrados", o.apenasNarrados === false ? "0" : "1");
     }
-    q.set("max", "40");
+    q.set("max", String(limiteVideos()));
     return q.toString();
   }
 
@@ -310,6 +317,7 @@
     estado.itens = Array.isArray(dados.itens) ? dados.itens : [];
     estado.estados = Array.isArray(dados.estados) ? dados.estados : [];
     estado.geradoEm = dados.geradoEm || Date.now();
+    estado.totalEncontrado = Number(dados.total) || 0;
     estado.jaBuscou = true;
     estado.jaBuscouPorModo[estado.modo] = true;
     estado.selecionados = {};
@@ -322,6 +330,12 @@
         : "Nada passou nos filtros. Baixa o mínimo de visualizações ou aumenta os dias.";
     } else if (falhas.length) {
       estado.aviso = "Mostrando vídeos das fontes disponíveis. " + falhas.length + " fonte(s) não respondeu(ram); veja os detalhes em Fontes da busca.";
+    } else if (estado.totalEncontrado > estado.itens.length) {
+      // Saber que sobrou coisa separa «as fontes não têm mais» de «os filtros
+      // cortaram» — sem isto, aumentar «Quantos vídeos» é tentativa às cegas.
+      estado.aviso =
+        "Mostrando " + estado.itens.length + " de " + estado.totalEncontrado +
+        " cortes encontrados. Para ver mais, sobe «Quantos vídeos» ou alivia os filtros.";
     }
     desenhar();
     resolverFilmes();
@@ -625,6 +639,14 @@
    * maior download de cada ronda, sem estourar a memória (cada ficheiro fica
    * inteiro em RAM até ir para o Upload em massa) nem levar bloqueio do CDN.
    */
+  /** Quantos cortes pedir ao servidor (o endpoint aceita 5 a 100). */
+  function limiteVideos() {
+    var o = opcoesAtuais();
+    var pedido = Number(o && o.quantosVideos);
+    if (!(pedido >= 5)) pedido = VIDEOS_OMISSAO;
+    return Math.max(5, Math.min(MAX_VIDEOS, Math.round(pedido)));
+  }
+
   function limiteSimultaneos(total) {
     var o = opcoesAtuais();
     var pedido = Number(o && o.downloadsSimultaneos);
@@ -1262,6 +1284,13 @@
         [14, "14 dias"],
         [30, "30 dias"],
         [60, "60 dias"],
+      ]),
+      campoListaDe(o, "Quantos vídeos", "quantosVideos", [
+        [20, "20"],
+        [40, "40"],
+        [60, "60 (padrão)"],
+        [80, "80"],
+        [100, "100 (máximo)"],
       ]),
       campoListaDe(o, "Downloads ao mesmo tempo", "downloadsSimultaneos", [
         [1, "1 (um por vez)"],
