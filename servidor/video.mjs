@@ -308,6 +308,40 @@ export function enquadramento(r, o, corte, i = 720, preset = "atual") {
   const temCorte = v > 0 || x > 0;
   const P = presetDoReel(preset);
   const A = alvoDaCaixa(P);
+
+  /* Caixa maleável ("livre"): em vez de uma proporção fixa, a caixa segue o
+     aspeto do próprio vídeo e é encaixada na faixa que sobra entre o gancho
+     (acima de `topo`) e o rodapé (abaixo de `caixaFim`). Não há recorte para
+     a forçar a um formato — por isso um 16:9 fica largo e baixo, e um vertical
+     ocupa a faixa toda em altura. */
+  if (P.caixa === "livre") {
+    const ty = Math.max(0, Math.round((f * P.topo) / 2) * 2);
+    const fy = Math.min(f, Math.round((f * (P.caixaFim || 0.95)) / 2) * 2);
+    const dh = Math.max(2, fy - ty);
+    // A largura é sempre a largura toda do 9:16: o vídeo vai de ponta a ponta.
+    const S = Math.max(2, Math.round((i * (1 - 2 * P.margem)) / 2) * 2);
+    let T = Math.max(2, Math.round((S * h) / w / 2) * 2);
+    let cy = v;
+    let cw = w;
+    let ch = h;
+    // Alto de mais para o espaço entre o gancho e o rodapé: corta na vertical
+    // (centrado) em vez de encolher a largura — a imagem nunca é esticada.
+    if (T > dh) {
+      T = Math.max(2, Math.round(dh / 2) * 2);
+      const nh = Math.max(2, Math.min(ch, Math.round((cw * T) / S / 2) * 2));
+      cy += Math.max(0, Math.round((ch - nh) / 2 / 2) * 2);
+      ch = nh;
+    }
+    const D = Math.max(0, Math.round((i - S) / 2 / 2) * 2);
+    const k = Math.max(0, Math.min(f - T, ty + Math.round((dh - T) / 2 / 2) * 2));
+    return {
+      outWidth: i, outHeight: f, vw: c, vh: u, hasCrop: cy > 0 || ch < u || cw < c,
+      cropX: 0, cropY: cy, cropW: cw, cropH: ch,
+      videoW: S, videoH: T, padX: D, padY: k,
+      radius: Math.max(0, Math.round(S * P.raio)), bg: P.fundo, preset: P.id,
+    };
+  }
+
   if (A > 0) {
     // Caixa fixa do preset: 1:1 com margens laterais (escuro) ou faixa 4:3 de
     // ponta a ponta (claro). O recorte é centrado e tem o mesmo aspeto da caixa,
@@ -441,7 +475,9 @@ export async function imagemDoGancho(largura, altura, padY, texto, estilo = {}) 
      e uma segunda linha por baixo — é o formato das capturas com o rodapé preto.
      Nesse caso a cor do texto vem do preset e não da conta: a cor por omissão da
      conta é verde, que sobre a faixa preta não é o que se quer. */
-  const rodape = String((caixa && caixa.rodape) || "").trim() || P.rodapePadrao || "";
+  /* O `rodapeFixo` do preset ganha ao texto da conta: nestes formatos o
+     rodapé é informação do próprio formato, não um campo editável. */
+  const rodape = P.rodapeFixo || String((caixa && caixa.rodape) || "").trim();
   if (comPreset && rodape && P.rodapeTamanho > 0) {
     const tamRodape = Math.round(largura * P.rodapeTamanho);
     const yRodape = Math.round(altura * (P.rodapeY || 0.9355));
@@ -462,7 +498,7 @@ export async function imagemDoGancho(largura, altura, padY, texto, estilo = {}) 
     if (P.rodapeNota && P.rodapeNotaTamanho > 0) {
       const tamNota = Math.round(largura * P.rodapeNotaTamanho);
       ctx.font = `700 ${tamNota}px Inter, "Noto Color Emoji", "Helvetica Neue", Arial, sans-serif`;
-      ctx.fillStyle = P.ganchoCor || "#000000";
+      ctx.fillStyle = P.rodapeNotaCor || P.ganchoCor || "#000000";
       ctx.fillText(P.rodapeNota, largura / 2, Math.round(altura * (P.rodapeNotaY || 0.938)), largura * 0.94);
     }
     ctx.restore();

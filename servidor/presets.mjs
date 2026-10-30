@@ -70,10 +70,13 @@ export const PRESETS_DO_REEL = {
   perfil: {
     id: "perfil",
     nome: "Claro · faixa preta no fim",
-    caixa: "banda",
+    // "livre": a caixa segue o aspeto do próprio vídeo, dentro da faixa que
+    // sobra entre o gancho (acima de `topo`) e o rodapé (abaixo de `caixaFim`).
+    caixa: "livre",
     margem: 0,
     raio: 0,
     topo: 0.301,
+    caixaFim: 0.84,
     fundo: "branco",
     bgMode: "branco",
     ganchoPill: false,
@@ -84,34 +87,48 @@ export const PRESETS_DO_REEL = {
     rodapeY: 0.884,
     rodapeCor: "#FFFFFF",
     // Faixa preenchida por trás do rodapé, a abraçar o texto (como a pílula do
-    // gancho). A cor do texto vem do preset e não da conta: verde sobre preto,
-    // que é o que a cor por omissão da conta daria, não é o que se quer aqui.
+    // gancho), com o texto na cor do preset.
     rodapeFaixa: true,
     rodapeFundo: "#000000",
-    rodapePadrao: "Onde assistir completo? Assista no LINK DA B10",
+    // Rodapé FIXO do preset: é informação do formato, não um campo da conta,
+    // por isso ganha ao `rodapeTexto` das definições.
+    rodapeFixo: "Link do filme completo na minha B10",
     // Segunda linha, por baixo da faixa, na cor do gancho.
     rodapeNota: "Nome do filme na legenda 🔽",
     rodapeNotaTamanho: 0.029,
     rodapeNotaY: 0.938,
+    // Cor própria: a segunda linha é texto sobre o fundo branco, não acompanha
+    // a cor do gancho (que no destaque é vermelha).
+    rodapeNotaCor: "#000000",
   },
   destaque: {
     id: "destaque",
     nome: "Claro · gancho vermelho",
-    caixa: "banda",
+    caixa: "livre",
     margem: 0,
     raio: 0,
-    topo: 0.301,
+    topo: 0.281,
+    caixaFim: 0.84,
     fundo: "branco",
     bgMode: "branco",
     ganchoPill: false,
-    ganchoTamanho: 0.066,
-    ganchoEntrelinha: 1.18,
+    ganchoTamanho: 0.052,
+    ganchoEntrelinha: 1.22,
     ganchoCor: "#EC1C24",
     // O contorno preto do gancho fica: o desenho liga-o por omissão em qualquer
     // cor que não seja preta, e é o que dá leitura ao vermelho sobre o branco.
-    rodapeTamanho: 0,
-    rodapeY: 0,
-    rodapeCor: "#2DBD2C",
+    rodapeTamanho: 0.033,
+    rodapeY: 0.884,
+    rodapeCor: "#FFFFFF",
+    rodapeFaixa: true,
+    rodapeFundo: "#000000",
+    rodapeFixo: "Link do filme completo na minha B10",
+    rodapeNota: "Nome do filme na legenda 🔽",
+    rodapeNotaTamanho: 0.029,
+    rodapeNotaY: 0.938,
+    // Cor própria: a segunda linha é texto sobre o fundo branco, não acompanha
+    // a cor do gancho (que no destaque é vermelha).
+    rodapeNotaCor: "#000000",
   },
 };
 

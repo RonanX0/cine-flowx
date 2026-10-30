@@ -95,20 +95,32 @@ e muda tudo de uma vez: o fundo, o estilo do gancho e a **caixa do vídeo**.
 | **Padrão do app** (`atual`) | preto (ou desfocado) | branco, com pílula escura | automática: 16:9 fica a 720×406, vertical preenche o 9:16 | — |
 | **Escuro** (`escuro`) | preto | fluorescente `#ECFA12`, 900, linhas coladas (0,88 em), sem pílula | **1:1** de 648 px, 5 % de margem lateral, cantos com raio de 30 px, do 27,4 % ao 78,0 % da altura | verde `#2DBD2C` a 93,55 % (texto opcional) |
 | **Claro** (`claro`) | branco | preto `#000000`, sem pílula | **faixa 4:3** de ponta a ponta (720×540), do 30,1 % ao 72,2 % da altura | — |
-| **Perfil** (`perfil`) | branco | preto `#000000`, sem pílula | a mesma faixa 4:3 do **Claro** | **faixa preta** a 88,4 % a abraçar o texto, letras brancas, e uma 2.ª linha a 93,8 % |
-| **Destaque** (`destaque`) | branco | vermelho `#EC1C24` com o contorno preto automático | a mesma faixa 4:3 do **Claro** | — |
+| **Perfil** (`perfil`) | branco | preto `#000000`, sem pílula | **maleável**: largura toda, altura a seguir o vídeo, entre 30,1 % e 84,0 % | **faixa preta** fixa a 88,4 % a abraçar o texto, letras brancas, e uma 2.ª linha preta a 93,8 % |
+| **Destaque** (`destaque`) | branco | vermelho `#EC1C24` (mais pequeno) com o contorno preto automático | **maleável**, largura toda, entre 28,1 % e 84,0 % | o mesmo rodapé fixo do **Perfil** |
 
-O **Perfil** e o **Destaque** não trazem geometria nova: reaproveitam a **caixa medida do
-Claro** e mudam só a tipografia e o rodapé, tirados de capturas enviadas pelo utilizador (não
-são medidas pixel a pixel de um Reel em 1080, ao contrário das do Escuro e do Claro).
-`tools/test-presets.mjs` verifica que a caixa deles continua a ser exatamente a do Claro, para
-não nascer uma segunda geometria a divergir em silêncio.
+O **Perfil** e o **Destaque** usam uma **caixa maleável** (`caixa: "livre"`), que é a diferença
+grande para os outros três:
 
-No **Perfil**, a cor do texto do rodapé vem do preset e não da conta: a cor por omissão da
-conta é verde, que sobre a faixa preta não é o que se quer. O texto da faixa continua a ser o
-da conta quando está preenchido; vazio, usa o `rodapePadrao` do preset. O cabeçalho de perfil
-das capturas (foto redonda, nome e @) **não** está incluído — precisa de uma imagem por conta,
-que o app ainda não guarda.
+- a **largura é sempre a largura toda** do 9:16 — o vídeo vai de ponta a ponta, sem margens
+  brancas nos lados;
+- a **altura segue o vídeo**, dentro da faixa que sobra entre o gancho (acima de `topo`) e o
+  rodapé (abaixo de `caixaFim`);
+- se o vídeo for alto de mais para essa faixa (um vertical, por exemplo), é **cortado na
+  vertical, centrado**, em vez de encolher — a imagem nunca é esticada nem ganha margens.
+
+Um 16:9 cabe inteiro e fica largo e baixo; um 9:16 ocupa a faixa toda e perde topo e fundo.
+
+`tools/test-presets.mjs` fixa o que não pode variar nisto: com fontes 16:9, 9:16 e 1:1, o
+vídeo ocupa a largura toda (`padX === 0`), o aspeto da caixa bate com o do recorte (não
+estica), o recorte é só vertical, e a caixa não sobe para cima do gancho nem desce para cima
+do rodapé.
+
+Nestes dois o rodapé é **fixo do preset** (`rodapeFixo`), não um campo da conta: é informação
+do formato e ganha ao `rodapeTexto` das definições. A cor do texto também vem do preset — a
+cor por omissão da conta é verde, que sobre a faixa preta não é o que se quer.
+
+O cabeçalho de perfil das capturas (foto redonda, nome e @) **não** está incluído — precisa de
+uma imagem por conta, que o app ainda não guarda.
 
 As medidas dos dois presets foram tiradas **pixel a pixel** de duas capturas de Reels reais
 (`formato-1.png` e `formato-2.png`, na raiz do repositório) — nada foi inventado:

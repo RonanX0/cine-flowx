@@ -153,23 +153,51 @@ check("fundos: escuro preto, claro branco", PRESETS_DO_REEL.escuro.fundo === "pr
 check("gancho: escuro fluorescente, claro preto, atual branco", PRESETS_DO_REEL.escuro.ganchoCor === "#ECFA12" && PRESETS_DO_REEL.claro.ganchoCor === "#000000" && PRESETS_DO_REEL.atual.ganchoCor === "#FFFFFF");
 check("só o atual leva a pílula por trás do gancho", PRESETS_DO_REEL.atual.ganchoPill === true && PRESETS_DO_REEL.escuro.ganchoPill === false && PRESETS_DO_REEL.claro.ganchoPill === false);
 check("rodapé só no escuro (verde, a 93,55% da altura)", PRESETS_DO_REEL.escuro.rodapeTamanho > 0 && PRESETS_DO_REEL.escuro.rodapeCor === "#2DBD2C" && PRESETS_DO_REEL.claro.rodapeTamanho === 0 && PRESETS_DO_REEL.atual.rodapeTamanho === 0);
-/* Os dois formatos novos reaproveitam a caixa do «claro», que foi medida numa
-   captura real; o que muda neles é só a tipografia e o rodapé, tirados das
-   capturas que o utilizador enviou. Por isso o que se testa aqui é a caixa ser
-   mesmo a mesma — e não uma segunda geometria a divergir em silêncio. */
-check("perfil e destaque usam a caixa medida do «claro»", ["perfil", "destaque"].every((k) =>
-  PRESETS_DO_REEL[k].caixa === PRESETS_DO_REEL.claro.caixa &&
-  PRESETS_DO_REEL[k].topo === PRESETS_DO_REEL.claro.topo &&
-  PRESETS_DO_REEL[k].margem === 0 && PRESETS_DO_REEL[k].raio === 0));
+/* Os dois formatos novos não têm caixa de proporção fixa: ela segue o aspeto do
+   vídeo e encaixa na faixa que sobra entre o gancho e o rodapé. O que aqui se
+   fixa é o que não pode variar — a caixa não subir para cima do gancho nem
+   descer para cima do rodapé, e a imagem não ser esticada. */
+check("perfil e destaque usam a caixa maleável", ["perfil", "destaque"].every((k) =>
+  PRESETS_DO_REEL[k].caixa === "livre" && PRESETS_DO_REEL[k].caixaFim > PRESETS_DO_REEL[k].topo));
 check("perfil e destaque são de fundo branco e sem pílula", ["perfil", "destaque"].every((k) =>
   PRESETS_DO_REEL[k].fundo === "branco" && PRESETS_DO_REEL[k].ganchoPill === false));
-check("perfil = rodapé em faixa preta com texto branco e segunda linha",
-  PRESETS_DO_REEL.perfil.rodapeFaixa === true && PRESETS_DO_REEL.perfil.rodapeFundo === "#000000" &&
-  PRESETS_DO_REEL.perfil.rodapeCor === "#FFFFFF" && PRESETS_DO_REEL.perfil.rodapeTamanho > 0 &&
-  /LINK DA B10/.test(PRESETS_DO_REEL.perfil.rodapePadrao) && /legenda/.test(PRESETS_DO_REEL.perfil.rodapeNota));
-check("destaque = gancho vermelho, sem rodapé",
-  PRESETS_DO_REEL.destaque.ganchoCor === "#EC1C24" && PRESETS_DO_REEL.destaque.rodapeTamanho === 0 &&
-  !PRESETS_DO_REEL.destaque.rodapeFaixa);
+
+for (const id of ["perfil", "destaque"]) {
+  const P = PRESETS_DO_REEL[id];
+  const deitado = Eh(1920, 1080, { top: 0, bottom: 0, vw: 1920, vh: 1080 }, 720, id);
+  const vertical = Eh(1080, 1920, { top: 0, bottom: 0, vw: 1080, vh: 1920 }, 720, id);
+  const quadrado = Eh(1080, 1080, { top: 0, bottom: 0, vw: 1080, vh: 1080 }, 720, id);
+
+  for (const [nome, caixa] of [["16:9", deitado], ["9:16", vertical], ["1:1", quadrado]]) {
+    check(`${id} ${nome}: o vídeo ocupa a largura toda, de ponta a ponta`,
+      caixa.videoW === caixa.outWidth && caixa.padX === 0, `videoW=${caixa.videoW} padX=${caixa.padX}`);
+    // O aspeto da caixa tem de bater com o do RECORTE (não com o do original):
+    // é isso que garante que o ffmpeg escala sem esticar a imagem.
+    const aspeto = caixa.videoW / caixa.videoH;
+    const aspetoRecorte = caixa.cropW / caixa.cropH;
+    check(`${id} ${nome}: a imagem não é esticada`,
+      Math.abs(aspeto - aspetoRecorte) < 0.02, `caixa ${aspeto.toFixed(3)} vs recorte ${aspetoRecorte.toFixed(3)}`);
+    check(`${id} ${nome}: a caixa não invade o espaço do gancho`,
+      caixa.padY >= Math.floor(caixa.outHeight * P.topo) - 2, `padY=${caixa.padY} topo=${Math.round(caixa.outHeight * P.topo)}`);
+    check(`${id} ${nome}: a caixa não invade o rodapé`,
+      caixa.padY + caixa.videoH <= Math.ceil(caixa.outHeight * P.caixaFim) + 2,
+      `fim=${caixa.padY + caixa.videoH} limite=${Math.round(caixa.outHeight * P.caixaFim)}`);
+    check(`${id} ${nome}: se corta, corta só na vertical`,
+      caixa.cropX === 0 && caixa.cropW === caixa.vw, JSON.stringify({ cropX: caixa.cropX, cropW: caixa.cropW, vw: caixa.vw }));
+  }
+  check(`${id}: um 16:9 cabe inteiro, sem recorte`, deitado.cropH === deitado.vh, `${deitado.cropH} vs ${deitado.vh}`);
+  check(`${id}: um vertical é cortado para caber, e fica mais alto do que o 16:9`,
+    vertical.cropH < vertical.vh && vertical.videoH > deitado.videoH, `${vertical.videoH} vs ${deitado.videoH}`);
+}
+
+check("o rodapé é fixo no preset e ganha ao texto da conta", ["perfil", "destaque"].every((k) =>
+  /B10/.test(PRESETS_DO_REEL[k].rodapeFixo) && PRESETS_DO_REEL[k].rodapeFaixa === true &&
+  PRESETS_DO_REEL[k].rodapeFundo === "#000000" && PRESETS_DO_REEL[k].rodapeCor === "#FFFFFF" &&
+  /legenda/.test(PRESETS_DO_REEL[k].rodapeNota)));
+check("destaque = gancho vermelho, menor do que o do perfil",
+  PRESETS_DO_REEL.destaque.ganchoCor === "#EC1C24" &&
+  PRESETS_DO_REEL.destaque.ganchoTamanho < PRESETS_DO_REEL.perfil.ganchoTamanho,
+  `${PRESETS_DO_REEL.destaque.ganchoTamanho} vs ${PRESETS_DO_REEL.perfil.ganchoTamanho}`);
 check("o contorno preto do gancho continua ligado para cor que não seja preta",
   /usaBordaPreta=!\/\^#\(\?:000\|000000\)\$\/i\.test/.test(modulo), "o desenho perdeu a borda automática");
 
