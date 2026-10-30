@@ -162,6 +162,15 @@ Em qualquer cartão (ou selecionando vários cartões de uma vez):
 - **⬇️ Baixar HD e ir pro Upload** — descarrega o `.mp4` em **alta qualidade (1080p/HD sem marca d'água)** via `/api/public/importar?hd=1`, **salva o `.mp4` na pasta Downloads** do teu PC/celular (já com o nome do filme confirmado) **e abre automaticamente o 📦 Upload em massa** com o vídeo carregado na fila e a pista do filme preenchida. Se o master 1080p vier em H.265/HEVC num PC cujo navegador não abre imagem HEVC, o ficheiro 1080p continua salvo nos Downloads e o painel baixa automaticamente a versão H.264 compatível para o Upload em massa nunca travar.
 - **📥 Levar pro CineClip** / **☁️ Nuvem** / **💾 Só .mp4** — atalhos opcionais para enviar só o link, processar na nuvem ou apenas guardar o `.mp4` local.
 
+Num lote grande (selecionar todos e baixar 17 cortes de uma vez, por exemplo) os
+downloads correm **em paralelo**: por omissão **4 ao mesmo tempo**, ajustável de 1 a 6
+em **Downloads ao mesmo tempo**. Um corte lento deixa de segurar a fila, e o tempo
+total aproxima-se do maior download de cada ronda em vez da soma de todos. A ordem
+não muda: o 📦 Upload em massa recebe os vídeos **na ordem em que os cartões foram
+selecionados**, mesmo quando terminam fora de ordem. Com o limite em **1** volta o
+comportamento antigo, um por vez — útil em ligações fracas ou se o CDN começar a
+recusar pedidos simultâneos.
+
 A busca de tendências não usa Apify nem exige token. Perfis são lidos a partir do JSON público de perfis incorporados do TikTok; hashtags e termos tentam o TikWM gratuito e as páginas públicas do TikTok. Se nenhuma fonte trouxer vídeos e nenhum perfil tiver sido escolhido, há uma tentativa com os perfis sugeridos `@teusflix` e `@cinemaemminutos3`. Eles são editáveis pelo campo Perfis (não são um catálogo global).
 
 Perfis incorporados trazem uma seleção de até dez vídeos recentes. Podem faltar duração, curtidas, comentários e compartilhamentos: não são inventados e a interface mostra dados indisponíveis. Quando não há data explícita, ela é estimada a partir do identificador do vídeo e sinalizada na interface. O filtro de duração só se aplica a valores conhecidos; views e idade continuam sendo filtrados. O TikTok pode restringir páginas públicas: isso aparece como erro por fonte, sem exigir assinatura de outro serviço.

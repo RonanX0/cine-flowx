@@ -58,6 +58,9 @@
     "historia completa do filme",
   ];
 
+  var MAX_DOWNLOADS_SIMULTANEOS = 6;
+  var DOWNLOADS_SIMULTANEOS_OMISSAO = 4;
+
   var OPCOES_OMISSAO = {
     tags: "cenasdefilme, filmes, movieclips",
     perfis: "",
@@ -66,6 +69,7 @@
     esconderUsados: true,
     salvarNoDispositivo: true,
     iniciarAutomatico: false,
+    downloadsSimultaneos: DOWNLOADS_SIMULTANEOS_OMISSAO,
   };
 
   var OPCOES_NARRADOS_OMISSAO = {
@@ -79,6 +83,7 @@
     esconderUsados: true,
     salvarNoDispositivo: true,
     iniciarAutomatico: false,
+    downloadsSimultaneos: DOWNLOADS_SIMULTANEOS_OMISSAO,
   };
 
   function lerModoInicial() {
@@ -613,6 +618,38 @@
     };
   }
 
+  /**
+   * Quantos downloads HD correm ao mesmo tempo. Um corte narrado em 1080p são
+   * dezenas de MB: em fila indiana, 17 cortes deixam a barra parada muito tempo
+   * e a ligação subaproveitada. Em paralelo o tempo total cai para perto do
+   * maior download de cada ronda, sem estourar a memória (cada ficheiro fica
+   * inteiro em RAM até ir para o Upload em massa) nem levar bloqueio do CDN.
+   */
+  function limiteSimultaneos(total) {
+    var o = opcoesAtuais();
+    var pedido = Number(o && o.downloadsSimultaneos);
+    if (!(pedido >= 1)) pedido = DOWNLOADS_SIMULTANEOS_OMISSAO;
+    return Math.max(1, Math.min(MAX_DOWNLOADS_SIMULTANEOS, Math.round(pedido), total));
+  }
+
+  /**
+   * Corre `tarefa(item, idx)` sobre a lista com no máximo `limite` em voo.
+   * Cada corredor puxa o próximo índice livre, por isso um download lento não
+   * segura os seguintes. `tarefa` trata os seus próprios erros (aqui, cada
+   * falha fica no slot do item), logo não há promessa rejeitada à solta.
+   */
+  function emParalelo(lista, limite, tarefa) {
+    var proximo = 0;
+    function corredor() {
+      if (proximo >= lista.length) return Promise.resolve();
+      var meu = proximo++;
+      return Promise.resolve(tarefa(lista[meu], meu)).then(corredor);
+    }
+    var corredores = [];
+    for (var i = 0; i < limite; i++) corredores.push(corredor());
+    return Promise.all(corredores);
+  }
+
   function atualizarProgressoDOM(id) {
     if (!raiz) return;
     var info = estado.baixando[id];
@@ -655,7 +692,11 @@
     estado.aviso =
       lista.length === 1
         ? "⬇️ A baixar o vídeo em alta qualidade (HD)…"
-        : "⬇️ A baixar " + lista.length + " vídeos em alta qualidade (HD)…";
+        : "⬇️ A baixar " +
+          lista.length +
+          " vídeos em alta qualidade (HD), " +
+          limiteSimultaneos(lista.length) +
+          " ao mesmo tempo…";
     if (lista.length > 1) estado.aBaixarLote = true;
     lista.forEach(function (it) {
       estado.baixando[it.id] = { texto: "⬇️ A conectar ao CDN em HD…", pct: 8 };
@@ -667,8 +708,14 @@
     var qualidadesObtidas = [];
     var salvosLocal = 0;
 
-    for (var idx = 0; idx < lista.length; idx++) {
-      var item = lista[idx];
+    /* Os resultados vão para slots por índice, não com push: os downloads
+       terminam fora de ordem e a fila do Upload em massa (e as mensagens) têm
+       de sair na ordem em que os cartões foram selecionados. */
+    var slotsUpload = new Array(lista.length);
+    var slotsQualidade = new Array(lista.length);
+    var slotsFalha = new Array(lista.length);
+
+    async function baixarUm(item, idx) {
       try {
         var resHd = await requisitarImportacao(item.url, "&hd=1", function (rec, tot) {
           var pct = tot > 0 ? Math.round((rec / tot) * 100) : 55;
@@ -722,13 +769,21 @@
           bytes: ficheiroHd.size,
         };
         gravarJson(CHAVE_BAIXADOS, estado.baixados);
-        qualidadesObtidas.push((resHd.qualidade || "HD").toUpperCase() + " · " + bytesLegiveis(ficheiroHd.size));
-        if (!soBaixar) ficheirosParaUpload.push(ficheiroUpload);
+        slotsQualidade[idx] = (resHd.qualidade || "HD").toUpperCase() + " · " + bytesLegiveis(ficheiroHd.size);
+        if (!soBaixar) slotsUpload[idx] = ficheiroUpload;
       } catch (e) {
         delete estado.baixando[item.id];
-        falhasDownload.push((item.autor ? "@" + item.autor : item.id) + ": " + (e && e.message ? e.message : "falhou"));
+        slotsFalha[idx] = (item.autor ? "@" + item.autor : item.id) + ": " + (e && e.message ? e.message : "falhou");
       }
       desenhar();
+    }
+
+    await emParalelo(lista, limiteSimultaneos(lista.length), baixarUm);
+
+    for (var s = 0; s < lista.length; s++) {
+      if (slotsUpload[s]) ficheirosParaUpload.push(slotsUpload[s]);
+      if (slotsQualidade[s]) qualidadesObtidas.push(slotsQualidade[s]);
+      if (slotsFalha[s]) falhasDownload.push(slotsFalha[s]);
     }
 
     estado.aBaixarLote = false;
@@ -1207,6 +1262,14 @@
         [14, "14 dias"],
         [30, "30 dias"],
         [60, "60 dias"],
+      ]),
+      campoListaDe(o, "Downloads ao mesmo tempo", "downloadsSimultaneos", [
+        [1, "1 (um por vez)"],
+        [2, "2"],
+        [3, "3"],
+        [4, "4 (padrão)"],
+        [5, "5"],
+        [6, "6 (ligação rápida)"],
       ]),
       campoListaDe(o, "Mínimo de views", "minViews", [
         [5000, "5 mil"],
