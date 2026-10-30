@@ -589,7 +589,7 @@ Responda SOMENTE com JSON válido:
 `).map(_=>_gcLimpa(_)).filter(_=>_.length>=8&&_.length<110&&!_.startsWith("{")&&!/:$/.test(_)&&!/^cena\b\s*:/i.test(_)&&!_gcEhGenerico(_));return{cena:String((extraObj&&extraObj.cena)||"").trim(),ganchos:w.slice(0,3).length?w.slice(0,3):_gcFallbackCena(extraObj&&extraObj.cena,f,mNorm),modo:mNorm}}}/* ==CINECLIP-VIDSCIO-ENGINE== Motor de identificação multi-provedor, âncoras semânticas e consenso (estilo VidScio) */
 const _vsCache=new Map;
 function _vsNorm(s){return String(s||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^\p{L}\p{N}\s]/gu," ").replace(/\s+/g," ").trim()}
-function _vsCleanTitle(s){return String(s||"").replace(/\s*\(\d{4}(?:\s*[-–]\s*\d{4})?\)\s*/g," ").replace(/\s*[(\[](?:filme|s[eé]rie(?:\s+de\s+tv)?|tv\s+series|movie|dublado|legendado|hd|4k)[)\]]\s*/gi," ").replace(/\s*[-–:|]?\s*(?:\d+[ªaºo]?\s*)?(?:temporada|season|parte|part|temp\.?|ep\.?|epis[oó]dio|s\d{1,2}e\d{1,2}|t\d{1,2}e\d{1,2})\b.*/i,"").replace(/\s*[-–:|]+\s*$/,"").replace(/\s+/g," ").trim()}
+function _vsCleanTitle(s){return String(s||"").replace(/\s*\(\d{4}(?:\s*[-–]\s*\d{4})?\)\s*/g," ").replace(/\s*[(\[](?:filme|s[eé]rie(?:\s+de\s+tv)?|tv\s+series|movie|dublado|legendado|hd|4k)[)\]]\s*/gi," ").replace(/\s*[-–:|]?\s*(?:\d+[ªaºo]?\s*)?(?:temporada|season|parte|part|temp\.?|ep\.?|epis[oó]dio|s\d{1,2}e\d{1,2}|t\d{1,2}e\d{1,2})\b.*/i,"").replace(/[(\[]\s*[)\]]/g," ").replace(/\s*[(\[]\s*$/,"").replace(/^\s*[)\]]\s*/,"").replace(/\s*[-–:|]+\s*$/,"").replace(/\s+/g," ").trim()}
 function _vsExtrairJson(txt){
   let s=String(txt||"").replace(/```json\s*|```\s*/gi,"").trim();
   const i=s.indexOf("{");
