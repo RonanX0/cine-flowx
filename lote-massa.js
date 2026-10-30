@@ -244,9 +244,11 @@
         processarLinksDoCelular: typeof o.processarLinksDoCelular === "boolean" ? o.processarLinksDoCelular : !eCelular(),
         botaoColar: o.botaoColar !== false,
         avisarLinkCopiado: o.avisarLinkCopiado !== false,
+        // Ficha técnica como legenda; só se aplica a vídeos com filme confirmado.
+        legendaFicha: o.legendaFicha !== false,
       };
     } catch (e) {
-      return { agendarComPoucaCerteza: false, simultaneos: MAX_SIMULTANEOS, modoGancho: "auto", modoIdentificacao: "auto", modoDireto: false, aoPartilhar: "perguntar", processarLinksDoCelular: !eCelular(), botaoColar: true, avisarLinkCopiado: true };
+      return { agendarComPoucaCerteza: false, simultaneos: MAX_SIMULTANEOS, modoGancho: "auto", modoIdentificacao: "auto", modoDireto: false, aoPartilhar: "perguntar", processarLinksDoCelular: !eCelular(), botaoColar: true, avisarLinkCopiado: true, legendaFicha: true };
     }
   }
 
@@ -631,7 +633,7 @@
     var s = app.settings || {};
     var modoIdent = (estado.opcoes && estado.opcoes.modoDireto) ? "sem_id" : ((estado.opcoes && estado.opcoes.modoIdentificacao) || s.identMode || "auto");
     var temIA = !!String(s.groqKey || "").trim() || !!String(s.openrouterKey || "").trim() || !!String(s.geminiKey || "").trim();
-    if (!temIA && modoIdent !== "sem_id") return "Adiciona a tua chave Google Gemini, Groq ou OpenRouter nas configurações — a IA identifica o filme e cria o gancho e a legenda.";
+    if (!temIA && modoIdent !== "sem_id" && modoIdent !== "dica") return "Adiciona a tua chave Google Gemini, Groq ou OpenRouter nas configurações — a IA identifica o filme e cria o gancho e a legenda.";
     if (!String(s.tmdbKey || "").trim() && modoIdent !== "sem_id") return "Adiciona a tua chave TMDB nas configurações — é ela que confirma o filme e traz o pôster e a sinopse.";
     if (!app.account || !app.account.id) return "Escolhe uma conta do Instagram no topo do app.";
     return null;
@@ -766,11 +768,11 @@
     definirPasso(item, modoIdent === "sem_id" ? "A preparar corte direto…" : "A identificar o filme…", 0.1);
     var temGemini = !!String(s.geminiKey || "").trim();
     // O áudio também serve à Groq (Whisper transcreve as falas) — não só ao Gemini.
-    var querAudio = modoIdent !== "sem_id" && (temGemini || !!String(s.groqKey || "").trim());
+    var querAudio = modoIdent !== "sem_id" && modoIdent !== "dica" && (temGemini || !!String(s.groqKey || "").trim());
     var capturaParalela = await Promise.all([
       core.quadros(ficheiro, 0, fim, corte),
       querAudio ? Promise.resolve().then(function () { return core.audio(ficheiro, 0, fim); }).catch(function () { return null; }) : Promise.resolve(null),
-      modoIdent !== "sem_id" && temGemini && typeof core.videoParaIA === "function"
+      modoIdent !== "sem_id" && modoIdent !== "dica" && temGemini && typeof core.videoParaIA === "function"
         ? Promise.resolve().then(function () { return core.videoParaIA(ficheiro, 0, fim); }).catch(function () { return null; })
         : Promise.resolve(null),
     ]);
@@ -835,18 +837,12 @@
         }
       }
       filme = await core.procurarTmdb(s.tmdbKey, ia);
-      // «Rápido por Nome» vai direto ao TMDB, sem a IA de vídeo. Se o nome não bateu
-      // com nenhum título, cai para a análise completa em vez de falhar.
-      if (!filme && ia && ia.provedor === "dica" && modoIdent === "dica") {
-        definirPasso(item, "Nome não encontrado — a analisar o vídeo…", 0.12);
-        try {
-          var iaCompleta = await core.identificar(s.groqKey, quadros, s.lang, Object.assign({}, optsIdent, { identMode: "auto" }));
-          if (iaCompleta && (iaCompleta.titulo || iaCompleta.imdb_id || (iaCompleta.atores && iaCompleta.atores.length))) {
-            ia = iaCompleta;
-            filme = await core.procurarTmdb(s.tmdbKey, ia);
-          }
-        } catch (e) {}
-      }
+      /* «⚡ Rápido por Nome» é name-only de propósito: quem o escolhe quer
+         evitar a IA (quota e tempo), não "tentar o nome e, se falhar, analisar
+         o vídeo à mesma" — era isso que fazia a IA correr mesmo neste modo.
+         Nome que não bate no TMDB segue o caminho normal daqui para baixo:
+         com «Agendar mesmo com pouca certeza» vai com o título do ficheiro,
+         sem ela fica marcado para rever. */
       if (!filme && Array.isArray(ia.alternativas) && ia.alternativas.length) {
         for (var altIdx = 0; altIdx < ia.alternativas.length; altIdx++) {
           var altCand = ia.alternativas[altIdx];
@@ -1034,6 +1030,20 @@
         : window.CineClipMotor.legendasDaLista(opLegenda);
       legenda = variacao.legenda;
       if (variacao.modo !== "ia") item.aviso = (item.aviso ? item.aviso + " " : "") + "Legenda da lista usada como reserva (IA indisponível ou sem chave).";
+    }
+    /* Ficha técnica: só quando o filme foi mesmo confirmado no TMDB. Sem id
+       não há elenco, duração nem classificação para mostrar, e a ficha não se
+       inventa — nesse caso segue o caminho antigo (IA ou legenda simples). */
+    if (!legenda && estado.opcoes.legendaFicha && filme && filme.id && !filme._semNome) {
+      try {
+        var ficha = await window.CineClipMotor.legendaFicha(
+          { id: filme.id, kind: filme.kind || (filme.isTv ? "tv" : "movie"), title: filme.title },
+          { temporadaEpisodio: (ia && ia.temporada_episodio) || "" }
+        );
+        legenda = ficha.legenda;
+      } catch (e) {
+        item.aviso = (item.aviso ? item.aviso + " " : "") + "Não montei a ficha (" + String((e && e.message) || e).replace(/[.\s]+$/, "") + ") — segui com a legenda normal.";
+      }
     }
     if (!legenda) try {
       legenda = await core.gerarLegenda(s.groqKey, filme, s.lang, {

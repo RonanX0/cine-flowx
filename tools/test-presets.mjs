@@ -96,13 +96,15 @@ const codigo = [
 
 /** Canvas falso que regista tudo o que o `_h` desenha. */
 function canvasFalso() {
-  const chamadas = { fillText: [], strokeText: [], fill: [], arc: [], roundRect: [], cores: [], fonts: [] };
+  const chamadas = { fillText: [], strokeText: [], fill: [], arc: [], roundRect: [], cores: [], fonts: [], drawImage: [], fillRect: [] };
   const ctx = {
     font: "", fillStyle: "", textAlign: "", textBaseline: "",
     shadowColor: "", shadowBlur: 0, shadowOffsetX: 0, shadowOffsetY: 0,
     strokeStyle: "", lineWidth: 0, lineJoin: "", lineCap: "", miterLimit: 0,
-    clearRect() {}, save() {}, restore() {}, beginPath() {}, closePath() {},
-    moveTo() {}, rect() {}, stroke() {},
+    clearRect() {}, save() {}, restore() {}, beginPath() {}, closePath() {}, clip() {},
+    drawImage(...a) { chamadas.drawImage.push(a); },
+    moveTo() {}, lineTo() {}, rect() {}, stroke() {},
+    fillRect(...a) { chamadas.fillRect.push({ args: a, cor: ctx.fillStyle }); },
     roundRect(...a) { chamadas.roundRect.push(a); },
     arc(...a) { chamadas.arc.push(a); },
     fill(regra) { chamadas.fill.push({ regra: regra || "nonzero", cor: ctx.fillStyle }); },
@@ -129,9 +131,11 @@ const api = contexto.api;
 const { PRESETS_DO_REEL, Eh, _h, caixaDoPreset } = api;
 
 /** Desenha o gancho como o app desenha (GS/Im) e devolve o registo do canvas. */
-function desenhar(preset, texto, geo, { rodape = "", rodapeCor = "", cor = "" } = {}) {
+function desenhar(preset, texto, geo, { rodape = "", rodapeCor = "", cor = "", perfil } = {}) {
   const { canvas, chamadas } = canvasFalso();
   const caixa = caixaDoPreset(preset, geo, rodape, rodapeCor);
+  // No app o perfil vem das definições da conta; no teste injeta-se à mão.
+  if (perfil !== undefined) caixa.perfil = perfil;
   _h(canvas, geo.outWidth, geo.outHeight, geo.padY, texto, !texto, cor, preset, caixa);
   return { canvas, chamadas, caixa };
 }
@@ -142,17 +146,131 @@ function desenhar(preset, texto, geo, { rodape = "", rodapeCor = "", cor = "" } 
   const htmlCor = fs.readFileSync(path.join(root, "index.html"), "utf8");
   check("cor do gancho: grava só depois de parar de mexer (debounce)", htmlCor.includes("window.__ccCorH=setTimeout(()=>ye({hookColor:v,hookTextColor:v}),700)"));
   check("cor do rodapé: idem", htmlCor.includes("window.__ccCorF=setTimeout(()=>ye({footerColor:v,rodapeCor:v}),700)"));
+  /* Os campos de TEXTO tinham o mesmo problema: cada tecla gravava o cofre
+     inteiro na nuvem e escrever ficava aos solavancos. Passam a ser campos
+     não-controlados com o mesmo atraso dos seletores de cor. */
+  for (const [campo, timer] of [["footerText", "__ccTxtRodape"], ["perfilNome", "__ccTxtNome"], ["perfilArroba", "__ccTxtArroba"]]) {
+    check(`${campo}: grava só depois de parar de escrever`, htmlCor.includes(`window.${timer}=setTimeout(`), campo);
+    check(`${campo}: grava ao sair do campo, para não se perder a última tecla`, htmlCor.includes(`window.${timer}=0;ye({`), campo);
+    check(`${campo}: já não grava a cada tecla`, !htmlCor.includes(`type:"text",value:j.${campo}`), campo);
+  }
+  /* A foto do perfil vive nas definições da conta, que vão para o localStorage
+     (~5 MB) e para o cofre. Guardar o ficheiro original em base64 enche a quota
+     num instante, e o `setItem` a rebentar faz a gravação inteira falhar — as
+     definições parecem "desaparecer". Por isso a reserva, quando não consegue
+     reduzir a imagem, fica SEM foto em vez de guardar a original. */
+  check("a foto é reduzida a 160px antes de ser guardada", htmlCor.includes('cv.width=L;cv.height=L') && htmlCor.includes('const L=160'));
+  check("falhando a redução, não guarda a imagem original", !htmlCor.includes("ye({perfilAvatar:src})"), "ainda guarda o src cru");
+  check("e avisa em vez de falhar calado", htmlCor.includes('ye({perfilAvatar:""});alert('));
   check("os seletores já não regravam o cofre a cada evento", !htmlCor.includes("onChange:N=>ye({hookColor:N.target.value,hookTextColor:N.target.value})") && !htmlCor.includes("onChange:N=>ye({footerColor:N.target.value,rodapeCor:N.target.value})"));
 }
 
 console.log("\n1. A tabela de presets (medidas das capturas)");
-check("três presets: atual, escuro e claro", ["atual", "escuro", "claro"].every((k) => PRESETS_DO_REEL[k]), Object.keys(PRESETS_DO_REEL).join(","));
+check("cinco presets: atual, escuro, claro, perfil e destaque", ["atual", "escuro", "claro", "perfil", "destaque"].every((k) => PRESETS_DO_REEL[k]), Object.keys(PRESETS_DO_REEL).join(","));
 check("escuro = caixa 1:1 com margens e cantos arredondados", PRESETS_DO_REEL.escuro.caixa === "quadrado" && PRESETS_DO_REEL.escuro.margem === 0.05 && PRESETS_DO_REEL.escuro.raio > 0);
 check("claro = faixa 4:3 de ponta a ponta, sem cantos", PRESETS_DO_REEL.claro.caixa === "banda" && PRESETS_DO_REEL.claro.margem === 0 && PRESETS_DO_REEL.claro.raio === 0);
 check("fundos: escuro preto, claro branco", PRESETS_DO_REEL.escuro.fundo === "preto" && PRESETS_DO_REEL.claro.fundo === "branco");
 check("gancho: escuro fluorescente, claro preto, atual branco", PRESETS_DO_REEL.escuro.ganchoCor === "#ECFA12" && PRESETS_DO_REEL.claro.ganchoCor === "#000000" && PRESETS_DO_REEL.atual.ganchoCor === "#FFFFFF");
 check("só o atual leva a pílula por trás do gancho", PRESETS_DO_REEL.atual.ganchoPill === true && PRESETS_DO_REEL.escuro.ganchoPill === false && PRESETS_DO_REEL.claro.ganchoPill === false);
 check("rodapé só no escuro (verde, a 93,55% da altura)", PRESETS_DO_REEL.escuro.rodapeTamanho > 0 && PRESETS_DO_REEL.escuro.rodapeCor === "#2DBD2C" && PRESETS_DO_REEL.claro.rodapeTamanho === 0 && PRESETS_DO_REEL.atual.rodapeTamanho === 0);
+/* Os dois formatos novos não têm caixa de proporção fixa: ela segue o aspeto do
+   vídeo e encaixa na faixa que sobra entre o gancho e o rodapé. O que aqui se
+   fixa é o que não pode variar — a caixa não subir para cima do gancho nem
+   descer para cima do rodapé, e a imagem não ser esticada. */
+check("perfil e destaque usam a caixa maleável", ["perfil", "destaque"].every((k) =>
+  PRESETS_DO_REEL[k].caixa === "livre" && PRESETS_DO_REEL[k].caixaFim > PRESETS_DO_REEL[k].topo));
+check("perfil e destaque são de fundo branco e sem pílula", ["perfil", "destaque"].every((k) =>
+  PRESETS_DO_REEL[k].fundo === "branco" && PRESETS_DO_REEL[k].ganchoPill === false));
+
+for (const id of ["perfil", "destaque"]) {
+  const P = PRESETS_DO_REEL[id];
+  const deitado = Eh(1920, 1080, { top: 0, bottom: 0, vw: 1920, vh: 1080 }, 720, id);
+  const vertical = Eh(1080, 1920, { top: 0, bottom: 0, vw: 1080, vh: 1920 }, 720, id);
+  const quadrado = Eh(1080, 1080, { top: 0, bottom: 0, vw: 1080, vh: 1080 }, 720, id);
+
+  for (const [nome, caixa] of [["16:9", deitado], ["9:16", vertical], ["1:1", quadrado]]) {
+    check(`${id} ${nome}: o vídeo ocupa a largura toda, de ponta a ponta`,
+      caixa.videoW === caixa.outWidth && caixa.padX === 0, `videoW=${caixa.videoW} padX=${caixa.padX}`);
+    // O aspeto da caixa tem de bater com o do RECORTE (não com o do original):
+    // é isso que garante que o ffmpeg escala sem esticar a imagem.
+    const aspeto = caixa.videoW / caixa.videoH;
+    const aspetoRecorte = caixa.cropW / caixa.cropH;
+    check(`${id} ${nome}: a imagem não é esticada`,
+      Math.abs(aspeto - aspetoRecorte) < 0.02, `caixa ${aspeto.toFixed(3)} vs recorte ${aspetoRecorte.toFixed(3)}`);
+    check(`${id} ${nome}: a caixa não invade o espaço do gancho`,
+      caixa.padY >= Math.floor(caixa.outHeight * P.topo) - 2, `padY=${caixa.padY} topo=${Math.round(caixa.outHeight * P.topo)}`);
+    check(`${id} ${nome}: a caixa não invade o rodapé`,
+      caixa.padY + caixa.videoH <= Math.ceil(caixa.outHeight * P.caixaFim) + 2,
+      `fim=${caixa.padY + caixa.videoH} limite=${Math.round(caixa.outHeight * P.caixaFim)}`);
+    check(`${id} ${nome}: se corta, corta só na vertical`,
+      caixa.cropX === 0 && caixa.cropW === caixa.vw, JSON.stringify({ cropX: caixa.cropX, cropW: caixa.cropW, vw: caixa.vw }));
+  }
+  check(`${id}: um 16:9 cabe inteiro, sem recorte`, deitado.cropH === deitado.vh, `${deitado.cropH} vs ${deitado.vh}`);
+  check(`${id}: um vertical é cortado para caber, e fica mais alto do que o 16:9`,
+    vertical.cropH < vertical.vh && vertical.videoH > deitado.videoH, `${vertical.videoH} vs ${deitado.videoH}`);
+}
+
+check("o rodapé é fixo no preset e ganha ao texto da conta", ["perfil", "destaque"].every((k) =>
+  /B10/.test(PRESETS_DO_REEL[k].rodapeFixo) && PRESETS_DO_REEL[k].rodapeFaixa === true &&
+  PRESETS_DO_REEL[k].rodapeFundo === "#000000" && PRESETS_DO_REEL[k].rodapeCor === "#FFFFFF" &&
+  /legenda/.test(PRESETS_DO_REEL[k].rodapeNota)));
+check("destaque = gancho vermelho, menor do que o do perfil",
+  PRESETS_DO_REEL.destaque.ganchoCor === "#EC1C24" &&
+  PRESETS_DO_REEL.destaque.ganchoTamanho < PRESETS_DO_REEL.perfil.ganchoTamanho,
+  `${PRESETS_DO_REEL.destaque.ganchoTamanho} vs ${PRESETS_DO_REEL.perfil.ganchoTamanho}`);
+check("o contorno preto do gancho continua ligado para cor que não seja preta",
+  /usaBordaPreta=!\/\^#\(\?:000\|000000\)\$\/i\.test/.test(modulo), "o desenho perdeu a borda automática");
+
+/* ------------------------------------------------- cabeçalho de perfil */
+{
+  const geo = Eh(1080, 1920, { top: 0, bottom: 0, vw: 1080, vh: 1920 }, 720, "perfil");
+  const PERFIL = { nome: "Cena seguinte", arroba: "@cena.seguinte", avatar: "data:image/png;base64,AA==", verificado: true };
+
+  const com = desenhar("perfil", "Esse filme será seu proximo vicio", geo, { perfil: PERFIL });
+  const textos = com.chamadas.fillText.map((c) => c.texto);
+  check("cabeçalho: escreve o nome da conta", textos.includes("Cena seguinte"), JSON.stringify(textos));
+  check("cabeçalho: escreve o @ com arroba garantida",
+    textos.includes("@cena.seguinte") && !textos.includes("cena.seguinte"), JSON.stringify(textos));
+  check("cabeçalho: o @ sai em cinzento, não na cor do gancho",
+    com.chamadas.fillText.find((c) => c.texto === "@cena.seguinte")?.cor === PRESETS_DO_REEL.perfil.perfilArrobaCor);
+  check("cabeçalho: desenha o selo azul do verificado",
+    com.chamadas.fill.some((x) => String(x.cor).toUpperCase() === "#1D9BF0"), JSON.stringify(com.chamadas.fill.map((x) => x.cor)));
+
+  const semSelo = desenhar("perfil", "Gancho", geo, { perfil: { ...PERFIL, verificado: false } });
+  check("cabeçalho: sem verificado, não há selo azul",
+    !semSelo.chamadas.fill.some((x) => String(x.cor).toUpperCase() === "#1D9BF0"));
+
+  const soNome = desenhar("perfil", "Gancho", geo, { perfil: { nome: "Só Nome", arroba: "", avatar: "" } });
+  const textosSo = soNome.chamadas.fillText.map((c) => c.texto);
+  check("cabeçalho: campo vazio não aparece", textosSo.includes("Só Nome") && !textosSo.some((t) => t.startsWith("@")));
+
+  /* Centragem: o bloco (foto + nome/@) vai ao centro, por isso um nome maior
+     empurra-o para a esquerda. Sem foto, o texto fica simétrico no eixo. */
+  const curto = desenhar("perfil", "G", geo, { perfil: { nome: "AB", arroba: "", avatar: "", verificado: false } });
+  const longo = desenhar("perfil", "G", geo, { perfil: { nome: "ABCDEFGHIJKLMNOP", arroba: "", avatar: "", verificado: false } });
+  const xCurto = curto.chamadas.fillText.find((c) => c.texto === "AB").x;
+  const xLongo = longo.chamadas.fillText.find((c) => c.texto === "ABCDEFGHIJKLMNOP").x;
+  check("cabeçalho: um nome maior empurra o bloco para a esquerda", xLongo < xCurto, `${xLongo} vs ${xCurto}`);
+  // O canvas falso mede len*px*0.55; usa-se a mesma conta para saber o centro.
+  const larguraFalsa = (t, px) => String(t).length * px * 0.55;
+  const nf = Math.round(geo.outWidth * PRESETS_DO_REEL.perfil.perfilNomeTamanho);
+  const centroCurto = xCurto + larguraFalsa("AB", nf) / 2;
+  check("cabeçalho: sem foto, o texto fica centrado no eixo",
+    Math.abs(centroCurto - geo.outWidth / 2) <= 2, `centro=${centroCurto.toFixed(1)} meio=${geo.outWidth / 2}`);
+
+  const sem = desenhar("perfil", "Gancho", geo, { perfil: null });
+  check("sem conta configurada não há cabeçalho nenhum",
+    !sem.chamadas.fillText.some((c) => /Cena seguinte|@/.test(c.texto)), JSON.stringify(sem.chamadas.fillText.map((c) => c.texto)));
+
+  // O gancho tem de começar por baixo do cabeçalho, senão escrevia-lhe em cima.
+  const yGancho = Math.min(...com.chamadas.fillText.filter((c) => /Esse filme/.test(c.texto)).map((c) => c.y));
+  const fimCabecalho = geo.outHeight * PRESETS_DO_REEL.perfil.perfilArrobaY;
+  check("o gancho começa por baixo do cabeçalho", yGancho > fimCabecalho, `gancho y=${yGancho} cabeçalho até ${Math.round(fimCabecalho)}`);
+  check("o destaque não leva cabeçalho", !PRESETS_DO_REEL.destaque.perfilCabecalho);
+  check("ganchoInicio só existe onde há cabeçalho",
+    PRESETS_DO_REEL.perfil.ganchoInicio > 0.065 && !PRESETS_DO_REEL.destaque.ganchoInicio);
+}
+
 check("preset desconhecido cai no atual", api.presetDoReel("inventado").id === "atual" && api.presetDoReel().id === "atual");
 
 /* ------------------------------------------------------------------ 2 */
@@ -255,7 +373,7 @@ console.log("\n7. Servidor: as mesmas contas do app");
 const servidor = await import(pathToFileURL(path.join(root, "servidor", "presets.mjs")).href);
 const video = await import(pathToFileURL(path.join(root, "servidor", "video.mjs")).href);
 check("a tabela do servidor é igual à do bundle", JSON.stringify(servidor.PRESETS_DO_REEL) === JSON.stringify(PRESETS_DO_REEL));
-for (const preset of ["escuro", "claro"]) {
+for (const preset of ["escuro", "claro", "perfil", "destaque"]) {
   for (const [largura, altura, corte] of [[1920, 1080, horizontal], [1080, 1920, { top: 0, bottom: 0, vw: 1080, vh: 1920 }], [1080, 1920, { top: 440, bottom: 440, vw: 1080, vh: 1920 }]]) {
     const app = Eh(largura, altura, corte, 720, preset);
     const srv = video.enquadramento(largura, altura, corte, 720, preset);

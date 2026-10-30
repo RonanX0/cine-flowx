@@ -76,6 +76,8 @@
       agendarComPoucaCerteza: false,
       simultaneos: 3,
       modelo: MODELO_OMISSAO,
+      // Ficha técnica; só se aplica a vídeos com filme confirmado no TMDB.
+      legendaFicha: true,
     };
     try {
       var bruto = window.localStorage.getItem(CHAVE_OPCOES);
@@ -89,6 +91,7 @@
         agendarComPoucaCerteza: !!o.agendarComPoucaCerteza,
         simultaneos: sim >= 1 && sim <= MAX_SIMULTANEOS ? Math.round(sim) : omissao.simultaneos,
         modelo: typeof o.modelo === "string" && o.modelo.trim() ? o.modelo : omissao.modelo,
+        legendaFicha: typeof o.legendaFicha === "boolean" ? o.legendaFicha : omissao.legendaFicha,
       };
     } catch (e) {
       return omissao;
@@ -562,7 +565,21 @@
 
       if (!item.legendaManual) {
         definirPasso(item, "A escrever a legenda…", 0.6);
-        try {
+        /* Ficha técnica quando o filme está confirmado no TMDB — o mesmo que o
+           📦 Upload em massa e o Estúdio fazem. Falhando, segue a legenda da IA
+           como antes: nesta aba o vídeo nunca fica de fora por causa da legenda. */
+        if (estado.opcoes.legendaFicha !== false && filme && filme.id && !filme._semNome) {
+          try {
+            var ficha = await window.CineClipMotor.legendaFicha(
+              { id: filme.id, kind: filme.kind || (filme.isTv ? "tv" : "movie"), title: filme.title },
+              { temporadaEpisodio: (ia && ia.temporada_episodio) || "" }
+            );
+            legenda = ficha.legenda;
+          } catch (e) {
+            legenda = "";
+          }
+        }
+        if (!legenda) try {
           legenda = await core.gerarLegenda(s.groqKey, filme, s.lang || "pt-PT", {
             cena: ia.cena || "",
             geminiKey: s.geminiKey,

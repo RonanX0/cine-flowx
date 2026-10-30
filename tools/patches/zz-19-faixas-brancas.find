@@ -1,0 +1,1 @@
+for(let h=0;h<i;h++){let w=0;for(let _=0;_<a;_++){const k=(h*a+_)*4;.299*c[k]+.587*c[k+1]+.114*c[k+2]<40&&w++}u.push(w/a>=.65)}

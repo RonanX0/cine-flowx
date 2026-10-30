@@ -1,0 +1,1 @@
+const Be=await(async()=>{try{if(Pe?.id&&!Pe._semNome&&window.CineClipMotor?.legendaFicha)return(await window.CineClipMotor.legendaFicha({id:Pe.id,kind:Pe.kind||"movie",title:Pe.title},{})).legenda}catch{}return await oS(S.nvidiaKey,Pe,S.lang,{cena:F,hookText:ue,geminiKey:S.geminiKey})})();

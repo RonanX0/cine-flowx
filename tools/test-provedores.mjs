@@ -48,7 +48,7 @@ let S;
 function zerar(extra = {}) {
   S = {
     gemini: "ok", geminiUrls: [], groqChats: [], orChats: [], whisper: [], serper: [], ddg: 0, proxy: 0,
-    groq429: new Set(), groqMaxImgs: 99, serperDireto: true, orModelos: true, ...extra,
+    groq429: new Set(), or429: false, groqMaxImgs: 99, serperDireto: true, orModelos: true, ...extra,
   };
 }
 function resposta(texto) {
@@ -116,6 +116,7 @@ const fetchFalso = async (url, opts = {}) => {
     if (u.pathname.endsWith("/chat/completions")) {
       const body = JSON.parse(String(opts.body));
       S.orChats.push({ ...body, auth: opts.headers.Authorization });
+      if (S.or429) return json({ error: { message: "Rate limit" } }, 429);
       return chat(resposta(textoDe(body)));
     }
     if (u.pathname.endsWith("/key")) return json({ data: { label: "ok" } });
@@ -379,6 +380,28 @@ console.log("\n✍️ Legendas: a Groq escreve, o Gemini é reserva");
   motor.configurar({});
   const l3 = await core.gerarLegenda("", filme, "pt-BR", { cena: "x", geminiKey: "gem" });
   check("sem chave Groq/OpenRouter, o Gemini escreve", /LEGENDA-GEMINI/.test(l3), l3);
+}
+
+console.log("\n↪️ Com as duas chaves, a Groq fica por último");
+{
+  /* A Groq é a que estoura o limite de pedidos primeiro num lote (vários
+     vídeos ao mesmo tempo, várias chamadas cada). Quando isso acontece a meio
+     do lote, o vídeo segue sem identificação e com o título do nome do
+     ficheiro — por isso ela passou a ser a reserva, não a porta de entrada. */
+  zerar({ gemini: "falha" });
+  motor.prov._interno.limpar();
+  motor.configurar({ groqKey: "gsk_teste", openrouterKey: "sk-or-teste" });
+  const ia = await ident({ geminiKey: "gem" });
+  const filme = await core.procurarTmdb("tmdb", ia);
+  check("com as duas chaves, quem identifica é o OpenRouter", filme && filme.title === "Chicago P.D." && S.orChats.length > 0, `${filme && filme.title} or=${S.orChats.length}`);
+  check("a Groq nem chega a ser chamada", S.groqChats.length === 0, `groq=${S.groqChats.length}`);
+
+  /* E continua a ser reserva a sério: com o OpenRouter em baixo, ela assume. */
+  zerar({ gemini: "falha", or429: true });
+  motor.prov._interno.limpar();
+  motor.configurar({ groqKey: "gsk_teste", openrouterKey: "sk-or-teste" });
+  const ia2 = await ident({ geminiKey: "gem" });
+  check("com o OpenRouter em baixo, a Groq ainda assume", !!ia2 && S.groqChats.length > 0, `groq=${S.groqChats.length}`);
 }
 
 app.fechar();

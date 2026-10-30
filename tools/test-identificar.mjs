@@ -147,6 +147,23 @@ console.log("\n⚡ «Rápido por Nome» não chama nenhuma IA");
   check("zero chamadas à IA", pedidosIA.length === 0, String(pedidosIA.length));
 }
 
+console.log("\n⚡ «Rápido por Nome»: o ano entre parênteses não suja o título");
+{
+  /* O ano era tirado como dígitos soltos ANTES da limpeza dos parênteses, por
+     isso "O Amor Não Tira Férias (2006).mp4" ia ao TMDB como
+     "O Amor Não Tira Férias (" — não achava nada, e o modo parecia estar a
+     ignorar o nome do ficheiro. O caso antigo ("Inside 2023.mp4") passava
+     porque o ano não estava entre parênteses. */
+  pedidosIA.length = 0;
+  const comParentese = await identificar({ identMode: "dica", fileName: "O Amor Não Tira Férias (2006).mp4" });
+  check("título sem o parêntese órfão", comParentese.titulo === "O Amor Não Tira Férias", JSON.stringify(comParentese.titulo));
+  check("e o ano lido de dentro dele", String(comParentese.ano) === "2006", String(comParentese.ano));
+  const comColchete = await identificar({ identMode: "dica", fileName: "Se Beber Não Case [2009].mp4" });
+  check("colchetes também", comColchete.titulo === "Se Beber Não Case" && String(comColchete.ano) === "2009", `${comColchete.titulo} ${comColchete.ano}`);
+  check("e continua sem chamar a IA", pedidosIA.length === 0, String(pedidosIA.length));
+}
+
+
 console.log("\n🎣 Ganchos: ver → escrever 10 → julgar");
 {
   respostas.escrever = { ganchos: [

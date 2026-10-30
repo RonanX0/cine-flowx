@@ -95,6 +95,53 @@ e muda tudo de uma vez: o fundo, o estilo do gancho e a **caixa do vídeo**.
 | **Padrão do app** (`atual`) | preto (ou desfocado) | branco, com pílula escura | automática: 16:9 fica a 720×406, vertical preenche o 9:16 | — |
 | **Escuro** (`escuro`) | preto | fluorescente `#ECFA12`, 900, linhas coladas (0,88 em), sem pílula | **1:1** de 648 px, 5 % de margem lateral, cantos com raio de 30 px, do 27,4 % ao 78,0 % da altura | verde `#2DBD2C` a 93,55 % (texto opcional) |
 | **Claro** (`claro`) | branco | preto `#000000`, sem pílula | **faixa 4:3** de ponta a ponta (720×540), do 30,1 % ao 72,2 % da altura | — |
+| **Perfil** (`perfil`) | branco | preto `#000000`, sem pílula, a começar por baixo do cabeçalho | **maleável**: largura toda, altura a seguir o vídeo, entre 26,0 % e 84,0 % | **faixa preta** fixa a 88,4 % a abraçar o texto, letras brancas, e uma 2.ª linha preta a 93,8 % |
+| **Destaque** (`destaque`) | branco | vermelho `#EC1C24` (mais pequeno) com o contorno preto automático | **maleável**, largura toda, entre 25,0 % e 84,0 % | o mesmo rodapé fixo do **Perfil** |
+
+O **Perfil** e o **Destaque** usam uma **caixa maleável** (`caixa: "livre"`), que é a diferença
+grande para os outros três:
+
+- a **largura é sempre a largura toda** do 9:16 — o vídeo vai de ponta a ponta, sem margens
+  brancas nos lados;
+- a **altura segue o vídeo**, dentro da faixa que sobra entre o gancho (acima de `topo`) e o
+  rodapé (abaixo de `caixaFim`);
+- se o vídeo for alto de mais para essa faixa (um vertical, por exemplo), é **cortado na
+  vertical, centrado**, em vez de encolher — a imagem nunca é esticada nem ganha margens.
+
+Um 16:9 cabe inteiro e fica largo e baixo; um 9:16 ocupa a faixa toda e perde topo e fundo.
+
+`tools/test-presets.mjs` fixa o que não pode variar nisto: com fontes 16:9, 9:16 e 1:1, o
+vídeo ocupa a largura toda (`padX === 0`), o aspeto da caixa bate com o do recorte (não
+estica), o recorte é só vertical, e a caixa não sobe para cima do gancho nem desce para cima
+do rodapé.
+
+Nestes dois o rodapé é **fixo do preset** (`rodapeFixo`), não um campo da conta: é informação
+do formato e ganha ao `rodapeTexto` das definições. A cor do texto também vem do preset — a
+cor por omissão da conta é verde, que sobre a faixa preta não é o que se quer.
+
+### Cabeçalho de perfil (preset **Perfil**)
+
+O preset **Perfil** desenha no topo um cabeçalho tipo post **centrado**: **foto redonda**,
+**nome**, **selo azul** e **@** da conta. O bloco inteiro é medido e centrado no eixo, por
+isso um nome maior empurra-o para a esquerda em vez de o desalinhar. O conteúdo vem da conta do Instagram (cada conta tem o seu), a
+geometria vem do preset, e **campo vazio não aparece**. Configura-se em
+**Configurações → conta do Instagram → Formatação do Reel**:
+
+| Campo | O que é |
+| --- | --- |
+| Nome no cabeçalho | o nome a negrito, como aparece no perfil |
+| @ no cabeçalho | a arroba é garantida (escrever `cena.seguinte` dá `@cena.seguinte`) |
+| Foto do perfil | a imagem é **reduzida a 160×160 e recortada ao centro** antes de ser guardada — um PNG inteiro estoirava a quota do `localStorage` |
+| Selo de verificado | o selo azul ao lado do nome, desenhado em vetor (não é uma imagem) |
+
+Com o cabeçalho no topo, o gancho começa mais abaixo (`ganchoInicio`, 17 % em vez dos 6,5 %
+dos outros presets) para não lhe escrever por cima.
+
+O desenho do gancho no browser é **síncrono** e não pode esperar por uma imagem, por isso o
+avatar fica em cache no `motor-ia.js`: `CineClipMotor.avatarPerfil()` devolve-o quando está
+pronto e `CineClipMotor.avatarPronto()` dá a promessa para o processamento esperar antes de
+gerar o PNG — um Reel publicado sem a foto seria pior do que esperar 50 ms. No servidor, onde
+o desenho é assíncrono, a imagem é carregada na hora.
 
 As medidas dos dois presets foram tiradas **pixel a pixel** de duas capturas de Reels reais
 (`formato-1.png` e `formato-2.png`, na raiz do repositório) — nada foi inventado:
@@ -125,6 +172,18 @@ presets **Escuro** e **Claro** é que levam as cores e a caixa medidas. O estilo
 até ao FFmpeg pelo `lote-massa.js` (argumentos 8–12 do `processar`) — antes o Estúdio lia o
 estilo de uma variável errada e o fundo/cor escolhidos nunca chegavam ao vídeo.
 
+### Faixas brancas também são cortadas
+
+O recorte automático de faixas (letterbox) passou a apanhar, além do **preto**, uma banda
+**branca uniforme**. Muitos cortes vêm de Reels **já formatados**, com uma área branca em cima
+para o gancho antigo: sem isto essa área entrava na caixa do preset e afastava o vídeo do
+texto novo — num exemplo real, 588 px de branco em cima e 344 px em baixo num 1080×1920.
+
+O limiar do branco é propositadamente severo (**97 %** das amostras da linha acima de 248,
+contra os 65 % de píxeis escuros do preto) para não comer uma cena genuinamente clara;
+`tools/test-barras-pretas.mjs` verifica os três casos — faixa preta, faixa branca e cinzento
+claro, que **não** pode contar como faixa.
+
 ## 📦 Upload em massa
 
 No Estúdio, o botão **📦 Upload em massa** (ou escolher/arrastar vários vídeos de uma vez)
@@ -137,7 +196,24 @@ vez; o painel pode ser fechado (fica um atalho no canto) e o botão **Parar** in
   rever (*Abrir no Estúdio*), a não ser que ligues *Agendar mesmo com pouca certeza*.
 - Vídeos em **H.265/HEVC** (comuns nos downloads do TikTok) dão erro claro: o navegador não
   consegue ler a imagem. Converte-os para H.264 antes.
-- Precisa de uma chave de IA (Gemini, Groq ou OpenRouter) e da TMDB nas configurações. Ordem: Gemini → Groq (+ Serper) → OpenRouter free (+ DuckDuckGo).
+- Precisa de uma chave de IA (Gemini, Groq ou OpenRouter) e da TMDB nas configurações. Ordem:
+  **Gemini → OpenRouter free (+ DuckDuckGo) → Groq (+ Serper)**. A Groq fica em último de
+  propósito: é a que bate no limite de pedidos primeiro (o lote processa vários vídeos ao
+  mesmo tempo e cada um faz várias chamadas), e quando ela estoura a meio do lote o vídeo
+  segue sem identificação, com o título tirado do nome do ficheiro. Em último, é reserva em
+  vez de porta de entrada.
+
+### ⚡ Rápido por Nome / Dica — é mesmo só pelo nome
+
+O modo **⚡ Rápido por Nome / Dica** do Upload em massa procura o título no TMDB a partir do
+nome do ficheiro (e da dica do link, quando existe) e **não chama a IA de vídeo**: não prepara
+áudio nem vídeo para a IA, e nem exige chave de IA configurada.
+
+Antes, um nome que o TMDB não achasse disparava a análise completa do vídeo «em vez de
+falhar». Quem escolhe este modo está precisamente a fugir à IA — por quota e por tempo — por
+isso isso era o contrário do pedido, e corria sem avisar. Agora, nome que não bate segue o
+caminho normal: o vídeo **vai para a fila na mesma**, com o título do ficheiro e o aviso
+«seguiu sem identificação», para corrigir no Agendador.
 
 ### 🎬 A IA assiste ao vídeo (Gemini File API)
 
@@ -161,6 +237,15 @@ Em qualquer cartão (ou selecionando vários cartões de uma vez):
 
 - **⬇️ Baixar HD e ir pro Upload** — descarrega o `.mp4` em **alta qualidade (1080p/HD sem marca d'água)** via `/api/public/importar?hd=1`, **salva o `.mp4` na pasta Downloads** do teu PC/celular (já com o nome do filme confirmado) **e abre automaticamente o 📦 Upload em massa** com o vídeo carregado na fila e a pista do filme preenchida. Se o master 1080p vier em H.265/HEVC num PC cujo navegador não abre imagem HEVC, o ficheiro 1080p continua salvo nos Downloads e o painel baixa automaticamente a versão H.264 compatível para o Upload em massa nunca travar.
 - **📥 Levar pro CineClip** / **☁️ Nuvem** / **💾 Só .mp4** — atalhos opcionais para enviar só o link, processar na nuvem ou apenas guardar o `.mp4` local.
+
+Num lote grande (selecionar todos e baixar 17 cortes de uma vez, por exemplo) os
+downloads correm **em paralelo**: por omissão **4 ao mesmo tempo**, ajustável de 1 a 6
+em **Downloads ao mesmo tempo**. Um corte lento deixa de segurar a fila, e o tempo
+total aproxima-se do maior download de cada ronda em vez da soma de todos. A ordem
+não muda: o 📦 Upload em massa recebe os vídeos **na ordem em que os cartões foram
+selecionados**, mesmo quando terminam fora de ordem. Com o limite em **1** volta o
+comportamento antigo, um por vez — útil em ligações fracas ou se o CDN começar a
+recusar pedidos simultâneos.
 
 A busca de tendências não usa Apify nem exige token. Perfis são lidos a partir do JSON público de perfis incorporados do TikTok; hashtags e termos tentam o TikWM gratuito e as páginas públicas do TikTok. Se nenhuma fonte trouxer vídeos e nenhum perfil tiver sido escolhido, há uma tentativa com os perfis sugeridos `@teusflix` e `@cinemaemminutos3`. Eles são editáveis pelo campo Perfis (não são um catálogo global).
 

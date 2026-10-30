@@ -328,6 +328,133 @@ console.log("\n🔁 Troca de modo durante uma busca e qualidade desconhecida");
   c.w.close();
 }
 
+
+console.log("\n⚡ Download HD em paralelo (lote de 6 cortes narrados)");
+{
+  /* Um corte em 1080p são dezenas de MB. Em fila indiana, um download lento no
+     início segura todos os seguintes — era o que acontecia antes. Aqui o 1.º da
+     lista é de propósito o mais lento: se o lote voltasse a ser sequencial, o
+     pico de pedidos em voo seria 1 e o tempo total ≥ soma de todos os atrasos. */
+  const itensLote = Array.from({ length: 6 }, (_, i) => ({
+    id: "p" + i,
+    url: "https://www.tiktok.com/@narra/video/" + (100 + i),
+    autor: "narra" + i,
+    legenda: "resumo do filme",
+    capa: "",
+    duracao: 60,
+    views: 100_000,
+    curtidas: 10,
+    comentarios: 1,
+    compartilhamentos: 1,
+    criadoEm: agoraS - 3600,
+    hype: 100,
+    narrado: true,
+    sinaisNarrado: ["📖 Resumo"],
+    candidatos: [],
+  }));
+
+  const c = criar();
+  await dormir(50);
+
+  const fetchOriginal = c.w.fetch;
+  let emVoo = 0;
+  let pico = 0;
+  const ordemFim = [];
+  const ATRASOS = [140, 20, 20, 20, 20, 20];
+  const avisos = [];
+  c.w.fetch = async (url, init) => {
+    const u = new URL(String(url), "https://exemplo.test");
+    if (u.pathname !== "/api/public/importar") return fetchOriginal(url, init);
+    const alvo = u.searchParams.get("url") || "";
+    const n = Number((alvo.match(/video\/(\d+)/) || [])[1] || 0) - 100;
+    avisos.push(c.w.CineTendencias._interno.estado.aviso || "");
+    emVoo++;
+    pico = Math.max(pico, emVoo);
+    await dormir(ATRASOS[n] != null ? ATRASOS[n] : 20);
+    emVoo--;
+    ordemFim.push(n);
+    return fetchOriginal(url, init);
+  };
+
+  const t0 = Date.now();
+  const ficheiros = await c.w.CineTendencias.baixarParaUpload(itensLote, { salvarNoDispositivo: false });
+  const demorou = Date.now() - t0;
+
+  check("baixa os 6 cortes do lote", c.chamadas.importar.length === 6 && ficheiros.length === 6, `importar=${c.chamadas.importar.length} ficheiros=${ficheiros.length}`);
+  check("mais de um download corre ao mesmo tempo", pico > 1, `pico=${pico}`);
+  check("respeita o limite de 4 simultâneos (padrão)", pico <= 4, `pico=${pico}`);
+  check("o download lento do 1.º item não segura os seguintes", ordemFim.length === 6 && ordemFim.indexOf(0) > 0, JSON.stringify(ordemFim));
+  check("o lote inteiro não demora a soma dos downloads", demorou < ATRASOS.reduce((a, b) => a + b, 0), `${demorou}ms`);
+
+  const envio = c.chamadas.receberVideos[c.chamadas.receberVideos.length - 1];
+  const ordemUpload = envio.ficheiros.map((f) => Number((String(f._origemLink).match(/video\/(\d+)/) || [])[1] || 0) - 100);
+  check("o Upload em massa recebe na ordem em que os cartões foram selecionados", JSON.stringify(ordemUpload) === JSON.stringify([0, 1, 2, 3, 4, 5]), JSON.stringify(ordemUpload));
+  check("terminaram fora de ordem, mas a fila saiu ordenada", JSON.stringify(ordemFim) !== JSON.stringify([0, 1, 2, 3, 4, 5]), JSON.stringify(ordemFim));
+  check("avisa quantos vão ao mesmo tempo", /6 vídeos em alta qualidade \(HD\), 4 ao mesmo tempo/.test(avisos[0] || ""), String(avisos[0]));
+  c.w.close();
+}
+
+/* Com o limite em 1, o comportamento antigo (um por vez) continua disponível. */
+console.log("\n🐢 Limite em 1 volta ao download um-por-vez");
+{
+  const c = criar();
+  await dormir(50);
+  c.w.CineTendencias._interno.estado.opcoes.downloadsSimultaneos = 1;
+
+  const fetchOriginal = c.w.fetch;
+  let emVoo = 0;
+  let pico = 0;
+  c.w.fetch = async (url, init) => {
+    const u = new URL(String(url), "https://exemplo.test");
+    if (u.pathname !== "/api/public/importar") return fetchOriginal(url, init);
+    emVoo++;
+    pico = Math.max(pico, emVoo);
+    await dormir(20);
+    emVoo--;
+    return fetchOriginal(url, init);
+  };
+
+  await c.w.CineTendencias.baixarParaUpload(JSON.parse(JSON.stringify(ITENS)), { salvarNoDispositivo: false });
+  check("limite 1 mantém um download por vez", pico === 1, `pico=${pico}`);
+  check("e ainda entrega os 3 na ordem", c.chamadas.receberVideos[c.chamadas.receberVideos.length - 1].ficheiros.length === 3);
+  c.w.close();
+}
+
+
+console.log("\n🔢 Quantos vídeos o painel pede ao servidor");
+{
+  /* O endpoint aceita 5–100 (server/tendencias.mjs) e o painel pedia 40 fixos.
+     `total` é quantos passaram pelas fontes antes do corte, e serve para o
+     utilizador saber se vale subir a opção ou aliviar os filtros. */
+  const c = criar({
+    resposta: () => ({
+      status: 200,
+      corpo: { geradoEm: Date.now(), total: 137, estados: [{ fonte: "#cenasdefilme", ok: true }], itens: JSON.parse(JSON.stringify(ITENS)) },
+    }),
+  });
+  c.w.document.getElementById("cc-tendencias-monte").className = "";
+  await dormir(900);
+
+  check("por omissão pede 60, não os 40 fixos de antes", /max=60/.test(c.chamadas.api[0] || ""), c.chamadas.api[0]);
+  check("avisa quantos cortes ficaram de fora", /Mostrando 3 de 137/.test(c.texto()), c.texto().slice(0, 200));
+
+  c.w.CineTendencias._interno.estado.opcoes.quantosVideos = 100;
+  await c.w.CineTendencias.buscar(true);
+  await dormir(250);
+  check("subir a opção pede mais ao servidor", /max=100/.test(c.chamadas.api[c.chamadas.api.length - 1] || ""), c.chamadas.api[c.chamadas.api.length - 1]);
+
+  c.w.CineTendencias._interno.estado.opcoes.quantosVideos = 500;
+  await c.w.CineTendencias.buscar(true);
+  await dormir(250);
+  check("nunca pede acima do teto do endpoint", /max=100/.test(c.chamadas.api[c.chamadas.api.length - 1] || ""), c.chamadas.api[c.chamadas.api.length - 1]);
+
+  c.w.CineTendencias._interno.estado.opcoes.quantosVideos = 0;
+  await c.w.CineTendencias.buscar(true);
+  await dormir(250);
+  check("valor inválido cai no padrão", /max=60/.test(c.chamadas.api[c.chamadas.api.length - 1] || ""), c.chamadas.api[c.chamadas.api.length - 1]);
+  c.w.close();
+}
+
 console.log("\n─────────────────────────────────────────────");
 if (fail) { console.log(`❌ ${pass} passaram, ${fail} falharam:`); falhas.forEach((f) => console.log("   • " + f)); process.exit(1); }
 console.log(`✅ ${pass} passaram, 0 falharam`);

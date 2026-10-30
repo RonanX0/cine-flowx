@@ -14,6 +14,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import vm from "node:vm";
 
 const root = path.resolve(import.meta.dirname, "..");
@@ -165,6 +166,31 @@ console.log("\n6. Os patches podem correr outra vez sem duplicar nada");
   check("todos os patches são reconhecidos como aplicados", naoDetetados.length === 0, naoDetetados.join(", "));
   check("a camada de nuvem é carregada uma só vez", html.split('<script src="nuvem-duravel.js"></script>').length === 2);
   check("o upload em massa é carregado uma só vez", html.split('<script src="lote-massa.js"></script>').length === 2);
+}
+
+console.log("\n7. Faixas BRANCAS uniformes também são cortadas");
+{
+  const { faixaClara } = await import(pathToFileURL(path.join(root, "servidor", "video.mjs")).href);
+  const L = 200, A = 300;
+  // 60 linhas de faixa em cima e em baixo; no meio, imagem cinzenta.
+  const montar = (corFaixa) => {
+    const rgb = new Uint8Array(L * A * 3);
+    for (let y = 0; y < A; y++) {
+      for (let x = 0; x < L; x++) {
+        const k = (y * L + x) * 3;
+        const v = (y < 60 || y >= A - 60) ? corFaixa : 128;
+        rgb[k] = v; rgb[k + 1] = v; rgb[k + 2] = v;
+      }
+    }
+    return rgb;
+  };
+  const preta = faixaClara(montar(0), L, A);
+  check("faixa preta: a imagem vai de 60 a 239", !!preta && preta.t === 60 && preta.b === A - 61, JSON.stringify(preta));
+  const branca = faixaClara(montar(255), L, A);
+  check("faixa branca: a imagem vai de 60 a 239 (era o que faltava)", !!branca && branca.t === 60 && branca.b === A - 61, JSON.stringify(branca));
+  // Uma cena genuinamente clara (mas não branco puro) não pode ser comida.
+  const clara = faixaClara(montar(238), L, A);
+  check("cinzento claro não conta como faixa", !clara || clara.t === 0, JSON.stringify(clara));
 }
 
 console.log("\n─────────────────────────────────────────────");

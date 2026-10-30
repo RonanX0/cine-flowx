@@ -120,16 +120,27 @@ async function quadroRGB(caminho, t, largura, altura) {
 
 /* -------------------------------------------------------- faixas pretas */
 
-/** Maior faixa de linhas claras de um quadro — mesmo critério do `_w` do app. */
+/**
+ * Maior faixa de imagem de um quadro — mesmo critério do `_w` do app.
+ *
+ * Conta como "faixa" (a tirar) tanto o letterbox preto como uma banda BRANCA
+ * uniforme: muitos cortes vêm de reels já formatados, com uma área branca em
+ * cima para o gancho, e sem isto essa área entrava na caixa e afastava o vídeo
+ * do texto. O limiar do branco é propositadamente severo (97% das amostras
+ * acima de 248) para não comer uma cena genuinamente clara.
+ */
 export function faixaClara(rgb, largura, altura) {
   const escura = [];
   for (let y = 0; y < altura; y++) {
     let n = 0;
+    let brancas = 0;
     for (let x = 0; x < largura; x++) {
       const k = (y * largura + x) * 3;
-      if (0.299 * rgb[k] + 0.587 * rgb[k + 1] + 0.114 * rgb[k + 2] < 40) n++;
+      const L = 0.299 * rgb[k] + 0.587 * rgb[k + 1] + 0.114 * rgb[k + 2];
+      if (L < 40) n++;
+      if (L > 248) brancas++;
     }
-    escura.push(n / largura >= 0.65);
+    escura.push(n / largura >= 0.65 || brancas / largura >= 0.97);
   }
   let melhor = [0, -1];
   let ini = -1;
@@ -308,6 +319,40 @@ export function enquadramento(r, o, corte, i = 720, preset = "atual") {
   const temCorte = v > 0 || x > 0;
   const P = presetDoReel(preset);
   const A = alvoDaCaixa(P);
+
+  /* Caixa maleável ("livre"): em vez de uma proporção fixa, a caixa segue o
+     aspeto do próprio vídeo e é encaixada na faixa que sobra entre o gancho
+     (acima de `topo`) e o rodapé (abaixo de `caixaFim`). Não há recorte para
+     a forçar a um formato — por isso um 16:9 fica largo e baixo, e um vertical
+     ocupa a faixa toda em altura. */
+  if (P.caixa === "livre") {
+    const ty = Math.max(0, Math.round((f * P.topo) / 2) * 2);
+    const fy = Math.min(f, Math.round((f * (P.caixaFim || 0.95)) / 2) * 2);
+    const dh = Math.max(2, fy - ty);
+    // A largura é sempre a largura toda do 9:16: o vídeo vai de ponta a ponta.
+    const S = Math.max(2, Math.round((i * (1 - 2 * P.margem)) / 2) * 2);
+    let T = Math.max(2, Math.round((S * h) / w / 2) * 2);
+    let cy = v;
+    let cw = w;
+    let ch = h;
+    // Alto de mais para o espaço entre o gancho e o rodapé: corta na vertical
+    // (centrado) em vez de encolher a largura — a imagem nunca é esticada.
+    if (T > dh) {
+      T = Math.max(2, Math.round(dh / 2) * 2);
+      const nh = Math.max(2, Math.min(ch, Math.round((cw * T) / S / 2) * 2));
+      cy += Math.max(0, Math.round((ch - nh) / 2 / 2) * 2);
+      ch = nh;
+    }
+    const D = Math.max(0, Math.round((i - S) / 2 / 2) * 2);
+    const k = Math.max(0, Math.min(f - T, ty + Math.round((dh - T) / 2 / 2) * 2));
+    return {
+      outWidth: i, outHeight: f, vw: c, vh: u, hasCrop: cy > 0 || ch < u || cw < c,
+      cropX: 0, cropY: cy, cropW: cw, cropH: ch,
+      videoW: S, videoH: T, padX: D, padY: k,
+      radius: Math.max(0, Math.round(S * P.raio)), bg: P.fundo, preset: P.id,
+    };
+  }
+
   if (A > 0) {
     // Caixa fixa do preset: 1:1 com margens laterais (escuro) ou faixa 4:3 de
     // ponta a ponta (claro). O recorte é centrado e tem o mesmo aspeto da caixa,
@@ -402,7 +447,8 @@ export async function fontesDisponiveis() {
  * a cor do fundo (cantos arredondados) e desenha o rodapé.
  */
 export async function imagemDoGancho(largura, altura, padY, texto, estilo = {}) {
-  const { createCanvas } = await canvasComFontes();
+  const canvasMod = await canvasComFontes();
+  const { createCanvas, loadImage } = canvasMod;
   const canvas = createCanvas(largura, altura);
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, largura, altura);
@@ -436,16 +482,122 @@ export async function imagemDoGancho(largura, altura, padY, texto, estilo = {}) 
     ctx.restore();
   }
 
-  /* Rodapé do preset (texto opcional, definido na conta do Instagram). */
-  const rodape = String((caixa && caixa.rodape) || "").trim();
+  /* Cabeçalho tipo post: foto redonda, nome, selo azul e @ da conta ativa.
+     O conteúdo vem da conta e a geometria do preset; campo vazio não aparece.
+     Aqui o avatar pode ser carregado com `await` — no app o desenho é síncrono
+     e usa a imagem que o motor guardou em cache. */
+  const perfil = (caixa && caixa.perfil) || estilo.perfil || null;
+  if (comPreset && P.perfilCabecalho && perfil && (perfil.nome || perfil.avatar)) {
+    const ar = Math.round(largura * P.perfilAvatarR);
+    const ay = Math.round(altura * P.perfilY);
+    const nf = Math.round(largura * P.perfilNomeTamanho);
+    const af = Math.round(largura * P.perfilArrobaTamanho);
+    const gp = Math.round(largura * (P.perfilEspaco || 0.028));
+    const br = Math.round(nf * 0.36);
+    const arroba = perfil.arroba ? String(perfil.arroba).replace(/^@?/, "@") : "";
+
+    let img = null;
+    if (perfil.avatar) {
+      try { img = await loadImage(perfil.avatar); } catch (_) { img = null; }
+    }
+    const temFoto = !!img;
+
+    /* Mede antes de desenhar: o bloco inteiro (foto + nome/@) vai centrado, e
+       a largura dele depende do nome, do selo e do @. */
+    ctx.save();
+    ctx.font = `700 ${nf}px Inter, "Noto Color Emoji", "Helvetica Neue", Arial, sans-serif`;
+    const wn = perfil.nome ? ctx.measureText(perfil.nome).width : 0;
+    const wb = perfil.nome && perfil.verificado !== false ? Math.round(nf * 0.3) + br * 2 : 0;
+    ctx.font = `500 ${af}px Inter, "Noto Color Emoji", "Helvetica Neue", Arial, sans-serif`;
+    const wa = arroba ? ctx.measureText(arroba).width : 0;
+    ctx.restore();
+
+    const wt = Math.max(wn + wb, wa);
+    const bloco = (temFoto ? ar * 2 + gp : 0) + wt;
+    const x0 = Math.round((largura - bloco) / 2);
+    const ax = x0 + ar;
+    const tx = x0 + (temFoto ? ar * 2 + gp : 0);
+
+    if (img) {
+      const lado = Math.min(img.width, img.height) || 1;
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(ax, ay, ar, 0, Math.PI * 2);
+      ctx.closePath();
+      ctx.clip();
+      ctx.drawImage(img, (img.width - lado) / 2, (img.height - lado) / 2, lado, lado, ax - ar, ay - ar, ar * 2, ar * 2);
+      ctx.restore();
+    }
+
+    if (perfil.nome) {
+      const ny = Math.round(altura * P.perfilNomeY);
+      ctx.save();
+      ctx.font = `700 ${nf}px Inter, "Noto Color Emoji", "Helvetica Neue", Arial, sans-serif`;
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = P.ganchoCor || "#000000";
+      ctx.fillText(perfil.nome, tx, ny);
+      if (perfil.verificado !== false) {
+        const bx = tx + wn + Math.round(nf * 0.3) + br;
+        ctx.beginPath();
+        ctx.arc(bx, ny, br, 0, Math.PI * 2);
+        ctx.fillStyle = "#1D9BF0";
+        ctx.fill();
+        ctx.strokeStyle = "#FFFFFF";
+        ctx.lineWidth = Math.max(2, Math.round(br * 0.3));
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.beginPath();
+        ctx.moveTo(bx - br * 0.45, ny + br * 0.02);
+        ctx.lineTo(bx - br * 0.12, ny + br * 0.35);
+        ctx.lineTo(bx + br * 0.48, ny - br * 0.38);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    if (arroba) {
+      ctx.save();
+      ctx.font = `500 ${af}px Inter, "Noto Color Emoji", "Helvetica Neue", Arial, sans-serif`;
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = P.perfilArrobaCor || "#8E8E93";
+      ctx.fillText(arroba, tx, Math.round(altura * P.perfilArrobaY));
+      ctx.restore();
+    }
+  }
+
+  /* Rodapé do preset (texto da conta do Instagram, ou o do próprio preset).
+     Com `rodapeFaixa` desenha uma faixa preenchida por trás, a abraçar o texto,
+     e uma segunda linha por baixo — é o formato das capturas com o rodapé preto.
+     Nesse caso a cor do texto vem do preset e não da conta: a cor por omissão da
+     conta é verde, que sobre a faixa preta não é o que se quer. */
+  /* O `rodapeFixo` do preset ganha ao texto da conta: nestes formatos o
+     rodapé é informação do próprio formato, não um campo editável. */
+  const rodape = P.rodapeFixo || String((caixa && caixa.rodape) || "").trim();
   if (comPreset && rodape && P.rodapeTamanho > 0) {
     const tamRodape = Math.round(largura * P.rodapeTamanho);
+    const yRodape = Math.round(altura * (P.rodapeY || 0.9355));
     ctx.save();
     ctx.font = `700 ${tamRodape}px Inter, "Noto Color Emoji", "Helvetica Neue", Arial, sans-serif`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillStyle = (caixa && caixa.rodapeCor) || P.rodapeCor;
-    ctx.fillText(rodape, largura / 2, Math.round(altura * (P.rodapeY || 0.9355)));
+    if (P.rodapeFaixa) {
+      const padX = Math.round(tamRodape * 0.9);
+      const padY = Math.round(tamRodape * 0.62);
+      const faixaW = Math.min(largura * 0.96, ctx.measureText(rodape).width + padX * 2);
+      const faixaH = tamRodape + padY * 2;
+      ctx.fillStyle = P.rodapeFundo || "#000000";
+      ctx.fillRect(Math.round((largura - faixaW) / 2), Math.round(yRodape - faixaH / 2), Math.round(faixaW), Math.round(faixaH));
+    }
+    ctx.fillStyle = P.rodapeFaixa ? (P.rodapeCor || "#FFFFFF") : ((caixa && caixa.rodapeCor) || P.rodapeCor);
+    ctx.fillText(rodape, largura / 2, yRodape, largura * 0.94);
+    if (P.rodapeNota && P.rodapeNotaTamanho > 0) {
+      const tamNota = Math.round(largura * P.rodapeNotaTamanho);
+      ctx.font = `700 ${tamNota}px Inter, "Noto Color Emoji", "Helvetica Neue", Arial, sans-serif`;
+      ctx.fillStyle = P.rodapeNotaCor || P.ganchoCor || "#000000";
+      ctx.fillText(P.rodapeNota, largura / 2, Math.round(altura * (P.rodapeNotaY || 0.938)), largura * 0.94);
+    }
     ctx.restore();
   }
 
@@ -476,7 +628,7 @@ export async function imagemDoGancho(largura, altura, padY, texto, estilo = {}) 
     }
     const entre = tam * (comPreset ? P.ganchoEntrelinha : 1.25);
     const total = linhas.length * entre;
-    const margem = altura * (comPreset ? 0.065 : 0.06);
+    const margem = altura * (comPreset ? (P.ganchoInicio || 0.065) : 0.06);
     const area = Math.max(total, padY - margem);
     const y0 = margem + (area - total) / 2 + entre / 2;
     const maxDrawW = Math.round(largura * 0.92);

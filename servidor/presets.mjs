@@ -67,6 +67,87 @@ export const PRESETS_DO_REEL = {
     rodapeY: 0,
     rodapeCor: "#2DBD2C",
   },
+  perfil: {
+    id: "perfil",
+    nome: "Claro · faixa preta no fim",
+    // "livre": a caixa segue o aspeto do próprio vídeo, dentro da faixa que
+    // sobra entre o gancho (acima de `topo`) e o rodapé (abaixo de `caixaFim`).
+    caixa: "livre",
+    margem: 0,
+    raio: 0,
+    // O gancho é centrado na faixa de 6,5% até `topo`; com duas linhas sobrava
+    // muito branco entre o texto e o vídeo, por isso o vídeo sobe.
+    topo: 0.26,
+    caixaFim: 0.84,
+    fundo: "branco",
+    bgMode: "branco",
+    ganchoPill: false,
+    ganchoTamanho: 0.062,
+    ganchoEntrelinha: 1.25,
+    ganchoCor: "#000000",
+    rodapeTamanho: 0.033,
+    rodapeY: 0.884,
+    rodapeCor: "#FFFFFF",
+    // Faixa preenchida por trás do rodapé, a abraçar o texto (como a pílula do
+    // gancho), com o texto na cor do preset.
+    rodapeFaixa: true,
+    rodapeFundo: "#000000",
+    // Rodapé FIXO do preset: é informação do formato, não um campo da conta,
+    // por isso ganha ao `rodapeTexto` das definições.
+    rodapeFixo: "Link do filme completo na minha B10",
+    // Segunda linha, por baixo da faixa, na cor do gancho.
+    rodapeNota: "Nome do filme na legenda 🔽",
+    rodapeNotaTamanho: 0.029,
+    rodapeNotaY: 0.938,
+    // Cor própria: a segunda linha é texto sobre o fundo branco, não acompanha
+    // a cor do gancho (que no destaque é vermelha).
+    rodapeNotaCor: "#000000",
+    /* Cabeçalho tipo post: foto redonda, nome, selo e @ da conta ativa. O
+       conteúdo vem da conta (nome/@/foto), a geometria é do preset. Com o
+       cabeçalho a ocupar o topo, o gancho começa mais abaixo (`ganchoInicio`)
+       para não lhe subir por cima. */
+    perfilCabecalho: true,
+    perfilY: 0.0766,
+    perfilAvatarR: 0.075,
+    // O bloco inteiro (foto + nome/@) é centrado; `perfilEspaco` é a folga
+    // entre a foto e o texto. Não há X fixo: a largura depende do nome.
+    perfilEspaco: 0.028,
+    perfilNomeTamanho: 0.044,
+    perfilNomeY: 0.0625,
+    perfilArrobaTamanho: 0.036,
+    perfilArrobaY: 0.0985,
+    perfilArrobaCor: "#8E8E93",
+    ganchoInicio: 0.17,
+  },
+  destaque: {
+    id: "destaque",
+    nome: "Claro · gancho vermelho",
+    caixa: "livre",
+    margem: 0,
+    raio: 0,
+    topo: 0.25,
+    caixaFim: 0.84,
+    fundo: "branco",
+    bgMode: "branco",
+    ganchoPill: false,
+    ganchoTamanho: 0.052,
+    ganchoEntrelinha: 1.22,
+    ganchoCor: "#EC1C24",
+    // O contorno preto do gancho fica: o desenho liga-o por omissão em qualquer
+    // cor que não seja preta, e é o que dá leitura ao vermelho sobre o branco.
+    rodapeTamanho: 0.033,
+    rodapeY: 0.884,
+    rodapeCor: "#FFFFFF",
+    rodapeFaixa: true,
+    rodapeFundo: "#000000",
+    rodapeFixo: "Link do filme completo na minha B10",
+    rodapeNota: "Nome do filme na legenda 🔽",
+    rodapeNotaTamanho: 0.029,
+    rodapeNotaY: 0.938,
+    // Cor própria: a segunda linha é texto sobre o fundo branco, não acompanha
+    // a cor do gancho (que no destaque é vermelha).
+    rodapeNotaCor: "#000000",
+  },
 };
 
 /** Preset por id; qualquer valor desconhecido cai no "atual". */

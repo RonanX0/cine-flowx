@@ -66,7 +66,7 @@
       <input id="gancho" type="text" value="O que acontece nessa cena deixou todo mundo em choque" />
     </div>
     <div class="campo">
-      <label for="rodape">Rodapé (preset Escuro)</label>
+      <label for="rodape">Rodapé (presets Escuro e Perfil)</label>
       <input id="rodape" type="text" value="Cenas rápidas" />
     </div>
     <div class="campo">
@@ -122,11 +122,16 @@ async function carregarBundle() {
   throw ultimoErro || new Error("não consegui ler o bundle");
 }
 
-const ORDEM = ["atual", "escuro", "claro"];
+/* A ordem sai da própria tabela do bundle: uma lista fixa aqui faria a amostra
+   deixar de mostrar um preset novo sem ninguém dar por isso — que foi o que
+   aconteceu quando o «perfil» e o «destaque» entraram. */
+
 const DESCRICAO = {
   atual: "Padrão do app — caixa automática, pílula por trás do gancho",
   escuro: "Formato 1 — fundo preto, gancho fluorescente, caixa 1:1 arredondada e rodapé",
   claro: "Formato 2 — fundo branco, gancho preto, faixa 4:3 de ponta a ponta",
+  perfil: "Fundo branco, gancho preto, caixa maleável e rodapé fixo em faixa preta",
+  destaque: "Fundo branco, gancho vermelho mais pequeno, caixa maleável e o mesmo rodapé fixo",
 };
 
 let estado = { api: null, src: "", vw: 1920, vh: 1080 };
@@ -140,7 +145,7 @@ function desenhar() {
   const vw = estado.vw, vh = estado.vh;
   saida.textContent = "";
 
-  for (const id of ORDEM) {
+  for (const id of Object.keys(PRESETS_DO_REEL)) {
     const P = PRESETS_DO_REEL[id];
     const geo = Eh(vw, vh, { top: 0, bottom: 0, vw, vh }, 720, id);
     const pct = (v, t) => ((v / t) * 100).toFixed(2) + "%";

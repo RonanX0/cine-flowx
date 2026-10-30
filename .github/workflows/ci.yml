@@ -1,0 +1,46 @@
+# Roda a bateria de testes do CineClip em cada PR e em cada push para a main.
+#
+# Até aqui os únicos checks dos PRs eram os deploy previews da Netlify, da Vercel
+# e da Cloudflare — eles dizem que o site publicou, não que o código funciona. Os
+# 24 scripts de `npm test` só corriam quando alguém se lembrava de os correr na
+# própria máquina, que foi como o erro da claim do Worker R2 ficou verde no
+# repositório e avariado no browser (ver RELATORIO-ERROS.md).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Um push novo na mesma branch cancela a execução anterior: o que interessa é o
+# estado do último commit, não a fila toda.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  testes:
+    name: Tipos e testes
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # A versão vem do .nvmrc (hoje, Node 22) para não divergir do local.
+          node-version-file: .nvmrc
+          cache: npm
+
+      # `npm ci` respeita o package-lock.json. As optionalDependencies
+      # (@napi-rs/canvas, ffmpeg-static) podem não ter binário para o runner;
+      # por serem opcionais, a instalação continua sem elas.
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Verificação de tipos
+        run: npm run typecheck
+
+      - name: Testes
+        run: npm test
