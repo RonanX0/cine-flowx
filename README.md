@@ -203,6 +203,18 @@ vez; o painel pode ser fechado (fica um atalho no canto) e o botão **Parar** in
   segue sem identificação, com o título tirado do nome do ficheiro. Em último, é reserva em
   vez de porta de entrada.
 
+### ⚡ Rápido por Nome / Dica — é mesmo só pelo nome
+
+O modo **⚡ Rápido por Nome / Dica** do Upload em massa procura o título no TMDB a partir do
+nome do ficheiro (e da dica do link, quando existe) e **não chama a IA de vídeo**: não prepara
+áudio nem vídeo para a IA, e nem exige chave de IA configurada.
+
+Antes, um nome que o TMDB não achasse disparava a análise completa do vídeo «em vez de
+falhar». Quem escolhe este modo está precisamente a fugir à IA — por quota e por tempo — por
+isso isso era o contrário do pedido, e corria sem avisar. Agora, nome que não bate segue o
+caminho normal: o vídeo **vai para a fila na mesma**, com o título do ficheiro e o aviso
+«seguiu sem identificação», para corrigir no Agendador.
+
 ### 🎬 A IA assiste ao vídeo (Gemini File API)
 
 Quando há chave do **Google Gemini**, a identificação do filme e a criação do gancho passam a

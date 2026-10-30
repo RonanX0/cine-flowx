@@ -279,15 +279,36 @@ console.log("\nA2b. Com Gemini: o vídeo vai para a IA («assistir» em vez de f
   dom.window.close();
 }
 
-console.log("\nA2b. Modo «Rápido por Nome»: se o TMDB não acha o nome, cai para a IA completa");
+console.log("\nA2b. Modo «Rápido por Nome» é name-only: não cai para a IA");
 {
+  /* Antes, um nome que o TMDB não achasse disparava a análise completa do
+     vídeo. Quem escolhe este modo está precisamente a fugir à IA (quota e
+     tempo), por isso isso era o contrário do pedido — e corria sem avisar. */
+  const dom = novoDom();
+  const c = cenario(dom.window);
+  c.lote.estado.opcoes.modoIdentificacao = "dica";
+  c.lote.estado.opcoes.agendarComPoucaCerteza = true;
+  c.lote.adicionarFicheiros([ficheiro(dom.window, "Nome Estranho.mp4")]);
+  await c.lote.iniciar();
+  check("chamou a identificação uma só vez (pelo nome)", c.chamadas.identificar === 1, String(c.chamadas.identificar));
+  check("não preparou o vídeo para a IA", !c.chamadas.videoParaIA, String(c.chamadas.videoParaIA));
+  check("agendou na mesma, com o nome do ficheiro", !!c.fila[0], c.fila[0] && c.fila[0].title);
+  dom.window.close();
+}
+
+{
+  // Sem «Agendar mesmo com pouca certeza», fica para rever em vez de gastar IA.
   const dom = novoDom();
   const c = cenario(dom.window);
   c.lote.estado.opcoes.modoIdentificacao = "dica";
   c.lote.adicionarFicheiros([ficheiro(dom.window, "Nome Estranho.mp4")]);
   await c.lote.iniciar();
-  check("chamou a identificação 2 vezes (nome, depois IA completa)", c.chamadas.identificar === 2, String(c.chamadas.identificar));
-  check("agendou com o filme da IA completa", c.fila[0]?.title === "Filme Nome Estranho.mp4", c.fila[0]?.title);
+  // Sem «Agendar mesmo com pouca certeza», o vídeo NÃO fica de fora: entra na
+  // fila com o título do ficheiro e um aviso para corrigir no Agendador —
+  // o que não acontece é gastar-se IA para tentar adivinhar.
+  check("sem o nome no TMDB, agenda com aviso e sem chamar a IA",
+    c.chamadas.identificar === 1 && !!c.fila[0] && /sem identifica/i.test(c.lote.estado.itens[0].aviso || ""),
+    "ident=" + c.chamadas.identificar + " aviso=" + (c.lote.estado.itens[0] && c.lote.estado.itens[0].aviso));
   dom.window.close();
 }
 

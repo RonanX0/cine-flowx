@@ -633,7 +633,7 @@
     var s = app.settings || {};
     var modoIdent = (estado.opcoes && estado.opcoes.modoDireto) ? "sem_id" : ((estado.opcoes && estado.opcoes.modoIdentificacao) || s.identMode || "auto");
     var temIA = !!String(s.groqKey || "").trim() || !!String(s.openrouterKey || "").trim() || !!String(s.geminiKey || "").trim();
-    if (!temIA && modoIdent !== "sem_id") return "Adiciona a tua chave Google Gemini, Groq ou OpenRouter nas configurações — a IA identifica o filme e cria o gancho e a legenda.";
+    if (!temIA && modoIdent !== "sem_id" && modoIdent !== "dica") return "Adiciona a tua chave Google Gemini, Groq ou OpenRouter nas configurações — a IA identifica o filme e cria o gancho e a legenda.";
     if (!String(s.tmdbKey || "").trim() && modoIdent !== "sem_id") return "Adiciona a tua chave TMDB nas configurações — é ela que confirma o filme e traz o pôster e a sinopse.";
     if (!app.account || !app.account.id) return "Escolhe uma conta do Instagram no topo do app.";
     return null;
@@ -768,11 +768,11 @@
     definirPasso(item, modoIdent === "sem_id" ? "A preparar corte direto…" : "A identificar o filme…", 0.1);
     var temGemini = !!String(s.geminiKey || "").trim();
     // O áudio também serve à Groq (Whisper transcreve as falas) — não só ao Gemini.
-    var querAudio = modoIdent !== "sem_id" && (temGemini || !!String(s.groqKey || "").trim());
+    var querAudio = modoIdent !== "sem_id" && modoIdent !== "dica" && (temGemini || !!String(s.groqKey || "").trim());
     var capturaParalela = await Promise.all([
       core.quadros(ficheiro, 0, fim, corte),
       querAudio ? Promise.resolve().then(function () { return core.audio(ficheiro, 0, fim); }).catch(function () { return null; }) : Promise.resolve(null),
-      modoIdent !== "sem_id" && temGemini && typeof core.videoParaIA === "function"
+      modoIdent !== "sem_id" && modoIdent !== "dica" && temGemini && typeof core.videoParaIA === "function"
         ? Promise.resolve().then(function () { return core.videoParaIA(ficheiro, 0, fim); }).catch(function () { return null; })
         : Promise.resolve(null),
     ]);
@@ -837,18 +837,12 @@
         }
       }
       filme = await core.procurarTmdb(s.tmdbKey, ia);
-      // «Rápido por Nome» vai direto ao TMDB, sem a IA de vídeo. Se o nome não bateu
-      // com nenhum título, cai para a análise completa em vez de falhar.
-      if (!filme && ia && ia.provedor === "dica" && modoIdent === "dica") {
-        definirPasso(item, "Nome não encontrado — a analisar o vídeo…", 0.12);
-        try {
-          var iaCompleta = await core.identificar(s.groqKey, quadros, s.lang, Object.assign({}, optsIdent, { identMode: "auto" }));
-          if (iaCompleta && (iaCompleta.titulo || iaCompleta.imdb_id || (iaCompleta.atores && iaCompleta.atores.length))) {
-            ia = iaCompleta;
-            filme = await core.procurarTmdb(s.tmdbKey, ia);
-          }
-        } catch (e) {}
-      }
+      /* «⚡ Rápido por Nome» é name-only de propósito: quem o escolhe quer
+         evitar a IA (quota e tempo), não "tentar o nome e, se falhar, analisar
+         o vídeo à mesma" — era isso que fazia a IA correr mesmo neste modo.
+         Nome que não bate no TMDB segue o caminho normal daqui para baixo:
+         com «Agendar mesmo com pouca certeza» vai com o título do ficheiro,
+         sem ela fica marcado para rever. */
       if (!filme && Array.isArray(ia.alternativas) && ia.alternativas.length) {
         for (var altIdx = 0; altIdx < ia.alternativas.length; altIdx++) {
           var altCand = ia.alternativas[altIdx];
