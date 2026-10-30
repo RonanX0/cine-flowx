@@ -647,14 +647,18 @@ check("putVault também faz failover para o Drive", failoverVault.provider === "
 const failoverRead = await CC.getVaultCipher("hash_failover");
 check("getVaultCipher também faz failover de leitura para o Drive", failoverRead.data === cipher && failoverRead.source === "google-drive", JSON.stringify({ src: failoverRead.source, ok: !!failoverRead.data }));
 
-/* 13 — worker inacessível → erro real + readFailed */
+/* 13 — worker inacessível → erro real + readFailed
+   Os cofres lidos aqui têm de ser hashes que mais nenhum trecho usou: a cadeia
+   acrescenta sempre "legacy" (ver "providers() = r2 → legacy"), por isso um hash
+   já gravado antes seria encontrado nos hosts antigos e a leitura devolveria
+   readFailed=false — com razão, mas sem exercer o que esta secção testa. */
 console.log("\nFalhas de rede");
 setSettings(sb, { r2WorkerUrl: "http://127.0.0.1:59999", r2Token: TOKEN });
-const unreachable = await CC.getVaultCipher("hash_teste_1");
+const unreachable = await CC.getVaultCipher("hash_so_nesta_seccao_r2");
 check("backend em baixo → readFailed=true (permite à guarda proteger a fila)", unreachable.readFailed === true && unreachable.data === null, JSON.stringify(unreachable.failures || null));
 await expectThrow("putVault com backend em baixo lança erro (não falha em silêncio)", () => CC.putVault("hash_teste_1", cipher), "R2");
 setSettings(sb, { driveScriptUrl: "http://127.0.0.1:59999/drive-api", driveToken: DRIVE_TOKEN, cloudProvider: "drive" });
-const unreachableDrive = await CC.getVaultCipher("hash_drive_1");
+const unreachableDrive = await CC.getVaultCipher("hash_so_nesta_seccao_drive");
 check("Apps Script em baixo → readFailed=true", unreachableDrive.readFailed === true && unreachableDrive.data === null, JSON.stringify(unreachableDrive.failures || null));
 await expectThrow("putVault com Apps Script em baixo lança erro", () => CC.putVault("hash_drive_1", cipher), "Drive");
 
