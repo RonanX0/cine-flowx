@@ -95,8 +95,8 @@ e muda tudo de uma vez: o fundo, o estilo do gancho e a **caixa do vídeo**.
 | **Padrão do app** (`atual`) | preto (ou desfocado) | branco, com pílula escura | automática: 16:9 fica a 720×406, vertical preenche o 9:16 | — |
 | **Escuro** (`escuro`) | preto | fluorescente `#ECFA12`, 900, linhas coladas (0,88 em), sem pílula | **1:1** de 648 px, 5 % de margem lateral, cantos com raio de 30 px, do 27,4 % ao 78,0 % da altura | verde `#2DBD2C` a 93,55 % (texto opcional) |
 | **Claro** (`claro`) | branco | preto `#000000`, sem pílula | **faixa 4:3** de ponta a ponta (720×540), do 30,1 % ao 72,2 % da altura | — |
-| **Perfil** (`perfil`) | branco | preto `#000000`, sem pílula | **maleável**: largura toda, altura a seguir o vídeo, entre 30,1 % e 84,0 % | **faixa preta** fixa a 88,4 % a abraçar o texto, letras brancas, e uma 2.ª linha preta a 93,8 % |
-| **Destaque** (`destaque`) | branco | vermelho `#EC1C24` (mais pequeno) com o contorno preto automático | **maleável**, largura toda, entre 28,1 % e 84,0 % | o mesmo rodapé fixo do **Perfil** |
+| **Perfil** (`perfil`) | branco | preto `#000000`, sem pílula | **maleável**: largura toda, altura a seguir o vídeo, entre 26,0 % e 84,0 % | **faixa preta** fixa a 88,4 % a abraçar o texto, letras brancas, e uma 2.ª linha preta a 93,8 % |
+| **Destaque** (`destaque`) | branco | vermelho `#EC1C24` (mais pequeno) com o contorno preto automático | **maleável**, largura toda, entre 25,0 % e 84,0 % | o mesmo rodapé fixo do **Perfil** |
 
 O **Perfil** e o **Destaque** usam uma **caixa maleável** (`caixa: "livre"`), que é a diferença
 grande para os outros três:

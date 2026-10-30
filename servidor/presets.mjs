@@ -75,7 +75,9 @@ export const PRESETS_DO_REEL = {
     caixa: "livre",
     margem: 0,
     raio: 0,
-    topo: 0.301,
+    // O gancho é centrado na faixa de 6,5% até `topo`; com duas linhas sobrava
+    // muito branco entre o texto e o vídeo, por isso o vídeo sobe.
+    topo: 0.26,
     caixaFim: 0.84,
     fundo: "branco",
     bgMode: "branco",
@@ -107,7 +109,7 @@ export const PRESETS_DO_REEL = {
     caixa: "livre",
     margem: 0,
     raio: 0,
-    topo: 0.281,
+    topo: 0.25,
     caixaFim: 0.84,
     fundo: "branco",
     bgMode: "branco",
