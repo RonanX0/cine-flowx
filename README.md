@@ -196,7 +196,12 @@ vez; o painel pode ser fechado (fica um atalho no canto) e o botão **Parar** in
   rever (*Abrir no Estúdio*), a não ser que ligues *Agendar mesmo com pouca certeza*.
 - Vídeos em **H.265/HEVC** (comuns nos downloads do TikTok) dão erro claro: o navegador não
   consegue ler a imagem. Converte-os para H.264 antes.
-- Precisa de uma chave de IA (Gemini, Groq ou OpenRouter) e da TMDB nas configurações. Ordem: Gemini → Groq (+ Serper) → OpenRouter free (+ DuckDuckGo).
+- Precisa de uma chave de IA (Gemini, Groq ou OpenRouter) e da TMDB nas configurações. Ordem:
+  **Gemini → OpenRouter free (+ DuckDuckGo) → Groq (+ Serper)**. A Groq fica em último de
+  propósito: é a que bate no limite de pedidos primeiro (o lote processa vários vídeos ao
+  mesmo tempo e cada um faz várias chamadas), e quando ela estoura a meio do lote o vídeo
+  segue sem identificação, com o título tirado do nome do ficheiro. Em último, é reserva em
+  vez de porta de entrada.
 
 ### 🎬 A IA assiste ao vídeo (Gemini File API)
 

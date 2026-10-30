@@ -1475,18 +1475,25 @@
   }
 
   /** Texto: Groq → OpenRouter. */
+  /**
+   * Texto: OpenRouter → Groq. A Groq fica em ÚLTIMO de propósito — é a que
+   * bate no limite de pedidos primeiro (o lote processa vários vídeos ao mesmo
+   * tempo, e cada um faz várias chamadas), e quando ela estoura a meio de um
+   * lote o vídeo segue sem identificação, com o título tirado do nome do
+   * ficheiro. Deixá-la no fim faz dela a reserva em vez da porta de entrada.
+   */
   async function textoAlternativo(o, prompt, jsonModo) {
     var c = chaves(o), erros = [];
-    if (c.groq) { try { var t1 = await groqTexto(c.groq, prompt, jsonModo); Prov.ultimo = "groq"; return t1; } catch (e) { erros.push(e); } }
     if (c.openrouter) { try { var t2 = await orTexto(c.openrouter, prompt, jsonModo); Prov.ultimo = "openrouter"; return t2; } catch (e) { erros.push(e); } }
+    if (c.groq) { try { var t1 = await groqTexto(c.groq, prompt, jsonModo); Prov.ultimo = "groq"; return t1; } catch (e) { erros.push(e); } }
     throw juntarErros(erros) || erroHttp("Adiciona uma chave Gemini, Groq ou OpenRouter nas configurações.", 401);
   }
-  /** Visão: Groq → OpenRouter. */
+  /** Visão: OpenRouter → Groq, pela mesma razão. */
   async function visaoAlternativa(o, prompt, quadros, jsonModo) {
     var c = chaves(o), erros = [];
     if (!quadros || !quadros.length) return textoAlternativo(o, prompt, jsonModo);
-    if (c.groq) { try { var v1 = await groqVisao(c.groq, prompt, quadros, jsonModo); Prov.ultimo = "groq"; return v1; } catch (e) { erros.push(e); } }
     if (c.openrouter) { try { var v2 = await orVisao(c.openrouter, prompt, quadros, jsonModo); Prov.ultimo = "openrouter"; return v2; } catch (e) { erros.push(e); } }
+    if (c.groq) { try { var v1 = await groqVisao(c.groq, prompt, quadros, jsonModo); Prov.ultimo = "groq"; return v1; } catch (e) { erros.push(e); } }
     throw juntarErros(erros) || erroHttp("Adiciona uma chave Gemini, Groq ou OpenRouter nas configurações.", 401);
   }
 
