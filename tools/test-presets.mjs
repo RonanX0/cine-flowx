@@ -146,13 +146,33 @@ function desenhar(preset, texto, geo, { rodape = "", rodapeCor = "", cor = "" } 
 }
 
 console.log("\n1. A tabela de presets (medidas das capturas)");
-check("três presets: atual, escuro e claro", ["atual", "escuro", "claro"].every((k) => PRESETS_DO_REEL[k]), Object.keys(PRESETS_DO_REEL).join(","));
+check("cinco presets: atual, escuro, claro, perfil e destaque", ["atual", "escuro", "claro", "perfil", "destaque"].every((k) => PRESETS_DO_REEL[k]), Object.keys(PRESETS_DO_REEL).join(","));
 check("escuro = caixa 1:1 com margens e cantos arredondados", PRESETS_DO_REEL.escuro.caixa === "quadrado" && PRESETS_DO_REEL.escuro.margem === 0.05 && PRESETS_DO_REEL.escuro.raio > 0);
 check("claro = faixa 4:3 de ponta a ponta, sem cantos", PRESETS_DO_REEL.claro.caixa === "banda" && PRESETS_DO_REEL.claro.margem === 0 && PRESETS_DO_REEL.claro.raio === 0);
 check("fundos: escuro preto, claro branco", PRESETS_DO_REEL.escuro.fundo === "preto" && PRESETS_DO_REEL.claro.fundo === "branco");
 check("gancho: escuro fluorescente, claro preto, atual branco", PRESETS_DO_REEL.escuro.ganchoCor === "#ECFA12" && PRESETS_DO_REEL.claro.ganchoCor === "#000000" && PRESETS_DO_REEL.atual.ganchoCor === "#FFFFFF");
 check("só o atual leva a pílula por trás do gancho", PRESETS_DO_REEL.atual.ganchoPill === true && PRESETS_DO_REEL.escuro.ganchoPill === false && PRESETS_DO_REEL.claro.ganchoPill === false);
 check("rodapé só no escuro (verde, a 93,55% da altura)", PRESETS_DO_REEL.escuro.rodapeTamanho > 0 && PRESETS_DO_REEL.escuro.rodapeCor === "#2DBD2C" && PRESETS_DO_REEL.claro.rodapeTamanho === 0 && PRESETS_DO_REEL.atual.rodapeTamanho === 0);
+/* Os dois formatos novos reaproveitam a caixa do «claro», que foi medida numa
+   captura real; o que muda neles é só a tipografia e o rodapé, tirados das
+   capturas que o utilizador enviou. Por isso o que se testa aqui é a caixa ser
+   mesmo a mesma — e não uma segunda geometria a divergir em silêncio. */
+check("perfil e destaque usam a caixa medida do «claro»", ["perfil", "destaque"].every((k) =>
+  PRESETS_DO_REEL[k].caixa === PRESETS_DO_REEL.claro.caixa &&
+  PRESETS_DO_REEL[k].topo === PRESETS_DO_REEL.claro.topo &&
+  PRESETS_DO_REEL[k].margem === 0 && PRESETS_DO_REEL[k].raio === 0));
+check("perfil e destaque são de fundo branco e sem pílula", ["perfil", "destaque"].every((k) =>
+  PRESETS_DO_REEL[k].fundo === "branco" && PRESETS_DO_REEL[k].ganchoPill === false));
+check("perfil = rodapé em faixa preta com texto branco e segunda linha",
+  PRESETS_DO_REEL.perfil.rodapeFaixa === true && PRESETS_DO_REEL.perfil.rodapeFundo === "#000000" &&
+  PRESETS_DO_REEL.perfil.rodapeCor === "#FFFFFF" && PRESETS_DO_REEL.perfil.rodapeTamanho > 0 &&
+  /LINK DA B10/.test(PRESETS_DO_REEL.perfil.rodapePadrao) && /legenda/.test(PRESETS_DO_REEL.perfil.rodapeNota));
+check("destaque = gancho vermelho, sem rodapé",
+  PRESETS_DO_REEL.destaque.ganchoCor === "#EC1C24" && PRESETS_DO_REEL.destaque.rodapeTamanho === 0 &&
+  !PRESETS_DO_REEL.destaque.rodapeFaixa);
+check("o contorno preto do gancho continua ligado para cor que não seja preta",
+  /usaBordaPreta=!\/\^#\(\?:000\|000000\)\$\/i\.test/.test(modulo), "o desenho perdeu a borda automática");
+
 check("preset desconhecido cai no atual", api.presetDoReel("inventado").id === "atual" && api.presetDoReel().id === "atual");
 
 /* ------------------------------------------------------------------ 2 */
@@ -255,7 +275,7 @@ console.log("\n7. Servidor: as mesmas contas do app");
 const servidor = await import(pathToFileURL(path.join(root, "servidor", "presets.mjs")).href);
 const video = await import(pathToFileURL(path.join(root, "servidor", "video.mjs")).href);
 check("a tabela do servidor é igual à do bundle", JSON.stringify(servidor.PRESETS_DO_REEL) === JSON.stringify(PRESETS_DO_REEL));
-for (const preset of ["escuro", "claro"]) {
+for (const preset of ["escuro", "claro", "perfil", "destaque"]) {
   for (const [largura, altura, corte] of [[1920, 1080, horizontal], [1080, 1920, { top: 0, bottom: 0, vw: 1080, vh: 1920 }], [1080, 1920, { top: 440, bottom: 440, vw: 1080, vh: 1920 }]]) {
     const app = Eh(largura, altura, corte, 720, preset);
     const srv = video.enquadramento(largura, altura, corte, 720, preset);

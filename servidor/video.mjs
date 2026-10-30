@@ -436,16 +436,35 @@ export async function imagemDoGancho(largura, altura, padY, texto, estilo = {}) 
     ctx.restore();
   }
 
-  /* Rodapé do preset (texto opcional, definido na conta do Instagram). */
-  const rodape = String((caixa && caixa.rodape) || "").trim();
+  /* Rodapé do preset (texto da conta do Instagram, ou o do próprio preset).
+     Com `rodapeFaixa` desenha uma faixa preenchida por trás, a abraçar o texto,
+     e uma segunda linha por baixo — é o formato das capturas com o rodapé preto.
+     Nesse caso a cor do texto vem do preset e não da conta: a cor por omissão da
+     conta é verde, que sobre a faixa preta não é o que se quer. */
+  const rodape = String((caixa && caixa.rodape) || "").trim() || P.rodapePadrao || "";
   if (comPreset && rodape && P.rodapeTamanho > 0) {
     const tamRodape = Math.round(largura * P.rodapeTamanho);
+    const yRodape = Math.round(altura * (P.rodapeY || 0.9355));
     ctx.save();
     ctx.font = `700 ${tamRodape}px Inter, "Noto Color Emoji", "Helvetica Neue", Arial, sans-serif`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillStyle = (caixa && caixa.rodapeCor) || P.rodapeCor;
-    ctx.fillText(rodape, largura / 2, Math.round(altura * (P.rodapeY || 0.9355)));
+    if (P.rodapeFaixa) {
+      const padX = Math.round(tamRodape * 0.9);
+      const padY = Math.round(tamRodape * 0.62);
+      const faixaW = Math.min(largura * 0.96, ctx.measureText(rodape).width + padX * 2);
+      const faixaH = tamRodape + padY * 2;
+      ctx.fillStyle = P.rodapeFundo || "#000000";
+      ctx.fillRect(Math.round((largura - faixaW) / 2), Math.round(yRodape - faixaH / 2), Math.round(faixaW), Math.round(faixaH));
+    }
+    ctx.fillStyle = P.rodapeFaixa ? (P.rodapeCor || "#FFFFFF") : ((caixa && caixa.rodapeCor) || P.rodapeCor);
+    ctx.fillText(rodape, largura / 2, yRodape, largura * 0.94);
+    if (P.rodapeNota && P.rodapeNotaTamanho > 0) {
+      const tamNota = Math.round(largura * P.rodapeNotaTamanho);
+      ctx.font = `700 ${tamNota}px Inter, "Noto Color Emoji", "Helvetica Neue", Arial, sans-serif`;
+      ctx.fillStyle = P.ganchoCor || "#000000";
+      ctx.fillText(P.rodapeNota, largura / 2, Math.round(altura * (P.rodapeNotaY || 0.938)), largura * 0.94);
+    }
     ctx.restore();
   }
 
