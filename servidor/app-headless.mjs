@@ -40,6 +40,28 @@ export async function arrancarApp({ site = "https://cine-flowx.vercel.app", raiz
   window.HTMLMediaElement.prototype.load = () => {};
   window.HTMLMediaElement.prototype.play = () => Promise.resolve();
   window.scrollTo = () => {};
+  /* O jsdom não carrega imagens (não usamos `resources: "usable"`), por isso
+     `img.src = …` nunca dispara onload NEM onerror: o redimensionamento dos
+     quadros ficava 2 s à espera do timeout de reserva — por quadro. Falhar já
+     dá exatamente o mesmo resultado (usa-se o URL original) sem a espera; era
+     daqui que vinham ~40 s de um único ficheiro de teste. */
+  window.Image = class ImagemQueNaoCarrega {
+    constructor() {
+      this.width = 0;
+      this.height = 0;
+      this.onload = null;
+      this.onerror = null;
+    }
+    set src(v) {
+      this._src = v;
+      setTimeout(() => {
+        if (typeof this.onerror === "function") this.onerror(new Error("jsdom nao carrega imagens"));
+      }, 0);
+    }
+    get src() {
+      return this._src;
+    }
+  };
   window.URL.createObjectURL = () => "blob:servidor";
   window.URL.revokeObjectURL = () => {};
   const registos = [];

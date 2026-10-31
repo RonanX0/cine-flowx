@@ -169,7 +169,30 @@ class XMLHttpRequestStub {
   }
 }
 
-const realFetch = globalThis.fetch;
+/* ==REDE-FECHADA== Os testes não podem sair para a internet. O CineCloud tem
+   os hosts antigos (bytebin, kappa.lol, keyvalue.immanuel.co, uguu, litterbox)
+   na cadeia, e deixá-los passar fazia o teste depender de serviços mortos: no
+   CI cada um fica à espera do timeout, e o resultado muda conforme a rede do
+   dia — foi o que tornou instáveis as verificações da secção «Falhas de rede».
+   Agora só localhost passa; tudo o resto falha já, como um browser offline. */
+const fetchDeRede = globalThis.fetch;
+const HOSTS_LOCAIS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+const externosBloqueados = new Set();
+function ehLocal(url) {
+  try {
+    return HOSTS_LOCAIS.has(new URL(String(url), "http://127.0.0.1").hostname.replace(/^\[|\]$/g, ""));
+  } catch {
+    return false;
+  }
+}
+const realFetch = async (url, opts) => {
+  if (!ehLocal(url)) {
+    try { externosBloqueados.add(new URL(String(url), "http://127.0.0.1").hostname); } catch {}
+    throw new TypeError("Failed to fetch");
+  }
+  return fetchDeRede(url, opts);
+};
+globalThis.__externosBloqueados = externosBloqueados;
 
 /**
  * Fetch que se porta como um browser com o CORS bloqueado para o Apps Script:
@@ -754,6 +777,12 @@ console.log(`\n${fail === 0 ? "✅" : "❌"} ${pass} passaram, ${fail} falharam`
 if (failures.length) {
   console.log("\nFalhas:");
   failures.forEach((f) => console.log("  - " + f));
+}
+/* Deixa à vista se algum caminho tentou sair para a internet: o teste continua
+   a passar (a chamada falha como offline), mas é sinal de que algo novo
+   depende de um serviço externo. */
+if (externosBloqueados.size) {
+  console.log("\nRede externa bloqueada (o teste nao depende dela): " + [...externosBloqueados].join(", "));
 }
 if (server) server.close();
 if (serverTiny) serverTiny.close();
