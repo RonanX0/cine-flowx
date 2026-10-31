@@ -139,6 +139,26 @@ function cenario(window, opcoes = {}) {
 }
 
 console.log("\n⚡ Agendamento rápido — agendamento-rapido.js\n");
+console.log("Nome do arquivo prevalece sobre configuração e cache visual");
+{
+  const dom = await novoDom();
+  const c = cenario(dom.window, { settings: { identMode: "dica", useFileNameHint: false, geminiKey: "gem" } });
+  c.rapido.estado.opcoes.modoIdentificacao = "dica";
+  let audio = 0, lerCache = 0, gravarCache = 0, opts;
+  c.core.audio = async () => { audio++; return null; };
+  c.core.identificar = async (k, q, l, o) => { opts = o; return { titulo: "Accused", confianca: 88, provedor: "dica" }; };
+  const ajudas = dom.window.CineLote._interno;
+  ajudas.hashPerceptualVideo = async () => "hash-teste";
+  ajudas.cacheIdentLer = () => { lerCache++; return { ia: { titulo: "Data Death", confianca: 99 }, filme: { title: "Data Death", id: 42 } }; };
+  ajudas.cacheIdentGuardar = () => { gravarCache++; };
+  c.rapido.adicionarFicheiros([ficheiro(dom.window, "Accused.mp4")]);
+  await c.rapido.iniciar();
+  check("modo por nome força a dica do arquivo", opts?.useFileNameHint === true && opts?.fileName === "Accused.mp4");
+  check("cache visual não troca o título", c.fila[0]?.title === "Accused" && lerCache === 0, c.fila[0]?.title);
+  check("modo por nome não extrai áudio nem grava cache visual", audio === 0 && gravarCache === 0);
+  dom.window.close();
+}
+
 console.log("A1. Dois vídeos já editados: legenda + capa, sem edição");
 {
   const dom = await novoDom();

@@ -1,0 +1,1 @@
+const usarNomeArq=identMode==="dica"||(i==null?void 0:i.useFileNameHint)!==!1;

@@ -800,9 +800,10 @@
         return false;
       });
     }
-    var cacheHit = (hashVideo && modoIdent !== "sem_id") ? cacheIdentLer(hashVideo) : null;
+    // O modo por nome deve respeitar o arquivo atual, sem reaproveitar palpites visuais.
+    var cacheHit = (hashVideo && modoIdent !== "sem_id" && modoIdent !== "dica") ? cacheIdentLer(hashVideo) : null;
 
-    var baseLimpo = (s.useFileNameHint !== false)
+    var baseLimpo = (modoIdent === "dica" || s.useFileNameHint !== false)
       ? ((typeof core.limparNomeArquivo === "function") ? core.limparNomeArquivo(ficheiro.name) : (!nomeGen ? baseNome.replace(/[._-]+/g, " ").trim() : ""))
       : "";
     var ia = null;
@@ -817,10 +818,10 @@
     } else {
      try {
       var optsIdent = {
-        useFileNameHint: s.useFileNameHint !== false,
+        useFileNameHint: modoIdent === "dica" || s.useFileNameHint !== false,
         fileName: ficheiro.name,
         metaTitle: tituloMetadados,
-        userHint: dicaEnriquecida,
+        userHint: modoIdent === "dica" ? dicaLink : dicaEnriquecida,
         geminiKey: s.geminiKey,
         audioClip: audio,
         video: videoIA,
@@ -887,7 +888,7 @@
           "identificacao"
         );
       }
-      if (hashVideo && filme.id && Number(ia.confianca) >= CONFIANCA_MINIMA) cacheIdentGuardar(hashVideo, { ia: ia, filme: filme });
+      if (modoIdent !== "dica" && hashVideo && filme.id && Number(ia.confianca) >= CONFIANCA_MINIMA) cacheIdentGuardar(hashVideo, { ia: ia, filme: filme });
       var confIdent = Number(ia.confianca) || 0;
       if (confIdent < CONFIANCA_MINIMA && !permitirPoucaCerteza) {
         throw erroComTipo(
@@ -900,7 +901,7 @@
       // A IA falhou (cota, rede, TMDB) ou ficou em dúvida: o vídeo NÃO fica de fora do lote.
       // Segue como «Sem identificação»: título do nome do ficheiro, sem capa e sem palpite errado.
       if (erroIdent && erroIdent.tipo === "parado") throw erroIdent;
-      var nomeSemId = dicaLink || tituloMetadados || baseLimpo || "";
+      var nomeSemId = dicaLink || (modoIdent === "dica" ? (baseLimpo || tituloMetadados) : (tituloMetadados || baseLimpo)) || "";
       ia = { titulo: nomeSemId || "Cena de filme", confianca: 0, cena: (ia && ia.cena) || "", ganchos: [], modo_identificacao: "sem_id" };
       filme = { id: 0, kind: "movie", title: nomeSemId || "Cena de filme", original: nomeSemId || "", year: "", poster: "", overview: "", genres: [], _semNome: !nomeSemId };
       item.aviso = String((erroIdent && erroIdent.message) || "A IA não identificou o filme").replace(/[.\s]+$/, "") +

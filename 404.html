@@ -722,18 +722,19 @@ function _vsExtrairPistaNome(fileName,metaTitle,userHint){
   const frames=Array.isArray(o)?o:[];
   const identMode=String((i==null?void 0:i.identMode)||(i==null?void 0:i.modo)||"auto").toLowerCase().trim();
   const hookMode=String((i==null?void 0:i.hookMode)||"auto").toLowerCase().trim();
-  const usarNomeArq=(i==null?void 0:i.useFileNameHint)!==!1&&(Boolean((i==null?void 0:i.useFileNameHint)??!0)||identMode==="dica");
+  const usarNomeArq=identMode==="dica"||(i==null?void 0:i.useFileNameHint)!==!1;
   const fnEf=usarNomeArq?i==null?void 0:i.fileName:"";
   const mtEf=usarNomeArq?i==null?void 0:i.metaTitle:"";
   const rawHint=((h=i==null?void 0:i.userHint)==null?void 0:h.trim())||"";
   const c=[rawHint,fg(fnEf,mtEf)].filter(Boolean).join(" | ");
-  const pistaNome=_vsExtrairPistaNome(fnEf,mtEf,rawHint);
+  const pistaNome=identMode==="dica"?(_vsExtrairPistaNome(fnEf,"",rawHint)||_vsExtrairPistaNome("",mtEf,"")):_vsExtrairPistaNome(fnEf,mtEf,rawHint);
   if(identMode==="sem_id"){
     const tit=pistaNome?pistaNome.titulo:"Cena de filme";
     return{titulo:tit,titulo_original:tit,ano:pistaNome?pistaNome.ano:void 0,tipo:(pistaNome&&pistaNome.tipo)||"movie",temporada_episodio:pistaNome?pistaNome.temporada_episodio:void 0,confianca:100,atores:[],personagens:[],cena:"",ganchos:hookMode==="sem_gancho"?[]:(_GC_POOL_MODO[hookMode]||_GC_POOL_MODO.auto).slice(),provedor:"direto",acordo_provedores:!0,alternativas:pistaNome&&pistaNome.alternativas||[],semIdentificacao:!0,modo_identificacao:"sem_id",modo_gancho:hookMode};
   }
-  /* ==CINECLIP-DICA-DIRETO== modo «Rápido por Nome»: com um título legível no nome do ficheiro/dica, vai DIRETO ao TMDB — não chama a IA de vídeo (que reanalisava quadros e diálogo e ainda podia contrariar o nome). O gancho é feito depois, já com o filme confirmado. Se o TMDB não achar, quem chamou refaz em modo IA completa. */
-  if(identMode==="dica"&&pistaNome&&pistaNome.titulo){
+  /* ==CINECLIP-DICA-DIRETO== modo «Rápido por Nome»: com um título legível no nome do ficheiro/dica, vai DIRETO ao TMDB — não chama a IA de vídeo (que reanalisava quadros e diálogo e ainda podia contrariar o nome). O gancho é feito depois, já com o filme confirmado. Sem título legível, pede para renomear o arquivo; nunca analisa o vídeo neste modo. */
+  if(identMode==="dica"){
+    if(!pistaNome||!pistaNome.titulo)throw new ft("Não encontrei um título no nome do arquivo. Renomeie o arquivo com o nome do filme/série ou informe uma dica.");
     const temIA=Boolean(((w=i==null?void 0:i.geminiKey)==null?void 0:w.trim())||(r==null?void 0:r.trim()));
     return{titulo:pistaNome.titulo,titulo_original:pistaNome.titulo,ano:pistaNome.ano,tipo:pistaNome.tipo||"movie",temporada_episodio:pistaNome.temporada_episodio,confianca:88,atores:[],personagens:[],cena:"",ganchos:hookMode==="sem_gancho"||temIA?[]:(_GC_POOL_MODO[hookMode]||_GC_POOL_MODO.auto).slice(),provedor:"dica",acordo_provedores:!0,alternativas:pistaNome.alternativas||[],modo_identificacao:"dica",modo_gancho:hookMode};
   }

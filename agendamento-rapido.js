@@ -452,7 +452,7 @@
       var temGemini = !!String(s.geminiKey || "").trim();
       var audio = null;
       // O áudio também serve à Groq (Whisper transcreve as falas) — não só ao Gemini.
-      if ((temGemini || String(s.groqKey || "").trim()) && typeof core.audio === "function") {
+      if (modoIdent !== "dica" && (temGemini || String(s.groqKey || "").trim()) && typeof core.audio === "function") {
         try {
           audio = await core.audio(ficheiro, 0, fim);
         } catch (e) {
@@ -472,7 +472,7 @@
       item.videoHash = hashVideo || undefined;
 
       var cacheHit = null;
-      if (hashVideo && ajudas && typeof ajudas.cacheIdentLer === "function") {
+      if (modoIdent !== "dica" && hashVideo && ajudas && typeof ajudas.cacheIdentLer === "function") {
         try {
           cacheHit = ajudas.cacheIdentLer(hashVideo);
         } catch (e) {
@@ -486,10 +486,10 @@
         filme = cacheHit.filme;
       } else {
         ia = await core.identificar(s.groqKey, quadros, s.lang || "pt-BR", {
-          useFileNameHint: s.useFileNameHint !== false,
+          useFileNameHint: modoIdent === "dica" || s.useFileNameHint !== false,
           fileName: ficheiro.name,
           metaTitle: titulo !== "Reels" ? titulo : "",
-          userHint: (s.useFileNameHint !== false && titulo !== "Reels") ? titulo : "",
+          userHint: ((modoIdent === "dica" || s.useFileNameHint !== false) && titulo !== "Reels") ? titulo : "",
           geminiKey: s.geminiKey,
           audioClip: audio,
           identMode: modoIdent,
@@ -540,7 +540,7 @@
             "identificacao"
           );
         }
-        if (hashVideo && filme.id && ajudas && typeof ajudas.cacheIdentGuardar === "function") {
+        if (modoIdent !== "dica" && hashVideo && filme.id && ajudas && typeof ajudas.cacheIdentGuardar === "function") {
           try {
             ajudas.cacheIdentGuardar(hashVideo, { ia: ia, filme: filme });
           } catch (e) {}
