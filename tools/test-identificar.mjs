@@ -27,6 +27,7 @@ const json = (corpo) => new Response(JSON.stringify(corpo), { status: 200, heade
 
 /* ------------------------------------------------------------------ TMDB falso */
 const OBRAS = {
+  "movie-999": { kind: "movie", id: 999, title: "Acusado", original_title: "Accused", release_date: "2023-01-01", popularity: 10, overview: "Filme de teste.", cast: [] },
   "tv-58841": { kind: "tv", id: 58841, name: "Chicago P.D.", original_name: "Chicago P.D.", first_air_date: "2014-01-08", popularity: 300, overview: "A unidade de Inteligência da polícia de Chicago.", cast: [{ name: "Jason Beghe", roles: [{ character: "Hank Voight" }] }, { name: "Patrick Flueger", roles: [{ character: "Adam Ruzek" }] }, { name: "Tracy Spiridakos", roles: [{ character: "Hailey Upton" }] }] },
   "tv-44006": { kind: "tv", id: 44006, name: "Chicago Fire", original_name: "Chicago Fire", first_air_date: "2012-10-10", popularity: 400, overview: "Bombeiros de Chicago.", cast: [{ name: "Taylor Kinney", roles: [{ character: "Kelly Severide" }] }, { name: "Jesse Spencer", roles: [{ character: "Matthew Casey" }] }] },
   "movie-10528": { kind: "movie", id: 10528, title: "Sherlock Holmes", original_title: "Sherlock Holmes", release_date: "2009-12-23", popularity: 90, overview: "Detetive em Londres.", cast: [{ name: "Robert Downey Jr.", character: "Sherlock Holmes" }, { name: "Jude Law", character: "Dr. John Watson" }] },
@@ -35,6 +36,7 @@ const OBRAS = {
   "movie-555": { kind: "movie", id: 555, title: "A Fuga Silenciosa", original_title: "The Quiet Escape", release_date: "2016-05-01", popularity: 3, overview: "Pouco conhecido.", cast: [{ name: "Fulano Ator", character: "Ana" }] },
 };
 const PESQUISA = {
+  accused: ["movie-999"],
   "chicago p d": ["tv-58841"], "chicago fire": ["tv-44006"], "sherlock holmes": ["movie-10528"], inside: ["movie-1000837", "movie-777"],
   "the quiet escape": ["movie-555"], "a fuga silenciosa": ["movie-555"],
 };
@@ -163,6 +165,21 @@ console.log("\n⚡ «Rápido por Nome»: o ano entre parênteses não suja o tí
   check("e continua sem chamar a IA", pedidosIA.length === 0, String(pedidosIA.length));
 }
 
+
+console.log("\n⚡ Regressão: Accused.mp4 com a dica geral desativada");
+{
+  pedidosIA.length = 0;
+  const ia = await identificar({ identMode: "dica", fileName: "Accused.mp4", useFileNameHint: false });
+  check("usa Accused mesmo com useFileNameHint=false", ia.titulo === "Accused" && ia.provedor === "dica", JSON.stringify(ia));
+  const filme = await core.procurarTmdb("tmdb", ia);
+  check("consulta TMDB pelo título e aceita título original em inglês", filme?.original === "Accused" && ia.confianca >= 65, JSON.stringify(filme));
+  const comMeta = await identificar({ identMode: "dica", fileName: "Accused.mp4", metaTitle: "Data Death" });
+  check("nome do arquivo tem prioridade sobre metadados antigos", comMeta.titulo === "Accused", comMeta.titulo);
+  let erro = "";
+  try { await identificar({ identMode: "dica", fileName: "video.mp4" }); } catch (e) { erro = e.message; }
+  check("nome genérico pede um título legível", /nome do arquivo|dica/i.test(erro), erro);
+  check("nenhum dos casos chama a IA de identificação", pedidosIA.length === 0, String(pedidosIA.length));
+}
 
 console.log("\n🎣 Ganchos: ver → escrever 10 → julgar");
 {

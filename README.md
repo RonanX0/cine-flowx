@@ -217,6 +217,12 @@ vez; o painel pode ser fechado (fica um atalho no canto) e o botão **Parar** in
 
 ### ⚡ Rápido por Nome / Dica — é mesmo só pelo nome
 
+No modo por nome, a escolha explícita prevalece sobre a opção geral de ignorar o
+nome do arquivo. O título do arquivo tem prioridade sobre metadados antigos, e
+palpites visuais em cache não substituem esse título. Se o nome for genérico
+(como `video.mp4`), o app pede um título/dica legível sem analisar o vídeo com IA.
+Para distinguir obras com o mesmo nome, inclua o ano: `Accused (2023).mp4`.
+
 O modo **⚡ Rápido por Nome / Dica** do Upload em massa procura o título no TMDB a partir do
 nome do ficheiro (e da dica do link, quando existe) e **não chama a IA de vídeo**: não prepara
 áudio nem vídeo para a IA, e nem exige chave de IA configurada.

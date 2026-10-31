@@ -99,6 +99,7 @@ function cenario(window, opcoes = {}) {
     identificar: async (chave, quadros, lang, info) => {
       chamadas.identificar++;
       chamadas.videoRecebido = info.video || null;
+      chamadas.optsIdent = info;
       const nome = info.fileName;
       if (info.identMode === "dica") return { titulo: "Nome Estranho", confianca: 88, provedor: "dica", ganchos: [] };
       if (nome === "duvida.mp4") return { titulo: "Talvez Este", confianca: 50, cena: "cena incerta", ganchos: ["Gancho incerto 🤔"] };
@@ -276,6 +277,20 @@ console.log("\nA2b. Com Gemini: o vídeo vai para a IA («assistir» em vez de f
   check("a identificação recebe o vídeo", !!c.chamadas.videoRecebido && c.chamadas.videoRecebido.mimeType === "video/mp4" && c.chamadas.videoRecebido.fim === 70, JSON.stringify(c.chamadas.videoRecebido));
   check("o gerarGancho recebe o vídeo (7.º argumento)", !!c.chamadas.videoGancho && c.chamadas.videoGancho.mimeType === "video/mp4", JSON.stringify(c.chamadas.videoGancho));
   check("usa o gancho gerado", c.fila[0]?.hookText === "Gancho gerado 🔥", c.fila[0]?.hookText);
+  dom.window.close();
+}
+
+console.log("\nNome do arquivo: configuração geral não desativa o modo explícito");
+{
+  const dom = novoDom();
+  const c = cenario(dom.window, { settings: { useFileNameHint: false } });
+  c.lote.estado.opcoes.modoIdentificacao = "dica";
+  c.lote.estado.opcoes.modoGancho = "auto";
+  c.lote.adicionarFicheiros([ficheiro(dom.window, "Accused.mp4")]);
+  await c.lote.iniciar();
+  check("lote força a leitura do nome no modo dica", c.chamadas.optsIdent?.useFileNameHint === true);
+  check("metadados não entram como dica explícita", c.chamadas.optsIdent?.userHint === "");
+  check("reserva mantém o nome do arquivo", c.fila[0]?.title === "Accused", c.fila[0]?.title);
   dom.window.close();
 }
 

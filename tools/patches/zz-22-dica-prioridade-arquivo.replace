@@ -1,0 +1,1 @@
+const pistaNome=identMode==="dica"?(_vsExtrairPistaNome(fnEf,"",rawHint)||_vsExtrairPistaNome("",mtEf,"")):_vsExtrairPistaNome(fnEf,mtEf,rawHint);
