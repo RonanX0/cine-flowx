@@ -648,17 +648,25 @@
   }
 
   /**
-   * O estilo do Reel da conta ativa: preset (atual/escuro/claro), fundo, cor do
-   * gancho e rodapé. O app guarda isto na conta do Instagram (não nas chaves),
-   * por isso o lote em massa tem de o levar até ao FFmpeg — sem estes argumentos
-   * o `processar` usava sempre os valores por omissão.
+   * O estilo do Reel da conta ativa: preset, fundo, cor do gancho e rodapé. O
+   * app guarda isto na conta do Instagram (não nas chaves), por isso o lote em
+   * massa tem de o levar até ao FFmpeg — sem estes argumentos o `processar`
+   * usava sempre os valores por omissão.
+   *
+   * O preset valida-se contra a TABELA do app, não contra uma lista escrita
+   * aqui: antes era `if (preset !== "escuro" && preset !== "claro") preset =
+   * "atual"`, e o «perfil» e o «destaque» chegavam ao FFmpeg como "atual" — sem
+   * cabeçalho, sem rodapé e com a caixa automática, só com o fundo branco
+   * (que vem da conta, à parte) a lembrar o preset escolhido.
    */
   function estiloDoReel(app, s) {
     var conta = (app && app.account) || {};
     var geral = s || {};
     var tabela = (typeof window !== "undefined" && window.CineClipCore && window.CineClipCore.presets) || null;
     var preset = String(conta.preset || conta.reelPreset || geral.preset || "atual");
-    if (preset !== "escuro" && preset !== "claro") preset = "atual";
+    // Sem a tabela à mão (ponte ainda a arrancar) não se rebaixa nada: o FFmpeg
+    // do app já cai no "atual" sozinho se o id não existir (`presetDoReel`).
+    if (tabela && !Object.prototype.hasOwnProperty.call(tabela, preset)) preset = "atual";
     var padrao = tabela && tabela[preset] ? tabela[preset] : null;
     return {
       preset: preset,

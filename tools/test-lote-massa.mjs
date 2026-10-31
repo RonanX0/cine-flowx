@@ -114,8 +114,8 @@ function cenario(window, opcoes = {}) {
       if (/^Filme /.test(String(titulo))) return { cena: "cena gerada", ganchos: ["Gancho de " + String(titulo).replace(/^Filme /, "") + " 😳"] };
       return { cena: "cena gerada", ganchos: ["Gancho gerado 🔥"] };
     },
-    processar: async (f, inicio, fim, resolucao, gancho, progresso, corte) => {
-      chamadas.processar.push({ nome: f.name, inicio, fim, resolucao, gancho, corte });
+    processar: async (f, inicio, fim, resolucao, gancho, progresso, corte, bgMode, hookColor, preset, footerText, footerColor) => {
+      chamadas.processar.push({ nome: f.name, inicio, fim, resolucao, gancho, corte, bgMode, hookColor, preset, footerText, footerColor });
       progresso(0.5);
       if (f.name === "parar.mp4") {
         await new Promise((resolve, reject) => {
@@ -163,6 +163,36 @@ function cenario(window, opcoes = {}) {
 }
 
 console.log("\n📦 Upload em massa — lote-massa.js\n");
+console.log("\n🎨 O preset da conta chega inteiro ao FFmpeg");
+{
+  /* O lote convertia para "atual" tudo o que não fosse "escuro" ou "claro"
+     (`if (preset !== "escuro" && preset !== "claro") preset = "atual"`). O
+     «perfil» e o «destaque» saíam sem cabeçalho, sem rodapé e com a caixa
+     automática — só o fundo branco, que vem da conta à parte, lembrava o
+     preset. Nenhum teste olhava para o preset que o processar recebia. */
+  const { PRESETS_DO_REEL } = await import(new URL("../servidor/presets.mjs", import.meta.url).href);
+  const correr = async (preset, comTabela) => {
+    const dom = novoDom();
+    if (comTabela) dom.window.CineClipCore = { presets: PRESETS_DO_REEL };
+    const c = cenario(dom.window);
+    c.lote.estado.opcoes.modoIdentificacao = "sem_id";
+    c.lote.estado.opcoes.modoGancho = "auto";
+    c.app.account.preset = preset;
+    c.app.account.reelPreset = preset;
+    c.lote.adicionarFicheiros([ficheiro(dom.window, "estilo.mp4")]);
+    await c.lote.iniciar();
+    const recebido = c.chamadas.processar[0] && c.chamadas.processar[0].preset;
+    dom.window.close();
+    return recebido;
+  };
+  for (const id of ["perfil", "destaque", "escuro", "claro"]) {
+    const r = await correr(id, true);
+    check(`«${id}» chega ao FFmpeg como «${id}», não como "atual"`, r === id, String(r));
+  }
+  check("um preset que não existe na tabela cai no atual", (await correr("inventado", true)) === "atual");
+  check("sem a tabela à mão, um preset válido não é rebaixado", (await correr("escuro", false)) === "escuro");
+}
+
 console.log("Lista padrão + sem identificação: nenhuma análise de mídia ou IA de gancho");
 {
   const dom = novoDom();
