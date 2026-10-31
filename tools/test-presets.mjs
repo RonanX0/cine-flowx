@@ -498,6 +498,37 @@ if (canvasMod) {
   check("atual: nada tapado nos cantos (não há caixa extra)", pAtual.px(1, 403)[3] === 0);
 }
 
+/* ------------------------------------------------------------------ 11b */
+console.log("\n11b. O cabeçalho de perfil lê a CONTA ativa (app real)");
+{
+  /* O desenho ia buscar o nome/@/foto a `cS()`, que lê a chave legada
+     cineclip.scheduler.config — e NADA no app grava nessa chave. O perfil é
+     guardado na conta (cineclip.ig.accounts), por isso o cabeçalho saía sempre
+     vazio no app real. Os renders de antes só o mostravam porque o script
+     injetava o perfil à mão. Aqui corre o bundle de verdade, sem injetar. */
+  const { arrancarApp } = await import(pathToFileURL(path.join(root, "servidor", "app-headless.mjs")).href);
+  const appH = await arrancarApp({ fetchFn: async () => { throw new TypeError("Failed to fetch"); } });
+  const w = appH.window;
+  const conta = { id: "acc_x", name: "@x", preset: "perfil", perfilNome: "Cena seguinte", perfilArroba: "cena.seguinte", perfilAvatar: "data:image/png;base64,AA==", perfilVerificado: true };
+  w.localStorage.setItem("cineclip.ig.accounts", JSON.stringify([conta]));
+  w.localStorage.setItem("cineclip.ig.active", "acc_x");
+  const cx = w.caixaDoPreset("perfil", { padX: 0, padY: 0, videoW: 720, videoH: 600, radius: 0 }, "", "");
+  check("o nome do cabeçalho vem da conta ativa", !!cx.perfil && cx.perfil.nome === "Cena seguinte", JSON.stringify(cx.perfil));
+  check("o @ e a foto também", !!cx.perfil && cx.perfil.arroba === "cena.seguinte" && !!cx.perfil.avatar);
+  appH.fechar();
+}
+{
+  /* No servidor («Processar na nuvem») o perfil tem de chegar ao desenho, e o
+     overlay tem de existir mesmo sem gancho: antes só contava o rodapé da
+     conta, e no modo «Sem gancho» perfil e destaque saíam sem faixa preta. */
+  const videoSrc = fs.readFileSync(path.join(root, "servidor", "video.mjs"), "utf8");
+  const trab = fs.readFileSync(path.join(root, "servidor", "trabalhador.mjs"), "utf8");
+  check("o servidor passa o perfil ao desenho do gancho", videoSrc.includes("perfil: estilo.perfil || null"));
+  check("o trabalhador tira o perfil da conta", trab.includes("nome: String(conta.perfilNome"));
+  check("sem gancho, o overlay sai na mesma por causa do rodapé fixo", videoSrc.includes("!!P.rodapeFixo || !!P.perfilCabecalho"));
+}
+
+
 /* ------------------------------------------------------------------ 12 */
 console.log("\n12. Render real com FFmpeg (opcional)");
 import("node:child_process").then(async ({ execFileSync }) => {

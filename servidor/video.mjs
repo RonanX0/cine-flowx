@@ -678,9 +678,11 @@ export async function processar(entrada, inicio, fim, resolucao, gancho, aoProgr
   try {
     const temGancho = !!String(gancho || "").trim();
     const rodape = comPreset ? String(estilo.footerText || "").trim() : "";
-    // Os cantos arredondados e o rodapé também vivem no PNG do gancho: mesmo sem
-    // texto é preciso sobrepor a imagem.
-    const temOverlay = temGancho || (comPreset && (e.radius > 0 || !!rodape));
+    // Os cantos arredondados, o rodapé e o cabeçalho também vivem no PNG do
+    // gancho: mesmo sem texto é preciso sobrepor a imagem. O rodapé conta tanto
+    // o da conta como o FIXO do preset — antes só o da conta, por isso no modo
+    // «Sem gancho» o perfil e o destaque saíam sem faixa preta e sem cabeçalho.
+    const temOverlay = temGancho || (comPreset && (e.radius > 0 || !!rodape || !!P.rodapeFixo || !!P.perfilCabecalho));
     const args = ["-v", "info", "-y", "-ss", inicio.toFixed(2), "-t", dur.toFixed(2), "-i", entrada];
     if (temOverlay) {
       const png = path.join(pasta, "gancho.png");
@@ -690,6 +692,9 @@ export async function processar(entrada, inicio, fim, resolucao, gancho, aoProgr
         caixa: {
           padX: e.padX, padY: e.padY, videoW: e.videoW, videoH: e.videoH,
           radius: e.radius, fundo: P.fundo, rodape, rodapeCor: estilo.footerColor || P.rodapeCor,
+          // O cabeçalho de perfil (nome, @, foto) vem da conta; sem isto o
+          // servidor nunca o desenhava.
+          perfil: estilo.perfil || null,
         },
       }));
       args.push("-i", png);

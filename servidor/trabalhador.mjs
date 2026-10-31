@@ -97,6 +97,13 @@ export function criarTrabalhador({ cfg, app, pastaDados, registo: guardaRegisto,
           hookColor: hookColor || conta.hookColor || conta.hookTextColor || "#FFFFFF",
           footerText: footerText || conta.footerText || conta.rodapeTexto || "",
           footerColor: footerColor || conta.footerColor || conta.rodapeCor || "",
+          // O cabeçalho do preset «perfil» é da conta: nome, @, foto e selo.
+          perfil: {
+            nome: String(conta.perfilNome || ""),
+            arroba: String(conta.perfilArroba || ""),
+            avatar: String(conta.perfilAvatar || ""),
+            verificado: conta.perfilVerificado !== false,
+          },
         };
         const r = await video.processar(f.caminho, ini, fim, res, gancho, progresso, corte, path.join(path.dirname(f.caminho), "final.mp4"), estilo);
         return r;
