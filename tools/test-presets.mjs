@@ -162,6 +162,14 @@ function desenhar(preset, texto, geo, { rodape = "", rodapeCor = "", cor = "", p
   check("a foto é reduzida a 160px antes de ser guardada", htmlCor.includes('cv.width=L;cv.height=L') && htmlCor.includes('const L=160'));
   check("falhando a redução, não guarda a imagem original", !htmlCor.includes("ye({perfilAvatar:src})"), "ainda guarda o src cru");
   check("e avisa em vez de falhar calado", htmlCor.includes('ye({perfilAvatar:""});alert('));
+  /* A conta guardada passava por uma lista FIXA dos três presets antigos:
+     escolher «perfil» ou «destaque» gravava, mas a releitura devolvia "atual"
+     e o seletor saltava para trás — parecia que não dava para mudar o preset.
+     A validação tem de ser contra a tabela real. */
+  check("a conta aceita qualquer preset da tabela, não uma lista fixa",
+    !htmlCor.includes('["atual","escuro","claro"].indexOf'), "ainda valida contra a lista antiga");
+  check("e valida contra o PRESETS_DO_REEL",
+    htmlCor.includes("hasOwnProperty.call(PRESETS_DO_REEL,"));
   check("os seletores já não regravam o cofre a cada evento", !htmlCor.includes("onChange:N=>ye({hookColor:N.target.value,hookTextColor:N.target.value})") && !htmlCor.includes("onChange:N=>ye({footerColor:N.target.value,rodapeCor:N.target.value})"));
 }
 
@@ -422,7 +430,7 @@ check("a pré-visualização usa o preset (geometria + cantos)", modulo.includes
 check("as três opções aparecem nas configurações da conta", ['value:"atual"', 'value:"escuro"', 'value:"claro"'].every((v) => modulo.includes(v)) && modulo.includes("Preset do formato"));
 check("o fundo branco é escolhível nas configurações", modulo.includes('d.jsx("option",{value:"branco",children:"Branco"})'));
 check("há campo para o texto e a cor do rodapé", modulo.includes("Texto do rodapé") && modulo.includes("Cor do rodapé"));
-check("as contas novas nascem com o preset atual", modulo.includes('preset:"atual",reelPreset:"atual",footerText:""') && /preset:\["atual","escuro","claro"\]\.indexOf/.test(modulo));
+check("as contas novas nascem com o preset atual", modulo.includes('preset:"atual",reelPreset:"atual",footerText:""') && modulo.includes("hasOwnProperty.call(PRESETS_DO_REEL,"));
 check("o lote em massa consegue ler a tabela pela ponte", modulo.includes("presets:PRESETS_DO_REEL,presetDoReel:presetDoReel"));
 
 /* ------------------------------------------------------------------ 10 */
