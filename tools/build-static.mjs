@@ -42,7 +42,7 @@ const appPath = path.join(root, "index.html");
 const PAGINAS = ["index.html", "app-pronto.html", "404.html"];
 /** Ficheiros copiados tal e qual. */
 const ESTATICOS = [
-  "nuvem-duravel.js", "motor-ia.js", "lote-massa.js", "agendamento-rapido.js", "tendencias.js", "_redirects", "_headers",
+  "nuvem-duravel.js", "motor-ia.js", "lote-massa.js", "agendamento-rapido.js", "tendencias.js", "metricas.js", "_redirects", "_headers",
   // App instalável no Android (menu Compartilhar do TikTok/Kwai)
   "manifest.webmanifest", "sw.js", "icone-192.png", "icone-512.png", "icone-maskable-512.png",
 ];
@@ -56,6 +56,8 @@ const TAG_MOTOR = '<script src="motor-ia.js"></script>';
 const TAG_RAPIDO = '<script src="agendamento-rapido.js"></script>';
 /** Aba «🔥 Tendências» (código legível fora do bundle) — idem. */
 const TAG_TENDENCIAS = '<script src="tendencias.js"></script>';
+/** Aba «📊 Métricas» (código legível fora do bundle) — idem. */
+const TAG_METRICAS = '<script src="metricas.js"></script>';
 
 for (const file of [...PAGINAS, ...ESTATICOS]) {
   if (!fs.existsSync(path.join(root, file))) {
@@ -96,6 +98,7 @@ const hashLote = hash(fs.readFileSync(path.join(root, "lote-massa.js")));
 const hashMotor = hash(fs.readFileSync(path.join(root, "motor-ia.js")));
 const hashRapido = hash(fs.readFileSync(path.join(root, "agendamento-rapido.js")));
 const hashTendencias = hash(fs.readFileSync(path.join(root, "tendencias.js")));
+const hashMetricas = hash(fs.readFileSync(path.join(root, "metricas.js")));
 const hashApp = hash(html);
 const versao = descobrirVersao(hashApp);
 const data = new Date().toISOString();
@@ -120,6 +123,7 @@ const carimbo = {
   lote: hashLote,
   motor: hashMotor,
   rapido: hashRapido,
+  metricas: hashMetricas,
   ig2207077: temCorrecao2207077,
 };
 
@@ -137,7 +141,8 @@ function prepararPagina(fonte) {
     .replace(TAG_MOTOR, `<script src="motor-ia.js?v=${hashMotor}"></script>`)
     .replace(TAG_LOTE, `<script src="lote-massa.js?v=${hashLote}"></script>`)
     .replace(TAG_RAPIDO, `<script src="agendamento-rapido.js?v=${hashRapido}"></script>`)
-    .replace(TAG_TENDENCIAS, `<script src="tendencias.js?v=${hashTendencias}"></script>`);
+    .replace(TAG_TENDENCIAS, `<script src="tendencias.js?v=${hashTendencias}"></script>`)
+    .replace(TAG_METRICAS, `<script src="metricas.js?v=${hashMetricas}"></script>`);
 }
 
 fs.rmSync(dist, { recursive: true, force: true });

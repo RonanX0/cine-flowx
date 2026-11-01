@@ -216,7 +216,7 @@ console.log("\n🎙️ Achados de Cortes de Filmes Narrados");
   await handler(
     { method: "GET", url: "/api/public/tendencias?modo=narrados&termos=resumo+de+filme&min=1000", headers: { host: "cine-flowx.vercel.app" } },
     rEnd,
-    { fetchFn: fetchNarrados, pausa: 0, semCache: true }
+    { fetchFn: fetchNarrados, pausa: 0, semCache: true, agora: AGORA }
   );
   const corpoEnd = JSON.parse(rEnd.body);
   check("endpoint aceita modo=narrados só com termos livres", rEnd.statusCode === 200 && corpoEnd.modo === "narrados" && corpoEnd.itens.length === 1 && corpoEnd.itens[0].id === "n2");

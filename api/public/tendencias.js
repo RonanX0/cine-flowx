@@ -75,7 +75,7 @@ export default async function handler(req, res, deps = {}) {
         apenasNarrados: q.narrados === undefined ? undefined : q.narrados !== "0" && q.narrados !== "false",
         max: q.max,
       },
-      { fetchFn: deps.fetchFn, pausa: deps.pausa }
+      { fetchFn: deps.fetchFn, pausa: deps.pausa, agora: deps.agora }
     );
     if (dados.itens.length) {
       if (cache.size >= 100) cache.delete(cache.keys().next().value);

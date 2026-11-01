@@ -273,6 +273,15 @@ Perfis incorporados trazem uma seleção de até dez vídeos recentes. Podem fal
 
 Os dados vêm de `/api/public/tendencias` (`server/tendencias.mjs`) e os vídeos de `/api/public/importar` (`server/importar-video.mjs`), ativos na Vercel e também nos servidores locais (`npm run dev` e `npm run nuvem`).
 
+### 📊 Métricas de cada Reel publicado
+
+A aba **📊 Métricas** (`metricas.js`) lista os Reels **publicados** da conta ativa, do mais recente ao mais antigo, com: views, alcance, curtidas, comentários, compartilhamentos, salvos e seguidores ganhos — e, no topo, os totais e o engajamento (curtidas + comentários + compartilhamentos + salvos ÷ alcance).
+
+- **Automático:** «🔄 Atualizar tudo do Instagram» (ou o 🔄 de cada linha) usa o token da conta: curtidas/comentários vêm do próprio media e o resto de `/{media-id}/insights`. Se a API recusar o pedido conjunto, o app pede métrica a métrica e fica com o que vier; a que faltar fica em branco (nunca é inventada). O token precisa da permissão `instagram_manage_insights`.
+- **Manual:** qualquer número pode ser escrito à mão (aceita `50.000`). O que foi escrito à mão fica marcado e **não é apagado** por uma atualização automática; apagar o campo devolve-o ao automático.
+- Tudo é gravado no próprio Reel da fila (com `updatedAt` novo), por isso segue para a nuvem como o resto.
+- Reels publicados fora do app (sem id do Instagram) aparecem só para preencher à mão.
+
 ### 🔗 Importar do TikTok ou do Kwai
 
 No painel do upload em massa há uma caixa para **colar links** do TikTok ou do Kwai (um por
