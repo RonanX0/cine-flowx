@@ -102,7 +102,7 @@ console.log("\n📊 Lista: só os publicados da conta ativa");
   check("entram só os Reels publicados da conta ativa", itens.length === 3 && itens.every((i) => i.status === "published" && i.accountId === "acc_a"), itens.map((i) => i.id).join(","));
   check("do mais recente para o mais antigo", itens.map((i) => i.id).join(",") === "r2,r1,r5", itens.map((i) => i.id).join(","));
   check("o agendado e o da outra conta ficam de fora", !itens.some((i) => i.id === "r3" || i.id === "r4"));
-  check("desenha uma linha por Reel", c.w.document.querySelectorAll(".cm-tabela tbody tr").length === 3);
+  check("desenha uma linha por Reel", c.w.document.querySelectorAll(".cm-lista .cm-reel").length === 3);
   check("o título liga para o Reel no Instagram", !!c.w.document.querySelector('a[href="https://instagram.com/reel/BBB"]'));
   c.w.close();
 }
@@ -190,6 +190,29 @@ console.log("\n🧮 Totais e engajamento");
   // (1200+85+310+140 + 800+40+90+60) / (30000+15000) = 2725 / 45000
   check("engajamento = interações ÷ alcance", Math.abs(t.engajamento - 2725 / 45000) < 1e-9, String(t.engajamento));
   check("o Reel sem números não estraga a soma", t.views_n === 2, String(t.views_n));
+  c.w.close();
+}
+
+console.log("\n🎨 Cartões, ordem e botão de cada Reel");
+{
+  const c = criar();
+  await c.M.carregar();
+  await c.M.atualizarTudo(false);
+  const doc = c.w.document;
+  const valorDe = (id, campo) => doc.querySelector(`.cm-reel[data-id="${id}"] input[id$="-${campo}"]`).value;
+  check("os números aparecem com ponto de milhar", valorDe("r1", "views") === "45.000", valorDe("r1", "views"));
+  check("o engajamento de cada Reel aparece no cartão", /5,8% eng\./.test(doc.querySelector('.cm-reel[data-id="r1"] .cm-eng').textContent), doc.querySelector('.cm-reel[data-id="r1"] .cm-eng').textContent);
+  const sel = doc.querySelector("select.cm-ordem");
+  sel.value = "views";
+  sel.dispatchEvent(new c.w.Event("change"));
+  const ordem = Array.from(doc.querySelectorAll(".cm-lista .cm-reel")).map((x) => x.getAttribute("data-id")).join(",");
+  check("«Mais views» põe o Reel com mais views primeiro e o sem números no fim", ordem === "r1,r2,r5", ordem);
+  check("ordenar não mexe na ordem guardada", c.M._interno.estado.itens.map((i) => i.id).join(",") === "r2,r1,r5");
+  const antes = c.g.pedidos.length;
+  doc.querySelector('.cm-reel[data-id="r2"] button').click();
+  await dormir(50);
+  check("o ↻ do cartão busca só aquele Reel", c.g.pedidos.length - antes === 2 && c.g.pedidos.slice(antes).every((p) => /1802/.test(p)), c.g.pedidos.slice(antes).join(" | "));
+  check("o Reel sem id do Instagram tem o ↻ desligado", doc.querySelector('.cm-reel[data-id="r5"] button').disabled === true);
   c.w.close();
 }
 

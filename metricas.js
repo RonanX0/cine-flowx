@@ -389,37 +389,114 @@
 
   /* ------------------------------------------------------------- desenho */
 
+  /* Ícone e nome comprido de cada métrica, só para o desenho. */
+  var VISUAL = {
+    views: { icone: "▶", nome: "Views" },
+    reach: { icone: "◎", nome: "Alcance" },
+    likes: { icone: "♥", nome: "Curtidas" },
+    comments: { icone: "💬", nome: "Comentários" },
+    shares: { icone: "↗", nome: "Compartilh." },
+    saved: { icone: "🔖", nome: "Salvos" },
+    follows: { icone: "＋", nome: "Seguidores" },
+  };
+
+  var ORDENS = [
+    { id: "recentes", rotulo: "Mais recentes" },
+    { id: "views", rotulo: "Mais views" },
+    { id: "engajamento", rotulo: "Mais engajamento" },
+    { id: "follows", rotulo: "Mais seguidores" },
+  ];
+
   function garantirEstilo() {
     if (document.getElementById("cm-estilo")) return;
+    var B = "var(--border,rgba(255,255,255,.09))";
+    var FG = "var(--foreground,#f4f4f6)";
+    var MUT = "var(--muted-foreground,#a3a3ad)";
+    var BG = "var(--background,#141418)";
+    var PRI = "var(--primary,#e5484d)";
+    var OK = "var(--success,#3dd68c)";
     var css = [
-      ".cm-painel{padding:12px 4px;font-size:13px}",
-      ".cm-topo{display:flex;flex-wrap:wrap;align-items:center;gap:8px;justify-content:space-between;margin-bottom:10px}",
-      ".cm-titulo{font-size:16px;font-weight:700}",
-      ".cm-sub{color:#9ca3af;font-size:12px}",
-      ".cm-botao{border:1px solid #374151;background:#111827;color:#f3f4f6;border-radius:6px;padding:6px 10px;cursor:pointer;font-size:12px}",
-      ".cm-botao:disabled{opacity:.5;cursor:default}",
-      ".cm-aviso{margin:8px 0;padding:8px 10px;border-radius:6px;background:#111827;border:1px solid #374151;font-size:12px}",
-      ".cm-erro{margin:8px 0;padding:8px 10px;border-radius:6px;background:#3b0d0d;border:1px solid #7f1d1d;font-size:12px}",
-      ".cm-totais{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin:10px 0}",
-      ".cm-cartao{border:1px solid #374151;border-radius:8px;padding:8px 10px}",
-      ".cm-cartao b{display:block;font-size:16px}",
-      ".cm-cartao span{color:#9ca3af;font-size:11px}",
-      ".cm-tabela-wrap{overflow-x:auto}",
-      ".cm-tabela{width:100%;border-collapse:collapse;min-width:820px}",
-      ".cm-tabela th{text-align:left;font-weight:600;color:#9ca3af;font-size:11px;padding:6px 4px;border-bottom:1px solid #374151}",
-      ".cm-tabela td{padding:6px 4px;border-bottom:1px solid #1f2937;vertical-align:middle}",
-      ".cm-tabela input{width:72px;background:#0b0f19;border:1px solid #374151;border-radius:4px;color:#f3f4f6;padding:4px;font-size:12px}",
-      ".cm-tabela input.cm-manual{border-color:#d97706}",
-      ".cm-tabela input.cm-sem-api{border-style:dashed}",
-      ".cm-nome{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
-      ".cm-nome a{color:#93c5fd;text-decoration:none}",
-      ".cm-estado{font-size:11px;color:#9ca3af;max-width:180px}",
-      ".cm-estado.cm-falhou{color:#fca5a5}",
-      ".cm-legenda{margin-top:8px;color:#9ca3af;font-size:11px}",
+      ".cm-painel{display:flex;flex-direction:column;gap:16px;border:1px solid " + B + ";border-radius:16px;background:var(--card,#1c1c22);color:" + FG + ";padding:20px;font-size:13px;font-family:inherit}",
+      ".cm-topo{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px}",
+      ".cm-cab{display:flex;align-items:center;gap:12px;min-width:0}",
+      ".cm-icone{flex:none;display:grid;place-items:center;width:40px;height:40px;border-radius:12px;background:color-mix(in oklab," + PRI + " 18%,transparent);font-size:20px}",
+      ".cm-titulo{margin:0;font-size:18px;font-weight:700;line-height:1.2}",
+      ".cm-sub{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:3px;font-size:12px;color:" + MUT + "}",
+      ".cm-ponto{width:7px;height:7px;border-radius:50%;background:" + MUT + "}",
+      ".cm-ponto.ligado{background:" + OK + ";box-shadow:0 0 0 3px color-mix(in oklab," + OK + " 22%,transparent)}",
+      ".cm-acoes{display:flex;flex-wrap:wrap;gap:8px}",
+      ".cm-botao{display:inline-flex;align-items:center;gap:6px;border:1px solid " + B + ";background:" + BG + ";color:" + FG + ";border-radius:10px;padding:8px 14px;cursor:pointer;font:600 12.5px/1 inherit;transition:background .15s,border-color .15s,opacity .15s}",
+      ".cm-botao:hover:not(:disabled){border-color:color-mix(in oklab," + FG + " 25%,transparent)}",
+      ".cm-botao.primario{background:" + PRI + ";border-color:transparent;color:#fff;box-shadow:0 2px 12px color-mix(in oklab," + PRI + " 30%,transparent)}",
+      ".cm-botao.primario:hover:not(:disabled){filter:brightness(1.08)}",
+      ".cm-botao:disabled{opacity:.45;cursor:default}",
+      ".cm-botao.icone{padding:7px 9px;border-radius:9px;font-size:13px}",
+      ".cm-girando{display:inline-block;animation:cm-gira 1s linear infinite}",
+      "@keyframes cm-gira{to{transform:rotate(360deg)}}",
+      ".cm-aviso,.cm-erro{padding:10px 12px;border-radius:10px;font-size:12.5px;line-height:1.5;border:1px solid " + B + ";border-left-width:3px;background:" + BG + "}",
+      ".cm-aviso{border-left-color:" + MUT + ";color:" + MUT + "}",
+      ".cm-erro{border-left-color:var(--destructive,#e5484d);color:" + FG + ";background:color-mix(in oklab,var(--destructive,#e5484d) 10%," + BG + ")}",
+      ".cm-vazio{display:flex;flex-direction:column;align-items:center;gap:6px;padding:36px 16px;border:1px dashed " + B + ";border-radius:12px;text-align:center;color:" + MUT + "}",
+      ".cm-vazio b{font-size:15px;color:" + FG + "}",
+      ".cm-totais{display:flex;flex-direction:column;gap:10px}",
+      ".cm-destaques{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}",
+      ".cm-kpi{position:relative;overflow:hidden;border:1px solid " + B + ";border-radius:12px;background:" + BG + ";padding:14px 16px}",
+      ".cm-kpi:before{content:'';position:absolute;inset:0 auto 0 0;width:3px;background:var(--cm-cor," + PRI + ")}",
+      ".cm-kpi-rot{display:flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;letter-spacing:.02em;text-transform:uppercase;color:" + MUT + "}",
+      ".cm-kpi-val{margin-top:6px;font-size:26px;font-weight:800;line-height:1.1;font-variant-numeric:tabular-nums;letter-spacing:-.01em}",
+      ".cm-kpi-pe{margin-top:4px;font-size:11.5px;color:" + MUT + "}",
+      ".cm-pilulas{display:flex;flex-wrap:wrap;gap:8px}",
+      ".cm-pilula{display:inline-flex;align-items:center;gap:6px;padding:6px 11px;border:1px solid " + B + ";border-radius:999px;font-size:12px;color:" + MUT + "}",
+      ".cm-pilula b{color:" + FG + ";font-variant-numeric:tabular-nums}",
+      ".cm-secao{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;margin-top:4px}",
+      ".cm-secao h3{margin:0;font-size:14px;font-weight:700}",
+      ".cm-ordem{border:1px solid " + B + ";background:" + BG + ";color:" + FG + ";border-radius:9px;padding:6px 10px;font:12px inherit;cursor:pointer}",
+      ".cm-lista{display:flex;flex-direction:column;gap:10px}",
+      ".cm-reel{border:1px solid " + B + ";border-radius:12px;background:" + BG + ";padding:12px 14px;display:flex;flex-direction:column;gap:10px;transition:border-color .15s}",
+      ".cm-reel:hover{border-color:color-mix(in oklab," + FG + " 18%,transparent)}",
+      ".cm-reel-topo{display:flex;align-items:flex-start;gap:10px}",
+      ".cm-pos{flex:none;display:grid;place-items:center;min-width:26px;height:26px;padding:0 6px;border-radius:8px;background:var(--secondary,#26262c);font-size:11.5px;font-weight:700;color:" + MUT + "}",
+      ".cm-pos.ouro{background:color-mix(in oklab,#f5b70a 22%,transparent);color:#f5c542}",
+      ".cm-reel-info{flex:1;min-width:0}",
+      ".cm-nome{display:block;font-size:14px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:" + FG + ";text-decoration:none}",
+      "a.cm-nome:hover{text-decoration:underline}",
+      ".cm-meta{display:flex;flex-wrap:wrap;gap:4px 10px;margin-top:2px;font-size:11.5px;color:" + MUT + "}",
+      ".cm-meta .cm-falhou{color:var(--destructive,#ff6b6b)}",
+      ".cm-eng{flex:none;padding:4px 9px;border-radius:999px;font-size:11.5px;font-weight:700;background:color-mix(in oklab," + OK + " 14%,transparent);color:" + OK + ";font-variant-numeric:tabular-nums}",
+      ".cm-eng.vazio{background:var(--secondary,#26262c);color:" + MUT + ";font-weight:600}",
+      ".cm-barra{height:4px;border-radius:999px;background:var(--secondary,#26262c);overflow:hidden}",
+      ".cm-barra i{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg," + PRI + ",color-mix(in oklab," + PRI + " 55%,#f5b70a))}",
+      ".cm-numeros{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px}",
+      ".cm-num{display:flex;flex-direction:column;gap:2px;padding:6px 8px;border-radius:9px;background:var(--card,#1c1c22);border:1px solid transparent}",
+      ".cm-num label{display:flex;align-items:center;gap:4px;font-size:10.5px;font-weight:600;color:" + MUT + ";white-space:nowrap}",
+      ".cm-num input{width:100%;min-width:0;background:transparent;border:1px solid transparent;border-radius:6px;margin:0 -5px;padding:2px 5px;color:" + FG + ";font:700 15px/1.3 inherit;font-variant-numeric:tabular-nums;outline:none;transition:border-color .15s,background .15s}",
+      ".cm-num input::placeholder{color:color-mix(in oklab," + MUT + " 60%,transparent);font-weight:500}",
+      ".cm-num input:hover{border-color:" + B + "}",
+      ".cm-num input:focus{border-color:" + PRI + ";background:" + BG + "}",
+      ".cm-num.manual{border-color:color-mix(in oklab,#f59e0b 45%,transparent)}",
+      ".cm-num.manual label:after{content:'à mão';margin-left:auto;font-size:9px;font-weight:700;color:#f59e0b;text-transform:uppercase}",
+      ".cm-num.sem-api{border:1px dashed " + B + "}",
+      ".cm-legenda{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:11.5px;color:" + MUT + "}",
+      ".cm-legenda span{display:inline-flex;align-items:center;gap:6px}",
+      ".cm-legenda i{display:inline-block;width:14px;height:10px;border-radius:3px}",
+      "@media (max-width:860px){.cm-numeros{grid-template-columns:repeat(4,minmax(0,1fr))}}",
+      "@media (max-width:640px){.cm-painel{padding:14px;border-radius:14px}.cm-destaques{grid-template-columns:repeat(2,minmax(0,1fr))}.cm-kpi{padding:12px}.cm-kpi-val{font-size:22px}.cm-acoes{width:100%}.cm-acoes .cm-botao{flex:1;justify-content:center}" +
+        ".cm-reel{padding:12px}.cm-reel-topo{flex-wrap:wrap}.cm-reel-info{flex:1 1 calc(100% - 80px)}.cm-nome{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}" +
+        ".cm-numeros{gap:5px}.cm-num{padding:5px 6px}.cm-num label{font-size:10px;overflow:hidden;text-overflow:ellipsis}.cm-num input{font-size:13.5px;margin:0;padding:2px 0}.cm-num.manual label:after{content:'✎'}}",
     ].join("\n");
     var s = el("style", { id: "cm-estilo" });
     s.textContent = css;
     document.head.appendChild(s);
+  }
+
+  function porcento(x) {
+    return x != null ? (x * 100).toFixed(1).replace(".", ",") + "%" : "—";
+  }
+
+  function engajamentoDe(item) {
+    var m = item.metricas || {};
+    if (!m.reach) return null;
+    return ((m.likes || 0) + (m.comments || 0) + (m.shares || 0) + (m.saved || 0)) / m.reach;
   }
 
   function desenharTotais() {
@@ -430,62 +507,119 @@
     caixa.parentNode.replaceChild(novo, caixa);
   }
 
-  function blocoTotais() {
-    var t = totais();
-    var cartoes = [el("div", { className: "cm-cartao" }, [el("b", { text: String(t.reels) }), el("span", { text: "Reels publicados" })])];
-    METRICAS.forEach(function (m) {
-      var media = t[m.id] != null && t[m.id + "_n"] ? Math.round(t[m.id] / t[m.id + "_n"]) : null;
-      cartoes.push(el("div", { className: "cm-cartao", title: media != null ? "média por Reel: " + formatar(media) : "" }, [
-        el("b", { text: formatar(t[m.id]) }),
-        el("span", { text: m.rotulo + (media != null ? " · média " + formatar(media) : "") }),
-      ]));
-    });
-    cartoes.push(el("div", { className: "cm-cartao", title: "(curtidas + comentários + compartilhamentos + salvos) ÷ alcance" }, [
-      el("b", { text: t.engajamento != null ? (t.engajamento * 100).toFixed(1).replace(".", ",") + "%" : "—" }),
-      el("span", { text: "Engajamento" }),
-    ]));
-    return el("div", { className: "cm-totais" }, cartoes);
+  function media(t, id) {
+    return t[id] != null && t[id + "_n"] ? Math.round(t[id] / t[id + "_n"]) : null;
   }
 
-  function linha(item) {
+  function kpi(rotulo, valor, pe, cor, titulo) {
+    return el("div", { className: "cm-kpi", style: "--cm-cor:" + cor, title: titulo || null }, [
+      el("div", { className: "cm-kpi-rot", text: rotulo }),
+      el("div", { className: "cm-kpi-val", text: valor }),
+      el("div", { className: "cm-kpi-pe", text: pe }),
+    ]);
+  }
+
+  function blocoTotais() {
+    var t = totais();
+    var mv = media(t, "views"), ma = media(t, "reach");
+    var destaques = el("div", { className: "cm-destaques" }, [
+      kpi("▶ Views", formatar(t.views), mv != null ? "média " + formatar(mv) + " por Reel" : "sem números ainda", "var(--primary,#e5484d)"),
+      kpi("◎ Alcance", formatar(t.reach), ma != null ? "média " + formatar(ma) + " por Reel" : "sem números ainda", "var(--accent,#8e4ec6)"),
+      kpi("⚡ Engajamento", porcento(t.engajamento), "interações ÷ alcance", "var(--success,#3dd68c)",
+        "(curtidas + comentários + compartilhamentos + salvos) ÷ alcance"),
+      kpi("＋ Seguidores", t.follows != null ? "+" + formatar(t.follows) : "—", t.reels + (t.reels === 1 ? " Reel publicado" : " Reels publicados"), "#f5b70a"),
+    ]);
+    var pilulas = el("div", { className: "cm-pilulas" }, ["likes", "comments", "shares", "saved"].map(function (id) {
+      var v = VISUAL[id];
+      var md = media(t, id);
+      return el("span", { className: "cm-pilula", title: md != null ? "média por Reel: " + formatar(md) : null }, [
+        v.icone + " " + v.nome, el("b", { text: formatar(t[id]) }),
+      ]);
+    }));
+    return el("div", { className: "cm-totais" }, [destaques, pilulas]);
+  }
+
+  function ordenados() {
+    var lista = estado.itens.slice();
+    var o = estado.ordem || "recentes";
+    if (o === "recentes") return lista;
+    var valor = o === "engajamento" ? engajamentoDe : function (it) { return it.metricas ? it.metricas[o] : null; };
+    return lista.sort(function (a, b) {
+      var va = valor(a), vb = valor(b);
+      if (va == null && vb == null) return 0;
+      if (va == null) return 1;
+      if (vb == null) return -1;
+      return vb - va;
+    });
+  }
+
+  function cartaoReel(item, posicao, maxViews) {
     var m = item.metricas || {};
     var manual = m.manual || {};
     var semApi = m.semApi || [];
     var titulo = item.title || item.originalTitle || item.fileName || "Reel";
-    var celulas = [
-      el("td", { className: "cm-nome", title: titulo }, [
-        item.publishedUrl ? el("a", { href: item.publishedUrl, target: "_blank", rel: "noopener", text: titulo }) : titulo,
-      ]),
-      el("td", { text: dataLegivel(item) }),
-    ];
-    METRICAS.forEach(function (met) {
+    var a = !!estado.buscando[item.id];
+    var eng = engajamentoDe(item);
+
+    var meta = [el("span", { text: dataLegivel(item) || "data desconhecida" })];
+    if (a) meta.push(el("span", { text: "a buscar no Instagram…" }));
+    else if (m.erroApi) meta.push(el("span", { className: "cm-falhou", text: m.erroApi }));
+    else if (m.atualizadoEm) meta.push(el("span", { text: "atualizado " + dataLegivel({ updatedAt: m.atualizadoEm }) }));
+    if (!item.publishedId) meta.push(el("span", { text: "publicado fora do app — só à mão" }));
+
+    var numeros = METRICAS.map(function (met) {
+      var v = VISUAL[met.id];
+      var faltou = semApi.indexOf(met.id) >= 0;
+      var idCampo = "cm-" + item.id + "-" + met.id;
       var inp = el("input", {
+        id: idCampo,
         type: "text",
         inputmode: "numeric",
-        "aria-label": met.rotulo + " de " + titulo,
-        value: m[met.id] != null ? String(m[met.id]) : "",
-        placeholder: semApi.indexOf(met.id) >= 0 ? "à mão" : "—",
-        className: manual[met.id] ? "cm-manual" : semApi.indexOf(met.id) >= 0 ? "cm-sem-api" : "",
-        title: manual[met.id] ? "escrito à mão — a atualização automática não mexe" : "",
+        autocomplete: "off",
+        "aria-label": v.nome + " de " + titulo,
+        value: m[met.id] != null ? formatar(m[met.id]) : "",
+        placeholder: faltou ? "preencher" : "—",
+        title: manual[met.id] ? "Escrito à mão — a atualização automática não mexe" : "Clica para escrever à mão",
       });
+      inp.addEventListener("focus", function () { inp.select(); });
       inp.addEventListener("input", function () { editar(item, met.id, inp.value); });
-      inp.addEventListener("blur", function () { gravarPendentes(item, met.id); });
-      celulas.push(el("td", {}, [inp]));
+      inp.addEventListener("blur", function () {
+        gravarPendentes(item, met.id);
+        var atual = item.metricas && item.metricas[met.id];
+        inp.value = atual != null ? formatar(atual) : "";
+        inp.parentNode.className = "cm-num" + (item.metricas && item.metricas.manual && item.metricas.manual[met.id] ? " manual" : faltou ? " sem-api" : "");
+      });
+      return el("div", { className: "cm-num" + (manual[met.id] ? " manual" : faltou ? " sem-api" : "") }, [
+        el("label", { for: idCampo, text: v.icone + " " + v.nome }),
+        inp,
+      ]);
     });
-    var a = !!estado.buscando[item.id];
-    var estadoTxt = a ? "A buscar…" : m.erroApi ? m.erroApi : m.atualizadoEm ? "atualizado " + dataLegivel({ updatedAt: m.atualizadoEm }) : "";
-    celulas.push(el("td", { className: "cm-estado" + (m.erroApi && !a ? " cm-falhou" : "") }, [estadoTxt]));
-    celulas.push(el("td", {}, [
-      el("button", {
-        type: "button",
-        className: "cm-botao",
-        disabled: a || !item.publishedId ? true : null,
-        title: item.publishedId ? "Buscar as métricas deste Reel no Instagram" : "Sem o id do Instagram — preenche à mão",
-        text: "🔄",
-        onClick: function () { atualizarItem(item); },
-      }),
-    ]));
-    return el("tr", { "data-id": item.id }, celulas);
+
+    var largura = maxViews && m.views ? Math.max(2, Math.round((m.views / maxViews) * 100)) : 0;
+    return el("div", { className: "cm-reel", "data-id": item.id }, [
+      el("div", { className: "cm-reel-topo" }, [
+        el("span", { className: "cm-pos" + (posicao === 1 && estado.ordem && estado.ordem !== "recentes" ? " ouro" : ""), text: String(posicao) }),
+        el("div", { className: "cm-reel-info" }, [
+          item.publishedUrl
+            ? el("a", { className: "cm-nome", href: item.publishedUrl, target: "_blank", rel: "noopener", title: titulo + " — abrir no Instagram", text: titulo })
+            : el("span", { className: "cm-nome", title: titulo, text: titulo }),
+          el("div", { className: "cm-meta" }, meta),
+        ]),
+        el("span", { className: "cm-eng" + (eng == null ? " vazio" : ""), title: "Engajamento deste Reel: interações ÷ alcance", text: eng == null ? "— eng." : porcento(eng) + " eng." }),
+        el("button", {
+          type: "button",
+          className: "cm-botao icone",
+          disabled: a || !item.publishedId ? true : null,
+          "aria-label": "Atualizar " + titulo + " do Instagram",
+          title: item.publishedId ? "Buscar as métricas deste Reel no Instagram" : "Sem o id do Instagram — preenche à mão",
+          onClick: function () { atualizarItem(item); },
+        }, [el("span", { className: a ? "cm-girando" : "", text: "↻" })]),
+      ]),
+      el("div", { className: "cm-barra", title: m.views ? formatar(m.views) + " views" : "sem views ainda" }, [
+        el("i", { style: "width:" + largura + "%" }),
+      ]),
+      el("div", { className: "cm-numeros" }, numeros),
+    ]);
   }
 
   function desenhar() {
@@ -496,18 +630,23 @@
     var ocupado = estado.carregando || Object.keys(estado.buscando).length > 0;
 
     raiz.appendChild(el("div", { className: "cm-topo" }, [
-      el("div", {}, [
-        el("div", { className: "cm-titulo", text: "📊 Métricas dos Reels" }),
-        el("div", { className: "cm-sub", text: (conta && conta.name ? conta.name + " · " : "") + (temToken ? "busca automática ligada" : "sem token do Instagram — só à mão") }),
+      el("div", { className: "cm-cab" }, [
+        el("div", { className: "cm-icone", text: "📊" }),
+        el("div", {}, [
+          el("h2", { className: "cm-titulo", text: "Métricas dos Reels" }),
+          el("div", { className: "cm-sub" }, [
+            el("span", { className: "cm-ponto" + (temToken ? " ligado" : "") }),
+            (conta && conta.name ? conta.name + " · " : "") + (temToken ? "busca automática ligada" : "sem token do Instagram — só à mão"),
+          ]),
+        ]),
       ]),
-      el("div", {}, [
-        el("button", { type: "button", className: "cm-botao", disabled: ocupado ? true : null, text: "↻ Recarregar lista", onClick: function () { carregar(); } }),
-        " ",
+      el("div", { className: "cm-acoes" }, [
+        el("button", { type: "button", className: "cm-botao", disabled: ocupado ? true : null, title: "Ler de novo os Reels publicados", text: "↻ Recarregar", onClick: function () { carregar(); } }),
         el("button", {
-          type: "button", className: "cm-botao", disabled: ocupado || !temToken ? true : null,
-          title: temToken ? "" : "Esta conta não tem o token do Instagram",
-          text: "🔄 Atualizar tudo do Instagram", onClick: function () { atualizarTudo(false); },
-        }),
+          type: "button", className: "cm-botao primario", disabled: ocupado || !temToken ? true : null,
+          title: temToken ? "Buscar os números de todos os Reels no Instagram" : "Esta conta não tem o token do Instagram",
+          onClick: function () { atualizarTudo(false); },
+        }, [el("span", { className: ocupado && !estado.carregando ? "cm-girando" : "", text: "↻" }), "Atualizar tudo do Instagram"]),
       ]),
     ]));
 
@@ -515,25 +654,37 @@
     if (estado.aviso) raiz.appendChild(el("div", { className: "cm-aviso", text: estado.aviso }));
 
     if (estado.carregando && !estado.itens.length) {
-      raiz.appendChild(el("div", { className: "cm-aviso", text: "A carregar os Reels publicados…" }));
+      raiz.appendChild(el("div", { className: "cm-vazio" }, [el("span", { className: "cm-girando", text: "↻" }), "A carregar os Reels publicados…"]));
       return;
     }
     if (!estado.itens.length) {
-      raiz.appendChild(el("div", { className: "cm-aviso", text: "Ainda não há Reels publicados nesta conta. Assim que o app (ou o Robô 24h) publicar, eles aparecem aqui." }));
+      raiz.appendChild(el("div", { className: "cm-vazio" }, [
+        el("div", { style: "font-size:28px", text: "🎬" }),
+        el("b", { text: "Ainda não há Reels publicados nesta conta" }),
+        "Assim que o app (ou o Robô 24h) publicar, eles aparecem aqui com os números.",
+      ]));
       return;
     }
 
     raiz.appendChild(blocoTotais());
-    var cab = [el("th", { text: "Reel" }), el("th", { text: "Publicado" })]
-      .concat(METRICAS.map(function (m) { return el("th", { text: m.rotulo }); }))
-      .concat([el("th", { text: "Estado" }), el("th", {})]);
-    raiz.appendChild(el("div", { className: "cm-tabela-wrap" }, [
-      el("table", { className: "cm-tabela" }, [
-        el("thead", {}, [el("tr", {}, cab)]),
-        el("tbody", {}, estado.itens.map(linha)),
-      ]),
+
+    var seletor = el("select", { className: "cm-ordem", "aria-label": "Ordenar os Reels" }, ORDENS.map(function (o) {
+      var op = el("option", { value: o.id, text: o.rotulo });
+      if ((estado.ordem || "recentes") === o.id) op.selected = true;
+      return op;
+    }));
+    seletor.addEventListener("change", function () { estado.ordem = seletor.value; desenhar(); });
+    raiz.appendChild(el("div", { className: "cm-secao" }, [el("h3", { text: "Por Reel" }), seletor]));
+
+    var lista = ordenados();
+    var maxViews = lista.reduce(function (mx, it) { return Math.max(mx, (it.metricas && it.metricas.views) || 0); }, 0);
+    raiz.appendChild(el("div", { className: "cm-lista" }, lista.map(function (it, i) { return cartaoReel(it, i + 1, maxViews); })));
+
+    raiz.appendChild(el("div", { className: "cm-legenda" }, [
+      el("span", {}, [el("i", { style: "border:1px solid #f59e0b" }), "escrito à mão (a atualização automática não mexe)"]),
+      el("span", {}, [el("i", { style: "border:1px dashed currentColor" }), "o Instagram não deu este número — dá para preencher"]),
+      el("span", { text: "Clica num número para o corrigir." }),
     ]));
-    raiz.appendChild(el("div", { className: "cm-legenda", text: "Borda laranja = escrito à mão (a atualização automática não mexe). Tracejado = a API não deu este número — dá para preencher à mão." }));
   }
 
   /* ------------------------------------------------------------- montagem */
