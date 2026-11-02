@@ -196,6 +196,20 @@ contra os 65 % de píxeis escuros do preto) para não comer uma cena genuinament
 `tools/test-barras-pretas.mjs` verifica os três casos — faixa preta, faixa branca e cinzento
 claro, que **não** pode contar como faixa.
 
+### Fundo desfocado também é cortado
+
+Muitos cortes do TikTok enchem o 9:16 com o próprio vídeo **ampliado e desfocado** por trás
+(às vezes com texto por cima, como «Não esqueça de seguir»). Isso não é preto nem branco, por
+isso entrava no Reel. Agora o app mede a **nitidez** de cada linha nos 12 quadros que já
+analisava: o desfoque fica abaixo de ~0,5 e o filme acima de 3–4 mesmo nas zonas lisas.
+
+- Uma linha só conta como desfoque se for lisa em **todos** os quadros e **não for escura** —
+  um céu liso numa parte do vídeo, ou uma cena noturna, não é cortado.
+- Fica o maior trecho nítido; o texto nítido escrito sobre o desfoque fica separado do filme
+  e não entra. Só corta um lado se tirar pelo menos 3 % da altura, e nunca deixa menos de 30 %.
+- A mesma regra está no app (`_wNit`/`_wDesfoque`, patch `zz-24`) e no servidor
+  (`cortarDesfoque` em `servidor/video.mjs`).
+
 ## 📦 Upload em massa
 
 No Estúdio, o botão **📦 Upload em massa** (ou escolher/arrastar vários vídeos de uma vez)

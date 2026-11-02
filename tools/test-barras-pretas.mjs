@@ -55,13 +55,13 @@ function extrair(inicio) {
   throw new Error(`chavetas desequilibradas em ${inicio}`);
 }
 
-const codigo = extrair("function _w(") + "\n" + extrair("async function bi(");
+const codigo = [extrair("function _wNit("), extrair("function _wDesfoque("), extrair("function _w("), extrair("async function bi(")].join("\n");
 
 /**
  * Vídeo falso: `linhaClara(t, y)` diz se a linha y (na escala 640) do quadro no
  * instante t tem imagem (true) ou é escura (false).
  */
-function ambiente({ largura, altura, duracao, linhaClara }) {
+function ambiente({ largura, altura, duracao, linhaClara, pixel }) {
   let tempo = 0;
   const video = {
     muted: false, preload: "", crossOrigin: "",
@@ -77,10 +77,10 @@ function ambiente({ largura, altura, duracao, linhaClara }) {
     getImageData: (x, y, w, h) => {
       const data = new Uint8ClampedArray(w * h * 4);
       for (let row = 0; row < h; row++) {
-        const valor = linhaClara(quadro, row) ? 200 : 6;
+        const valor = linhaClara ? (linhaClara(quadro, row) ? 200 : 6) : 0;
         for (let col = 0; col < w; col++) {
           const k = (row * w + col) * 4;
-          data[k] = data[k + 1] = data[k + 2] = valor;
+          data[k] = data[k + 1] = data[k + 2] = pixel ? pixel(quadro, row, col) : valor;
           data[k + 3] = 255;
         }
       }
@@ -191,6 +191,51 @@ console.log("\n7. Faixas BRANCAS uniformes também são cortadas");
   // Uma cena genuinamente clara (mas não branco puro) não pode ser comida.
   const clara = faixaClara(montar(238), L, A);
   check("cinzento claro não conta como faixa", !clara || clara.t === 0, JSON.stringify(clara));
+}
+
+console.log("\n8. Fundo DESFOCADO (o vídeo ampliado e borrado por trás)");
+{
+  /* Como o corte do TikTok que o app cortava mal: desfoque em cima, faixa
+     branca com o gancho, o filme, e desfoque laranja em baixo com um texto
+     nítido («Não esqueça de seguir»). Na escala 640×1138: desfoque 0–230,
+     branca 231–431, filme 432–906, desfoque 907–1137 com texto em 950–990. */
+  const ruido = (t, y, x) => ((x * 7919 + y * 104729 + Math.floor(t) * 31337) % 97) * 1.6;
+  const pixel = (t, y, x) => {
+    if (y <= 230) return 150 + Math.round(40 * Math.sin(x / 200 + y / 300)); // desfoque liso
+    if (y <= 431) return 250; // faixa branca do gancho
+    if (y <= 906) return 60 + ruido(t, y, x); // filme (textura)
+    if (y >= 950 && y <= 990) return (x % 12 < 6) ? 250 : 120; // texto nítido sobre o desfoque
+    return 170 + Math.round(30 * Math.sin(x / 180)); // desfoque liso
+  };
+  const ctx = ambiente({ largura: LARGURA, altura: ALTURA, duracao: 60, pixel });
+  const r = await ctx.bi("blob:x", 0, 60);
+  const fimFilme = r && r.y + r.h;
+  check("começa logo abaixo da faixa branca", !!r && Math.abs(r.y - (432 * 1920) / 1138) <= 4, JSON.stringify(r));
+  check("acaba onde o filme acaba (sem o desfoque de baixo)", !!r && Math.abs(fimFilme - (907 * 1920) / 1138) <= 4, JSON.stringify(r));
+  check("o texto nítido sobre o desfoque fica de fora", !!r && fimFilme < (950 * 1920) / 1138, JSON.stringify(r));
+}
+{
+  // Céu claro e liso no topo do filme na maior parte dos quadros, com detalhe nos outros.
+  const pixel = (t, y, x) => {
+    if (y < TOPO || y > FUNDO) return 4;
+    if (y < TOPO + 200 && t < 40) return 180;
+    return 60 + ((x * 7919 + y * 104729 + Math.floor(t)) % 97) * 1.6;
+  };
+  const ctx = ambiente({ largura: LARGURA, altura: ALTURA, duracao: 60, pixel });
+  const r = await ctx.bi("blob:x", 0, 60);
+  check("céu liso só em parte dos quadros continua a ser filme", JSON.stringify(r) === JSON.stringify(esperado), JSON.stringify(r));
+}
+{
+  // O servidor («Processar na nuvem») usa a mesma regra que o app.
+  const { cortarDesfoque, nitidezLinhas } = await import(pathToFileURL(path.join(root, "servidor", "video.mjs")).href);
+  const v = 1138;
+  const nit = new Float32Array(v);
+  const luz = new Float32Array(v).fill(150);
+  for (let y = 432; y <= 906; y++) nit[y] = 6;
+  for (let y = 950; y <= 990; y++) nit[y] = 20;
+  const corte = JSON.stringify(cortarDesfoque(432, 1137, nit, luz, v));
+  check("servidor: corta o mesmo trecho que o app", corte === "[432,906]", corte);
+  check("servidor: linha lisa tem nitidez 0", nitidezLinhas(new Uint8Array(10 * 2 * 3).fill(100), 10, 2).n[0] === 0);
 }
 
 console.log("\n─────────────────────────────────────────────");

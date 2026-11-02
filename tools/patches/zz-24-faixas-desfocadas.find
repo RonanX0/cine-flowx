@@ -1,0 +1,1 @@
+function _w(r,o,a,i){o.drawImage(r,0,0,a,i);

@@ -157,6 +157,69 @@ export function faixaClara(rgb, largura, altura) {
 }
 
 /**
+ * Nitidez de cada linha de um quadro: média da diferença de luz entre píxeis
+ * vizinhos (n) e a luz média da linha (l). Um fundo desfocado (o vídeo
+ * ampliado e borrado por trás, comum em cortes do TikTok) fica perto de 0;
+ * a imagem do filme passa de 3–4 mesmo nas zonas mais lisas.
+ */
+export function nitidezLinhas(rgb, largura, altura) {
+  const n = new Float32Array(altura);
+  const l = new Float32Array(altura);
+  for (let y = 0; y < altura; y++) {
+    let soma = 0;
+    let luz = 0;
+    let anterior = -1;
+    for (let x = 0; x < largura; x++) {
+      const k = (y * largura + x) * 3;
+      const L = 0.299 * rgb[k] + 0.587 * rgb[k + 1] + 0.114 * rgb[k + 2];
+      if (anterior >= 0) soma += Math.abs(L - anterior);
+      anterior = L;
+      luz += L;
+    }
+    n[y] = soma / Math.max(1, largura - 1);
+    l[y] = luz / largura;
+  }
+  return { n, l };
+}
+
+/**
+ * Tira as faixas DESFOCADAS de cima/baixo de [S, T] (linhas, à escala da
+ * análise). `nit` = a maior nitidez de cada linha em todos os quadros, `luz` =
+ * a luz média. Uma linha é desfocada se for lisa em TODOS os quadros e não for
+ * escura (o escuro fica com a regra das faixas pretas — assim uma cena noturna
+ * não é cortada). Fica o maior trecho nítido, ignorando falhas pequenas; o
+ * texto nítido escrito por cima do desfoque ("Não esqueça de seguir") fica
+ * separado do filme por desfoque e não entra. Só corta um lado se tirar pelo
+ * menos 3% da altura, e nunca deixa menos de 30%.
+ */
+export const LIMIAR_DESFOQUE = 1.5;
+export function cortarDesfoque(S, T, nit, luz, altura) {
+  const desfocada = (y) => nit[y] < LIMIAR_DESFOQUE && luz[y] >= 40;
+  const folga = Math.max(2, Math.round(altura * 0.01));
+  let melhor = null;
+  let ini = -1;
+  let fim = -1;
+  let buraco = 0;
+  for (let y = S; y <= T + 1; y++) {
+    if (y <= T && !desfocada(y)) {
+      if (ini < 0) ini = y;
+      fim = y;
+      buraco = 0;
+    } else if (ini >= 0) {
+      buraco++;
+      if (buraco > folga || y > T) {
+        if (!melhor || fim - ini > melhor[1] - melhor[0]) melhor = [ini, fim];
+        ini = -1;
+        buraco = 0;
+      }
+    }
+  }
+  if (!melhor || melhor[1] - melhor[0] + 1 < altura * 0.3) return [S, T];
+  const minimo = altura * 0.03;
+  return [melhor[0] - S >= minimo ? melhor[0] : S, T - melhor[1] >= minimo ? melhor[1] : T];
+}
+
+/**
  * Faixas pretas (letterbox): igual ao `bi` do app com o patch 29 — 12 quadros,
  * a imagem vai do topo mais alto ao fundo mais baixo vistos em qualquer quadro.
  * Devolve {y, h, vh, vw} ou null (sem faixas).
@@ -172,6 +235,9 @@ export async function detetarBarras(caminho, inicio = 0, fim) {
   const w = Math.min(fim ?? info.duracao, info.duracao || 0) || 1;
   const topos = [];
   const fundos = [];
+  const nit = new Float32Array(v);
+  const luz = new Float32Array(v);
+  let lidos = 0;
   for (const j of [0.06, 0.14, 0.22, 0.3, 0.38, 0.46, 0.54, 0.62, 0.7, 0.78, 0.86, 0.94]) {
     const t = Math.max(0, Math.min(inicio + (w - inicio) * j, Math.max(0, info.duracao - 0.05)));
     let rgb;
@@ -186,10 +252,16 @@ export async function detetarBarras(caminho, inicio = 0, fim) {
       topos.push(r.t);
       fundos.push(r.b);
     }
+    const z = nitidezLinhas(rgb, g, v);
+    for (let y = 0; y < v; y++) {
+      nit[y] = Math.max(nit[y], z.n[y]);
+      luz[y] += z.l[y];
+    }
+    lidos++;
   }
   if (!topos.length) return null;
-  const S = Math.min(...topos);
-  const T = Math.max(...fundos);
+  for (let y = 0; y < v; y++) luz[y] /= lidos || 1;
+  const [S, T] = cortarDesfoque(Math.min(...topos), Math.max(...fundos), nit, luz, v);
   let D = Math.round(S / p / 2) * 2;
   let O = Math.round((T < v - 1 ? T + 1 : v) / p / 2) * 2;
   D = Math.max(0, D);
