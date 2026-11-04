@@ -4,7 +4,7 @@
  * Escolhes vários vídeos de uma vez e, para cada um, o app faz sozinho o que o
  * Estúdio faz passo a passo:
  *
- *   1. lê o vídeo e usa só os primeiros 90 segundos;
+ *   1. lê o vídeo e usa só o primeiro 1:40 (100 segundos);
  *   2. identifica o filme/série com a IA (Gemini/Groq/OpenRouter) + TMDB;
  *   3. escolhe um gancho da lista (ou usa IA nos estilos opcionais);
  *   4. limpa os metadados e formata em 9:16 com o gancho (FFmpeg);
@@ -204,7 +204,7 @@
 
   /* ----------------------------------------------------------- configuração */
 
-  var MAX_SEGUNDOS = 90;
+  var MAX_SEGUNDOS = 100; // 1:40
   var MAX_SIMULTANEOS = 5;
   var MAX_BYTES = 300 * 1024 * 1024;
   var EXTENSOES = ["mp4", "mov", "mkv", "webm", "avi"];
@@ -2480,7 +2480,7 @@
         text:
           (estado.opcoes.modoDireto
             ? "🚀 Modo direto ligado: sem identificar o filme — gancho da lista e legenda variada pela IA (lista como reserva), o 1.º comentário é «LINK DO FILME NA MINHA B10» e o Reel agenda no próximo horário livre"
-            : "Para cada vídeo o app usa até 90 segundos, identifica o filme, escolhe o gancho da lista e cria a legenda e agenda o Reel no próximo horário livre") +
+            : "Para cada vídeo o app usa até 1:40, identifica o filme, escolhe o gancho da lista e cria a legenda e agenda o Reel no próximo horário livre") +
           (conta && conta.name ? " de " + conta.name : "") + ". Processa até " + (estado.opcoes.simultaneos || MAX_SIMULTANEOS) + " vídeos ao mesmo tempo. Podes fechar este painel e ver o Agendador enquanto isso.",
       }),
     ];

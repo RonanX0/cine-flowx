@@ -5,7 +5,7 @@
  *   node tools/test-lote-massa.mjs
  *
  * Parte A — a lógica do lote com a IA, o FFmpeg e a fila falsos: o que entra na
- *           fila do Agendador, o corte em 90 s, o gancho da IA, a confiança baixa,
+ *           fila do Agendador, o corte em 1:40, o gancho da IA, a confiança baixa,
  *           o vídeo H.265, as chaves em falta e o botão Parar.
  * Parte B — o bundle REAL num DOM (jsdom + IndexedDB falso): a ponte
  *           window.CineClipCore / window.__CineClipApp existe, o botão "Upload em
@@ -257,7 +257,7 @@ console.log("A1. Um lote com vídeos bons, um H.265, um com pouca certeza e um i
   const porNome = Object.fromEntries(c.lote.estado.itens.map((it) => [it.nome, it]));
 
   check("3 Reels entram na fila do Agendador (o duvidoso também)", c.fila.length === 3, `fila=${c.fila.length}`);
-  check("longo.mp4 é cortado em 90 s", c.chamadas.processar.find((p) => p.nome === "longo.mp4")?.fim === 90);
+  check("longo.mp4 é cortado em 1:40 (100 s)", c.chamadas.processar.find((p) => p.nome === "longo.mp4")?.fim === 100);
   check("curto.mp4 usa o vídeo todo (40 s)", c.chamadas.processar.find((p) => p.nome === "curto.mp4")?.fim === 40);
   check("o corte começa sempre no início (0 s)", c.chamadas.processar.every((p) => p.inicio === 0));
   check("as barras pretas detetadas vão para o FFmpeg", c.chamadas.processar[0]?.corte?.top === 100 && c.chamadas.processar[0]?.corte?.bottom === 180);

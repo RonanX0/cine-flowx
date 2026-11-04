@@ -213,7 +213,7 @@ analisava: o desfoque fica abaixo de ~0,5 e o filme acima de 3–4 mesmo nas zon
 ## 📦 Upload em massa
 
 No Estúdio, o botão **📦 Upload em massa** (ou escolher/arrastar vários vídeos de uma vez)
-abre um painel onde cada vídeo passa sozinho pelo fluxo todo: usa **até 90 s** do início,
+abre um painel onde cada vídeo passa sozinho pelo fluxo todo: usa **até 1:40** do início,
 identifica o filme com a IA + TMDB, escolhe o **gancho da lista** e cria a **legenda** com IA, processa em 9:16
 e agenda o Reel no **próximo horário livre** da conta ativa. Os vídeos são tratados um de cada
 vez; o painel pode ser fechado (fica um atalho no canto) e o botão **Parar** interrompe o lote.
