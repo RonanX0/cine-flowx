@@ -1,0 +1,1 @@
+"-crf","24",...(t=>["-maxrate",t+"k","-bufsize",2*t+"k"])(Math.max(1500,Math.min(12e3,Math.floor((704e6/Math.max(1,g)-128e3)/1e3)))),"-preset","ultrafast",

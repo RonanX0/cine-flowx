@@ -238,6 +238,23 @@ console.log("\n8. Fundo DESFOCADO (o vídeo ampliado e borrado por trás)");
   check("servidor: linha lisa tem nitidez 0", nitidezLinhas(new Uint8Array(10 * 2 * 3).fill(100), 10, 2).n[0] === 0);
 }
 
+console.log("\n9. Reel abaixo de 100 MB (limite do Worker R2 grátis)");
+{
+  // Teto de bitrate pela duração: 1:40 a ~7 Mbps dá ~88 MB; clipes curtos têm folga.
+  const { tetoKbps } = await import(pathToFileURL(path.join(root, "servidor", "video.mjs")).href);
+  check("1:40 → teto de 6912 kbps (~88 MB com o áudio)", tetoKbps(100) === 6912, String(tetoKbps(100)));
+  check("o tamanho máximo de 1:40 fica abaixo de 90 MB", (100 * (tetoKbps(100) + 128) * 1000) / 8 < 90e6);
+  check("clipes curtos não descem da qualidade (teto de 12 Mbps)", tetoKbps(20) === 12000);
+  check("clipes longuíssimos não ficam ilegíveis (mínimo 1,5 Mbps)", tetoKbps(1000) === 1500);
+  const ys = modulo.slice(modulo.indexOf("async function YS("), modulo.indexOf("function XS("));
+  const m = /"-maxrate",t\+"k","-bufsize",2\*t\+"k"\]\)\((Math\.max\(1500,Math\.min\(12e3,Math\.floor\(\(704e6\/Math\.max\(1,g\)-128e3\)\/1e3\)\)\))\)/.exec(ys);
+  check("o app usa -maxrate pela duração no FFmpeg do navegador", !!m);
+  const tetoApp = m && new Function("g", "return " + m[1]);
+  check("o app e o servidor calculam o mesmo teto", !!tetoApp && [10, 45, 60, 100, 150].every((g) => tetoApp(g) === tetoKbps(g)));
+  const vsrc = fs.readFileSync(path.join(root, "servidor", "video.mjs"), "utf8");
+  check("o servidor passa o teto ao libx264", vsrc.includes('"-maxrate", `${tetoKbps(dur)}k`'));
+}
+
 console.log("\n─────────────────────────────────────────────");
 if (fail) {
   console.log(`❌ ${pass} passaram, ${fail} falharam`);

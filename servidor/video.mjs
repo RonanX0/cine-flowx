@@ -729,6 +729,16 @@ const tempoDoLog = (t) => {
 };
 
 /**
+ * Teto de bitrate do vídeo (kbps) para o Reel inteiro ficar abaixo de ~88 MB:
+ * o Worker R2 grátis recusa envios acima de 100 MB, e os vídeos do Kwai (muito
+ * grão, bitrate alto) passavam disso. Só limita os picos — um vídeo que o CRF
+ * já deixa leve não muda. Mesmo cálculo do app (patch zz-25).
+ */
+export function tetoKbps(segundos) {
+  return Math.max(1500, Math.min(12000, Math.floor((704e6 / Math.max(1, segundos) - 128e3) / 1e3)));
+}
+
+/**
  * Limpa os metadados, corta [inicio, fim] e monta o 9:16 com o gancho — os
  * mesmos filtros e opções do `YS` do app. Devolve {caminho, size, name}.
  *
@@ -782,7 +792,8 @@ export async function processar(entrada, inicio, fim, resolucao, gancho, aoProgr
       "-map_metadata", "-1", "-map_chapters", "-1", "-metadata", "title=", "-metadata", "encoder=",
       "-metadata:s:v:0", "encoder= ", "-metadata:s:a:0", "encoder= ",
       "-fflags", "+bitexact", "-flags:v", "+bitexact", "-flags:a", "+bitexact",
-      "-r", "30", "-c:v", "libx264", "-profile:v", "main", "-level:v", "4.0", "-crf", "23", "-preset", "veryfast",
+      "-r", "30", "-c:v", "libx264", "-profile:v", "main", "-level:v", "4.0", "-crf", "23",
+      "-maxrate", `${tetoKbps(dur)}k`, "-bufsize", `${2 * tetoKbps(dur)}k`, "-preset", "veryfast",
       "-pix_fmt", "yuv420p", "-bsf:v", "filter_units=remove_types=6",
       "-c:a", "aac", "-ar", "44100", "-ac", "2", "-b:a", "128k", "-shortest", "-movflags", "+faststart", saida
     );
