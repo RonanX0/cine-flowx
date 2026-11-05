@@ -366,6 +366,12 @@ Opções do painel:
 - A **legenda de cada vídeo** é editável na lista, mesmo depois de agendado: a alteração é
   gravada na fila e segue para a nuvem.
 
+**Exceção: vídeos acima de 100 MB.** O Worker R2 grátis recusa envios maiores (acontece
+muito com vídeos do Kwai), por isso só esses passam pelo FFmpeg (`core.comprimir`, patch
+`zz-26`): mesma resolução e duração, com o teto de bitrate dos Reels editados, ficando abaixo
+de ~90 MB. O cartão mostra o antes → depois. Se a compressão falhar, vai o original com um
+aviso. Exemplo real: 136 MB → 89 MB em ~2 min no navegador.
+
 Dois avisos que não bloqueiam: se o vídeo **não estiver em 9:16** o item fica assinalado
 (este modo não edita, por isso o Instagram é que decide) e vídeos com **menos de 3 s** dão
 erro. O Reel fica marcado com `semEdicao: true` para se saber de onde veio.

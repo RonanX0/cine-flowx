@@ -21,7 +21,9 @@
  *
  * Nenhuma destas funções usa o FFmpeg: `lerMetadados` usa o mediainfo.js,
  * `quadros` usa <video> + <canvas>, `audio` usa a Web Audio API. É por isso
- * que este modo é rápido e não descarrega o motor de vídeo (~30 MB).
+ * que este modo é rápido e não descarrega o motor de vídeo (~30 MB). A única
+ * exceção é um vídeo acima de 100 MB: esse passa por `core.comprimir` (FFmpeg)
+ * antes de ir para a nuvem.
  *
  * API pública: window.CineRapido.montar() · window.CineRapido.abrir(ficheiros?)
  */
@@ -39,6 +41,8 @@
   var SLOTS_OMISSAO = ["12:00", "18:00", "21:30"];
   var EXTENSOES = ["mp4", "mov", "mkv", "webm", "avi", "m4v"];
   var MAX_BYTES = 300 * 1024 * 1024;
+  // Acima disto o vídeo é comprimido antes de ir para a nuvem (Worker R2 grátis: 100 MB).
+  var LIMITE_BYTES_LEVE = 95 * 1000 * 1000;
 
   var MODELO_OMISSAO = "🎬 {titulo}\n\n#Reels #Cinema";
 
@@ -426,11 +430,33 @@
       throw erroComTipo("O vídeo tem menos de " + MIN_SEGUNDOS + " segundos (o Instagram não aceita).", "leitura");
     }
 
+    /* 1b. Abaixo de 100 MB ----------------------------------------------- */
+    // Este modo envia o original, mas o Worker R2 grátis recusa envios acima
+    // de 100 MB (comum nos vídeos do Kwai). Só esses passam pelo FFmpeg, com o
+    // mesmo teto de bitrate dos Reels editados; os leves continuam sem motor.
+    if ((ficheiro.size || 0) > LIMITE_BYTES_LEVE && core && typeof core.comprimir === "function") {
+      if (estado.pararPedido) throw erroComTipo("Lote parado.", "parado");
+      var antes = ficheiro.size;
+      definirPasso(item, "Comprimindo (" + tamanho(antes) + ", acima de 100 MB)…", 0.1);
+      try {
+        var leve = await core.comprimir(ficheiro, function (p) {
+          definirPasso(item, "Comprimindo… " + Math.round((Number(p) || 0) * 100) + "%", 0.1 + (Number(p) || 0) * 0.1);
+        });
+        if (leve && leve.size && leve.size < antes) {
+          ficheiro = leve;
+          item.comprimido = { antes: antes, depois: leve.size };
+        }
+      } catch (e) {
+        item.aviso = "Não consegui deixar o vídeo abaixo de 100 MB (" + ((e && e.message) || "erro no FFmpeg") +
+          "). Vai o original de " + tamanho(antes) + ".";
+      }
+    }
+
     // Aviso (não bloqueia): o Instagram só garante o Reel em 9:16.
     if (info.largura && info.altura) {
       var proporcao = info.largura / info.altura;
       if (Math.abs(proporcao - 9 / 16) > 0.06) {
-        item.aviso = "Atenção: este vídeo não está em 9:16 (" + info.largura + "×" + info.altura +
+        item.aviso = (item.aviso ? item.aviso + " " : "") + "Atenção: este vídeo não está em 9:16 (" + info.largura + "×" + info.altura +
           "). Vai como está porque este modo não edita — o Instagram pode recusar ou mostrar barras.";
       }
     }
@@ -1112,7 +1138,8 @@
         el("span", { className: "cr-nome", text: it.nome, title: it.nome }),
         el("span", {
           className: "cr-peso",
-          text: (it.duracao ? duracaoLegivel(it.duracao) + " · " : "") + tamanho(it.bytes),
+          text: (it.duracao ? duracaoLegivel(it.duracao) + " · " : "") +
+            (it.comprimido ? tamanho(it.comprimido.antes) + " → " + tamanho(it.comprimido.depois) : tamanho(it.bytes)),
         }),
         el("span", { className: "cr-selo " + it.estado, text: NOMES_ESTADO[it.estado] || it.estado }),
       ])
@@ -1145,6 +1172,9 @@
     }
     if (it.poster) {
       dados.push(el("div", { className: "cr-meta", text: "🖼 Capa: pôster do TMDB" }));
+    }
+    if (it.comprimido) {
+      dados.push(el("div", { className: "cr-meta", text: "🗜 Comprimido para ficar abaixo de 100 MB: " + tamanho(it.comprimido.antes) + " → " + tamanho(it.comprimido.depois) }));
     }
     if (it.erro) {
       dados.push(el("div", { className: "cr-det " + it.estado, text: it.erro }));

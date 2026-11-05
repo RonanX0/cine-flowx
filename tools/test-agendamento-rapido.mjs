@@ -335,6 +335,49 @@ console.log("\nA8. O que falta configurar");
   dom.window.close();
 }
 
+console.log("\nA9. Vídeo acima de 100 MB é comprimido antes de ir para a nuvem");
+{
+  const dom = await novoDom();
+  const { window } = dom;
+  const c = cenario(window);
+  const pesado = (nome, bytes) => {
+    const f = ficheiro(window, nome);
+    Object.defineProperty(f, "size", { value: bytes });
+    return f;
+  };
+  const pedidos = [];
+  c.core.comprimir = async (f, progresso) => {
+    pedidos.push(f.name);
+    progresso(0.5);
+    const leve = new window.File([new Uint8Array(8)], f.name.replace(/\.[^.]+$/, "") + ".mp4", { type: "video/mp4" });
+    Object.defineProperty(leve, "size", { value: 80 * 1000 * 1000 });
+    return leve;
+  };
+  c.rapido.adicionarFicheiros([pesado("bom.mp4", 131 * 1000 * 1000), pesado("segundo.mp4", 40 * 1000 * 1000)]);
+  await c.rapido.iniciar();
+  check("só o vídeo acima de 100 MB passa pela compressão", pedidos.join(",") === "bom.mp4", pedidos.join(","));
+  const reelPesado = c.fila.find((r) => r.videoFileName === "bom.mp4");
+  check("o Reel agendado leva o vídeo comprimido", !!reelPesado && reelPesado.videoSize === 80 * 1000 * 1000, reelPesado && String(reelPesado.videoSize));
+  check("o leve vai como está (sem FFmpeg)", c.fila.some((r) => r.videoFileName === "segundo.mp4" && r.videoSize === 40 * 1000 * 1000));
+  check("continua sem editar o vídeo", c.chamadas.processar === 0 && c.chamadas.detetarBarras === 0);
+  check("o cartão mostra o antes → depois", /Comprimido para ficar abaixo de 100 MB: 124\.9 MB → 76\.3 MB/.test(window.document.querySelector(".cr-painel").textContent));
+  dom.window.close();
+}
+{
+  // Se a compressão falhar, agenda o original e avisa — não perde o vídeo.
+  const dom = await novoDom();
+  const { window } = dom;
+  const c = cenario(window);
+  const f = ficheiro(window, "bom.mp4");
+  Object.defineProperty(f, "size", { value: 131 * 1000 * 1000 });
+  c.core.comprimir = async () => { throw new Error("memória insuficiente"); };
+  c.rapido.adicionarFicheiros([f]);
+  await c.rapido.iniciar();
+  check("com a compressão a falhar, agenda o original", c.fila.length === 1 && c.fila[0].videoSize === 131 * 1000 * 1000);
+  check("e avisa o porquê", /Não consegui deixar o vídeo abaixo de 100 MB \(memória insuficiente\)/.test(c.rapido.estado.itens[0].aviso || ""), c.rapido.estado.itens[0].aviso);
+  dom.window.close();
+}
+
 /* ======================================================================
    Parte B — o bundle real
    ====================================================================== */
